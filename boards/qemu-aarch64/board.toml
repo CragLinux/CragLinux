@@ -1,0 +1,32 @@
+[board]
+name = "QEMU AArch64"
+arch = "aarch64"
+
+[kernel]
+version = "6.12.95"
+source = "upstream"
+defconfig = "defconfig"
+config_fragments = ["qemu.fragment"]
+# root=/dev/vda: run-qemu.sh attaches rootfs.ext4 as the whole (unpartitioned)
+# virtio disk. The image stage (docs/03 §5) will own root= per-slot later.
+cmdline = "console=ttyAMA0,115200 root=/dev/vda rootwait rw"
+lto = "thin"
+
+[bootloader]
+type = "direct"
+
+[disk]
+boot_size = "128M"
+root_size = "2G"
+boot_fs = "vfat"
+root_fs = "ext4"
+
+[console]
+device = "ttyAMA0"
+baud = 115200
+
+[qemu]
+machine = "virt"
+cpu = "cortex-a72"
+memory = "1G"
+extra_args = "-device virtio-net-device,netdev=net0 -netdev user,id=net0,hostfwd=tcp::2222-:22"

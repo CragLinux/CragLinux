@@ -1,0 +1,50 @@
+# --- Build outputs and caches (never committed) ---
+
+# Stage state and all build outputs (kernel builds, sysroots, rootfs, images)
+/build/state/
+
+# Prebuilt LLVM/Clang toolchain + locally built apk-tools (sdk/build-toolchain.sh)
+/toolchain/
+
+# Downloaded source tarballs / checkouts (kernel, musl, llvm-project)
+/sources/
+
+# Packaged toolchain distributions (sdk/package-toolchain.sh)
+/dist/
+
+# Generic output directory (future stage outputs)
+/out/
+
+# Generated CMake toolchain files (written to repo root by sdk/build-toolchain.sh)
+/*-toolchain.cmake
+
+# Locally built helper binaries (e.g. the Harbormaster `hm` binary;
+# see build/setup-cbuild.sh find_hm for how it is located)
+/build/tools/
+
+# --- Harbormaster-managed companion checkouts ---
+# cports is materialized by `hm sync --locked`; the lock file is the source of truth
+# (.harbormaster.toml and .harbormaster.lock are committed — do NOT ignore them)
+/cports/
+# hm's runtime flock coordination file (not the lock file itself)
+/.harbormaster.lock.flock
+
+# --- Logs ---
+*.log
+
+# --- Python ---
+__pycache__/
+*.pyc
+
+# --- Zig (astrod) ---
+zig-cache/
+.zig-cache/
+zig-out/
+
+# --- Editors / OS noise ---
+*.swp
+*~
+.DS_Store
+
+# generated cbuild user config (recreated by build)
+/.config/

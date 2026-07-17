@@ -1,0 +1,14 @@
+# Astro Linux — source-build overrides for binary packages-mode
+#
+# In binary packages-mode (docs/03 §1 "Binary consumption for dev builds"),
+# the packages stage builds from source ONLY:
+#   1. templates present in astro-cports/ (Astro's own collection),
+#   2. cports templates shadowed/patched via build/patches/cports/*.patch
+#      (detected automatically from the patch file paths),
+#   3. anything listed here.
+# Everything else is installed at rootfs time from Chimera's signed binary
+# repository. Source packages-mode (release/nightly) ignores this file and
+# builds the full manifest from source.
+#
+# One package name per line (bare template name, e.g. "musl" — the
+# main/ vs user/ collection is resolved automatically). '#' comments.

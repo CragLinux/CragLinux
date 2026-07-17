@@ -1,0 +1,5 @@
+# Astro Linux - musl libc compatibility
+# Disable features that require glibc-specific interfaces
+
+# VDSO compat not needed with musl
+# CONFIG_COMPAT_VDSO is not set

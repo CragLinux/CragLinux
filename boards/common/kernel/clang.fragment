@@ -1,0 +1,12 @@
+# Astro Linux - Clang/LLVM kernel configuration
+# Applied to all kernel builds (unless clang_patches = false)
+
+# ThinLTO (may be overridden by board.toml lto setting)
+CONFIG_LTO_CLANG_THIN=y
+# CONFIG_LTO_CLANG_FULL is not set
+
+# Control Flow Integrity (Clang-only security feature)
+CONFIG_CFI_CLANG=y
+
+# Shadow Call Stack (aarch64 only, ignored on other archs)
+CONFIG_SHADOW_CALL_STACK=y

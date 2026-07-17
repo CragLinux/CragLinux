@@ -1,0 +1,21 @@
+# Harbormaster companion-repo manifest (AD-001 / AD-003 / AD-023).
+#
+# Declares the repositories materialized into this workspace by `hm`.
+# Exact commit pins live in the committed .harbormaster.lock; use
+#   hm sync --locked
+# to reproduce the pinned workspace. Pin bumps are a lock-file diff in a
+# normal PR (AD-023). The checkouts themselves (cports/) are gitignored.
+
+[general]
+work_dir = "./"
+
+[git]
+shallow_clone = true
+clone_depth = 1
+
+[[repository]]
+name = "cports"
+url = "https://github.com/chimera-linux/cports.git"
+type = "git"
+branch = "master"
+path = "cports"

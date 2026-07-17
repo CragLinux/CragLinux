@@ -1,0 +1,12 @@
+# Pinned Zig toolchain for astrod (docs/03 §4, docs/06 §3).
+# The build container (container/Containerfile) installs exactly this
+# release from ziglang.org; keep the ARG ZIG_VERSION there in sync.
+#
+# 0.16.0 released 2026-04-13 — latest stable as of the 2026-07 phase-2
+# currency pass. Fedora 44 packages the same version (zig-0.16.0-1.fc44),
+# but we install the official release tarball, sha256-verified, so the
+# pin cannot drift when the Fedora repo moves to a newer build.
+#
+# Tarball sha256 (x86_64-linux), from https://ziglang.org/download/index.json:
+#   70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+0.16.0

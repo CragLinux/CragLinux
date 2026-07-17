@@ -1,0 +1,6 @@
+NAME="Astro Linux"
+ID=astro
+ID_LIKE=chimera
+VERSION_ID=0.1.0
+PRETTY_NAME="Astro Linux 0.1.0"
+HOME_URL="https://github.com/tierone/clang-cross"

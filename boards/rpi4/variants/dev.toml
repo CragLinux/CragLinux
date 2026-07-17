@@ -1,0 +1,30 @@
+[variant]
+name = "Development"
+description = "Development image with SSH, debug tools, serial console"
+
+[packages]
+# Dev builds consume Chimera's signed binaries for unmodified base packages
+# (docs/03 §1 "Binary consumption for dev builds"). Override per-invocation
+# with --packages-mode=source; release/nightly variants are full-source.
+mode = "binary"
+install = [
+    "openssh",
+    "opendoas",
+    "nano",
+    "less",
+    "strace",
+    "htop",
+    "iproute2",
+    "dhcpcd",
+]
+
+[services]
+enable = ["sshd", "dhcpcd"]
+
+[users]
+create = [
+    { name = "dev", uid = 1000, groups = ["wheel"], shell = "/bin/sh" },
+]
+
+[kernel]
+cmdline_append = "loglevel=7"

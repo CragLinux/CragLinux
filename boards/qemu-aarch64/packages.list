@@ -1,0 +1,2 @@
+# QEMU AArch64 board-specific packages
+# Kernel is built directly (not through cbuild)

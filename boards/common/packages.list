@@ -1,0 +1,12 @@
+# Astro Linux - Fixed base system packages
+# These define the opinionated base and are not customizable.
+# Board-specific and variant-specific packages are additive.
+musl
+chimerautils
+dinit
+dinit-chimera
+base-bootstrap
+apk-tools
+turnstile
+nyagetty     # console getty (standalone util-linux agetty + dinit service), per Chimera base-full-core
+dinit-chimera-udev  # udev-backed device manager glue (/usr/lib/dinit-devd) — early-devd fails 127 without it

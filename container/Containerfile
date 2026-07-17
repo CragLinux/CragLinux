@@ -1,0 +1,107 @@
+# Astro Linux - Build Environment Container
+# Works with: podman build, docker build
+#
+# Usage:
+#   podman build -t astro-builder -f container/Containerfile container/
+#   podman run --rm -v $(pwd):/workspace:Z --userns=keep-id astro-builder -c "./sdk/build-toolchain.sh aarch64"
+#
+# Base is pinned by digest (docs/03 §4). To bump:
+#   skopeo inspect --format '{{.Digest}}' docker://registry.fedoraproject.org/fedora:<N>
+
+FROM registry.fedoraproject.org/fedora:44@sha256:bf1977904d73dceee3f693ab77b025b352375a9d06345045ed22b0b1b232b836
+
+LABEL maintainer="Astro Linux project"
+LABEL description="Build environment for Astro Linux cross-compilation toolchain and system builder"
+
+# Install all build dependencies in a single layer for cache efficiency
+#
+# Core build tools:    cmake, ninja-build, git, curl, tar, xz, patch, make, python3
+# Bootstrap compilers: gcc, gcc-c++ (required to build LLVM from source)
+# Packaging tools:     squashfs-tools, zstd (rootfs squashfs + package-toolchain.sh)
+# cbuild deps:         bubblewrap, libarchive, meson, pkgconf, flex, byacc, m4, perl
+# apk-tools build:     zlib-devel, openssl-devel, libzstd-devel (apk-tools 3.x build from source)
+# cbuild linter:       ruff (Python linter required by cbuild template validation)
+# Config/JSON:         jq (JSON parsing in shell scripts)
+# Kernel build:        bc, kmod, perl, flex, bison (kernel Kconfig and build deps)
+# Update bundles:      rauc (bundle stage: `rauc bundle` with verity, docs/03 §5)
+# Bootloader (EFI):    grub2-tools (grub2-mkimage/grub2-editenv),
+#                      grub2-efi-x64-modules + grub2-efi-aa64-modules
+#                      (/usr/lib/grub/{x86_64-efi,arm64-efi} for image assembly)
+# Bootloader (U-Boot): uboot-tools (mkimage for boot.scr, mkenvimage for bootenv)
+# Image stage:         util-linux (sfdisk partitioning), mtools (ESP/vfat
+#                      population without loop mounts), dosfstools, e2fsprogs
+# Test stage:          qemu-system-x86 + qemu-system-aarch64,
+#                      edk2-ovmf (x86_64 EFI firmware) + edk2-aarch64 (AAVMF)
+# Utilities:           file, findutils, diffutils, which, rsync, gettext (envsubst)
+RUN dnf install -y --setopt=install_weak_deps=False \
+        cmake \
+        ninja-build \
+        git \
+        curl \
+        tar \
+        xz \
+        patch \
+        make \
+        python3 \
+        gcc \
+        gcc-c++ \
+        squashfs-tools \
+        zstd \
+        bubblewrap \
+        bsdtar \
+        libarchive \
+        meson \
+        pkgconf \
+        flex \
+        byacc \
+        m4 \
+        perl \
+        zlib-devel \
+        openssl \
+        openssl-devel \
+        libzstd-devel \
+        ruff \
+        jq \
+        bc \
+        kmod \
+        bison \
+        elfutils-libelf-devel \
+        rauc \
+        grub2-tools \
+        grub2-efi-x64-modules \
+        grub2-efi-aa64-modules \
+        uboot-tools \
+        util-linux \
+        mtools \
+        dosfstools \
+        e2fsprogs \
+        qemu-system-x86 \
+        qemu-system-aarch64 \
+        edk2-ovmf \
+        edk2-aarch64 \
+        file \
+        findutils \
+        diffutils \
+        which \
+        rsync \
+        gettext \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# Pinned Zig toolchain for astrod (docs/03 §4, docs/06 §3).
+# The pin is recorded in build/zig-version — keep ZIG_VERSION/ZIG_SHA256
+# in sync with that file when bumping.
+ARG ZIG_VERSION=0.16.0
+ARG ZIG_SHA256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+RUN curl -fSLo /tmp/zig.tar.xz \
+        "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
+    && echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum -c - \
+    && mkdir -p /opt/zig \
+    && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1 \
+    && ln -sf /opt/zig/zig /usr/local/bin/zig \
+    && rm /tmp/zig.tar.xz \
+    && zig version
+
+WORKDIR /workspace
+
+ENTRYPOINT ["/bin/bash"]

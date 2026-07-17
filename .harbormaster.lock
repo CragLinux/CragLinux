@@ -1,0 +1,14 @@
+# Harbormaster Lock File
+# DO NOT EDIT - This file is auto-generated
+# Use 'hm sync' to update
+
+version = 1
+generated_at = 2026-07-15T21:32:03.661992961-04:00
+
+[entry]
+  [entry.cports]
+    url = "https://github.com/chimera-linux/cports.git"
+    type = "git"
+    requested_ref = "master"
+    resolved_sha = "e3c9e1a0c93dbdd4c2d1a83af0caa8cbbb7ddb68"
+    last_synced_at = 2026-07-15T21:32:03.661926576-04:00

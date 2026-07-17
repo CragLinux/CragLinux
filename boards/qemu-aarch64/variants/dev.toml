@@ -1,0 +1,32 @@
+[variant]
+name = "Development"
+description = "QEMU virtual machine for testing without hardware"
+
+[packages]
+# Dev builds consume Chimera's signed binaries for unmodified base packages
+# (docs/03 §1 "Binary consumption for dev builds"). Override per-invocation
+# with --packages-mode=source; release/nightly variants are full-source.
+mode = "binary"
+install = [
+    # TODO(phase-3): openssh + openssh-dinit disabled — its runtime dep
+    # heimdal does not cross-build yet (asn1_compile native-tool failure,
+    # see build/state/GAP-REPORT.md §3.2). Re-enable once heimdal builds.
+    # "openssh",
+    # "openssh-dinit",
+    "opendoas",
+    "nano",
+    "less",
+    "dhcpcd",
+    "dhcpcd-dinit",    # dinit service file (auto-split subpackage)
+]
+
+[services]
+enable = ["dhcpcd"]
+
+[users]
+create = [
+    { name = "dev", uid = 1000, groups = ["wheel"], shell = "/bin/sh" },
+]
+
+[kernel]
+cmdline_append = "loglevel=7"

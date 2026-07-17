@@ -1,0 +1,27 @@
+[board]
+name = "Raspberry Pi 4"
+arch = "aarch64"
+
+[kernel]
+version = "6.12.95"
+source = "upstream"
+defconfig = "defconfig"
+cmdline = "console=ttyAMA0,115200 console=tty1 root=/dev/mmcblk0p2 rootwait rw"
+dtb = "broadcom/bcm2711-rpi-4-b.dtb"
+lto = "none"
+
+[bootloader]
+type = "rpi-boot"
+
+[disk]
+boot_size = "256M"
+root_size = "4G"
+boot_fs = "vfat"
+root_fs = "ext4"
+
+[firmware]
+packages = ["firmware-linux-brcm-rpi"]
+
+[console]
+device = "ttyAMA0"
+baud = 115200

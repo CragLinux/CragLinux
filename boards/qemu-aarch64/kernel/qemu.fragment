@@ -1,0 +1,44 @@
+# QEMU AArch64 - VirtIO and virtual hardware support
+
+# VirtIO core
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_PCI=y
+CONFIG_VIRTIO_MMIO=y
+
+# VirtIO block device
+CONFIG_VIRTIO_BLK=y
+
+# VirtIO networking
+CONFIG_VIRTIO_NET=y
+
+# VirtIO console
+CONFIG_VIRTIO_CONSOLE=y
+
+# VirtIO input
+CONFIG_VIRTIO_INPUT=y
+
+# VirtIO RNG
+CONFIG_HW_RANDOM_VIRTIO=y
+
+# 9P filesystem for host directory sharing
+CONFIG_NET_9P=y
+CONFIG_NET_9P_VIRTIO=y
+CONFIG_9P_FS=y
+
+# PCI support for QEMU virt machine
+CONFIG_PCI=y
+CONFIG_PCI_HOST_GENERIC=y
+
+# Serial console
+CONFIG_SERIAL_AMBA_PL011=y
+CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
+
+# RTC
+CONFIG_RTC_DRV_PL031=y
+
+# tmpfs
+CONFIG_TMPFS=y
+
+# devtmpfs (auto-populate /dev)
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y

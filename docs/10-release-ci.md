@@ -60,6 +60,8 @@ Channel = **URL** a device's update source points at. One keyring trusts all cha
 
 Consequences of local-first: no pipeline logic lives in workflow YAML — workflows only checkout, `hm sync --locked`, restore caches, and invoke `astro ci <suite>`; a developer reproduces any CI failure with the same command; the future hosted runner choice (GitHub-hosted vs self-hosted) becomes a capacity decision, not an architecture one. Heavy caches (bldroot, distfiles, ccache, apk repo) are content-addressed volumes restorable from any object store.
 
+**Packages-mode per pipeline** ([03 §1](03-build-system.md) "Binary consumption for dev builds"): PR builds run `--packages-mode=binary` — only Astro-touched templates are built from source, everything else comes from Chimera's signed binary repo (keys pinned in `build/keys/chimera/`, trusted for dev artifacts only). Nightly and release pipelines run `--packages-mode=source` — full-source under Astro keys, immune to the binary-mode version-skew that the warn-only skew report tracks on PRs.
+
 **Per-PR** (target: warm ≤ 60 min):
 1. Lint: shellcheck, ruff (build/lib), `zig fmt --check`, TOML schema self-tests, template lint for astro-cports.
 2. astrod unit tests (`zig build test`) + OpenAPI ↔ router conformance check.
