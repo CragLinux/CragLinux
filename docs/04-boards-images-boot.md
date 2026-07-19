@@ -10,10 +10,12 @@
 |---|---|---|---|---|---|
 | `qemu-x86_64` | x86_64 | QEMU q35 | OVMF (EFI) → GRUB | virtio-blk | ttyS0 |
 | `qemu-aarch64` | aarch64 | QEMU virt | U-Boot (`-bios u-boot.bin`) | virtio-blk | ttyAMA0 |
+| `qemu-armv7` | armv7hf | QEMU virt (cortex-a15) | U-Boot (`-bios u-boot.bin`) | virtio-blk | ttyAMA0 |
 | `x86_64-efi` | x86_64 | generic EFI PC/gateway | firmware → GRUB | NVMe/SATA/eMMC | ttyS0 + fb |
 | `rpi4`, `rpi5` | aarch64 | Raspberry Pi 4/CM4/5 | RPi firmware → U-Boot | SD/eMMC/USB | serial + HDMI |
+| `beaglebone-black` | armv7hf | BeagleBone Black (AM335x) | ROM → SPL → U-Boot | SD/eMMC | ttyS0 |
 
-Parked (schema keeps the arch enum entries; no boards, untested): `armv7hf` (beaglebone-black from the prototype), `riscv64`.
+Parked (schema keeps the arch enum entry; no boards, untested): `riscv64`.
 
 **QEMU boards are first-class and boot through real bootloaders.** This is deliberate: RAUC slot switching lives in the bootloader, so only a real-bootloader boot exercises the A/B state machine. The prototype's `bootloader.type = "direct"` (direct kernel boot) is retained as a variant-level fast-iteration flag (`[qemu] direct_boot = true` in the dev workflow), never used by the update tests.
 
@@ -52,12 +54,13 @@ Mechanics:
 
 **Documented alternative (secure-boot end-state):** dual ESPs + Unified Kernel Images + `efibootmgr` backend — cleaner for Secure Boot (one signed UKI per slot, no unsigned grubenv logic), but EFI variable handling is flaky on low-end firmware and it complicates QEMU/OVMF CI. It is the intended stage-2 shape when verified boot lands (AD-018, [09-security.md](09-security.md)); the partition layout already reserves nothing that blocks it (boot.A/boot.B become the per-slot ESPs).
 
-## 4. AD-009 — aarch64 boot: U-Boot
+## 4. AD-009 — ARM boot (aarch64 + armv7): U-Boot
 
-> **AD-009 — aarch64 targets boot via U-Boot with RAUC's `uboot` backend: `BOOT_ORDER`/`BOOT_<slot>_LEFT` variables in a redundant environment on `bootenv`, driven by a boot script.** *(Recommended)*
+> **AD-009 — ARM targets (aarch64 and armv7) boot via U-Boot with RAUC's `uboot` backend: `BOOT_ORDER`/`BOOT_<slot>_LEFT` variables in a redundant environment on `bootenv`, driven by a boot script.** *(Recommended)*
 
 Mechanics:
 - U-Boot built per board (existing prototype machinery: `u_boot_defconfig`, clang build, ATF where needed; RPi chain-loads U-Boot from the vendor firmware).
+- **armv7 boards**: `qemu-armv7` runs QEMU `-M virt` with a cortex-a15 CPU, booting U-Boot via `-bios` exactly like `qemu-aarch64`; `beaglebone-black` (AM335x, board files exist in the clang-cross prototype) boots ROM → SPL → U-Boot and returns at the M5 hardware milestone ([11-roadmap-migration.md §1](11-roadmap-migration.md)). The boot-script/env logic below is identical across both ARM arches (`booti` vs `bootz` aside).
 - Environment: **redundant env** (two copies, CRC, `CONFIG_SYS_REDUNDAND_ENVIRONMENT`) at fixed offsets in the `bootenv` partition; userspace access via `fw_setenv`/`fw_printenv` (libubootenv) with `/etc/fw_env.config` generated per board.
 - Boot logic, compiled to `boot.scr` from this pseudocode (kept in `boards/common/uboot/boot.script.in`):
 

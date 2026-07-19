@@ -6,20 +6,47 @@ arch = "aarch64"
 version = "6.12.95"
 source = "upstream"
 defconfig = "defconfig"
+# Board-local fragments only; every boards/common/kernel/*.fragment
+# (clang, musl, rauc, dinit) is merged automatically by build/lib/kernel.sh.
 config_fragments = ["qemu.fragment"]
-# root=/dev/vda: run-qemu.sh attaches rootfs.ext4 as the whole (unpartitioned)
-# virtio disk. The image stage (docs/03 §5) will own root= per-slot later.
-cmdline = "console=ttyAMA0,115200 root=/dev/vda rootwait rw"
+# No root= here: the image stage owns root=PARTLABEL=... per A/B slot
+# (docs/03 §6); build/run-qemu.sh injects root= itself for direct boots.
+cmdline = "console=ttyAMA0,115200 rootwait"
 lto = "thin"
 
+# Real U-Boot boot per AD-009 (M1 wave 2): QEMU loads u-boot.bin via -bios,
+# U-Boot runs boot.scr from the ESP (BOOT_ORDER/BOOT_x_LEFT slot logic,
+# boards/common/uboot/boot.script.in). The dev fast path (direct -kernel
+# boot) stays available via build/run-qemu.sh without --image.
 [bootloader]
-type = "direct"
+type = "u-boot"
+u_boot_version = "2026.07"
+# Fedora cross-gcc: clang/lld-built U-Boot hangs at self-relocation on
+# qemu virt (MIGRATION-NOTES §12); revisit with a later LLVM/U-Boot.
+u_boot_compiler = "gcc"
+u_boot_defconfig = "qemu_arm64_defconfig"
 
-[disk]
-boot_size = "128M"
-root_size = "2G"
-boot_fs = "vfat"
-root_fs = "ext4"
+# AD-007 GPT layout sizes (docs/04 §2); defaults spelled out for clarity.
+[partitions]
+table = "gpt"
+esp_size = "64M"
+bootenv_size = "1M"
+boot_size = "64M"          # per slot
+rootfs_size = "512M"       # per slot; build fails if squashfs exceeds it
+data_min_size = "64M"
+
+[rauc]
+compatible = "astro-qemu-aarch64"
+bootloader = "uboot"   # RAUC uboot backend (docs/04 §4, AD-009)
+
+[image]
+formats = ["img"]          # qcow2 is auto-added ([qemu] present)
+
+[api]
+wifi = true
+ap_provisioning = true
+mdns = true
+lan_exposure = false       # AD-025 default
 
 [console]
 device = "ttyAMA0"

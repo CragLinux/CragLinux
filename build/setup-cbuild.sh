@@ -272,7 +272,6 @@ verify_profiles() {
     fi
 
     log_info "Profiles present in ${PROFILES_DIR}/"
-    log_info "Device configs present in ${PROFILES_DIR}/devices/"
 }
 
 verify_cbuild() {
@@ -362,8 +361,7 @@ main() {
 
     echo "Next steps:"
     echo "  1. Review architecture profiles in: build/cbuild-profiles/"
-    echo "  2. Review device configs in: build/cbuild-profiles/devices/"
-    echo "  3. Build a board: ./build/astro-build.sh <board> <variant>"
+    echo "  2. Build a board: ./build/astro-build.sh <board> <variant>"
     echo ""
 }
 

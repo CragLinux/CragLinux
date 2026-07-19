@@ -43,6 +43,18 @@ Entry point: `./build/astro-build.sh qemu-aarch64 dev --step=<stage>` (astro-bui
 
 ### 3.1 `main/llvm` cross-build failed as pinned → fixed by a 2-part cports patch (now builds; patch needs upstreaming)
 
+> **Phase 1 (2026-07-17): FIXED (automation + upstreaming draft).** The
+> packages stage now applies every `build/patches/cports/*.patch` before any
+> cbuild invocation (idempotent: `git apply --check` / `--reverse --check`)
+> and resets the checkout afterwards — success or failure — via
+> `git checkout -- . && git clean -fd` (scoped: `clean` without `-x` never
+> touches the gitignored `bldroot*`, `packages*`, `sources*`, `cbuild_cache`,
+> `etc/keys`; see `prepare_cports_tree`/`reset_cports_tree` in
+> `build/lib/packages.sh`). `hm status` shows a clean pin outside the stage.
+> An upstream PR draft (two-commit split, cports commit-style, verification
+> evidence) is at `build/patches/cports/UPSTREAMING.md` — draft only,
+> nothing submitted.
+
 - `libunwind`, `libcxxabi`, `libcxx` are **symlinks to `main/llvm`** in cports — getting `libc++.so.1` means cross-building the entire LLVM template (clang+lld+mlir+flang, 9552 ninja targets, ~2.5 h on 24 cores).
 - First attempt failed after ~2.5 h in the nested **NATIVE tools sub-build**:
   ```
@@ -58,33 +70,107 @@ Entry point: `./build/astro-build.sh qemu-aarch64 dev --step=<stage>` (astro-bui
 
 ### 3.2 `main/heimdal` cross-build fails → openssh runtime deps unsatisfiable (`so:libkrb5.so.26`, `so:libgssapi.so.3`, `so:libkafs.so.0`)
 
+> **Phase 1 (2026-07-17): WORKED AROUND (openssh restored); heimdal itself
+> still does not cross-build.** `astro-cports/main/openssh` shadows the
+> pinned template with GSSAPI/Kerberos removed (drops `heimdal-devel` +
+> `--with-kerberos5`, `pkgrel` bumped to 2, everything else identical incl.
+> subpackages/`-dinit`). The packages stage overlays astro-cports templates
+> onto the cports tree alongside the patches (cbuild has no out-of-tree
+> collection mechanism — categories are subdirs of the checkout, and
+> symlinks are defeated by `sanitize_pkgname()`'s `Path.resolve()`).
+> `openssh`/`openssh-dinit` + the `sshd` service are re-enabled in
+> `boards/qemu-aarch64/variants/dev.toml`; verified: cross-built
+> `openssh-10.3_p1-r2` (deps: libc/crypto/edit/fido2/ldns/pam/z only),
+> installed into the dev rootfs, sshd answers `SSH-2.0-OpenSSH_10.3` on the
+> forwarded port in the QEMU boot test. Cross-building heimdal (native-tool
+> class failure) remains open — only needed if a package must have GSSAPI.
+
 - `asn1_compile: not found` during build — heimdal builds its own generator tools and then executes them; in a cross build they are aarch64 binaries (same native-tool class of failure as llvm). Log: `build/state/logs/04e-closure4.log`.
 - Impact: `openssh` cannot be installed by apk until heimdal exists. Workaround for a boot-only image: drop `openssh`/`openssh-dinit` from the dev variant. Suggested fix: investigate how Chimera CI builds heimdal for aarch64 (native builders again?), or add host-heimdal native tools to the bldroot.
 
 ### 3.3 Anubis (HTTP 418) blocks cbuild's distfile fetcher for gitlab.alpinelinux.org
+
+> **Phase 1 (2026-07-17): FIXED (bounded curl fallback).** Every cbuild
+> invocation now goes through `cbuild_pkg()` (`build/lib/packages.sh`): on
+> failure whose log matches cbuild's fetch-error signatures, the template's
+> source URLs + sha256 are resolved via `./cbuild dump` and fetched with
+> `curl -L` (default UA passes Anubis) into `cports/sources/<name>-<ver>/`
+> by `build/lib/fetch_distfiles.py` (checksum-verified, one attempt per
+> distfile), then the build is re-run exactly once. Generic for any
+> 4xx/fetch error, loudly logged. A distfile mirror/cache stays the better
+> long-term answer (docs/03 §4).
 
 - cbuild's Python urllib fetcher gets `418 I'm a teapot` from gitlab.alpinelinux.org (Anubis anti-bot challenges "Mozilla-ish" UAs; plain `curl` passes). Hit twice (apk-tools, ca-certificates); will recur for every alpinelinux-hosted distfile.
 - Suggested fix: distfile mirror/cache (the `sources` named volume from docs/03 §4, warmed by CI), or teach cbuild a curl-compatible UA, or carry the distfiles.
 
 ### 3.4 Packages stage builds no dependency closure (design gap, worked around manually)
 
+> **Phase 1 (2026-07-17): FIXED (automated closure loop).** After the listed
+> templates are built, the packages stage now iterates (max 10 rounds):
+> regenerate the signed local index **from scratch** (`cbuild index
+> packages/main` after deleting the old `Packages.adb` — mkndx's `--index`
+> merge keeps entries for deleted .apk files, which masked missing packages;
+> raw `apk mkndx` without a key exits 127 silently, so cbuild's signing
+> wrapper is used), dry-run the full manifest (`apk --simulate add` against
+> the local repo, plus Chimera's repo in binary mode, keys verified), parse
+> `(no such package)` deps and map them to templates
+> (`build/lib/closure_map.py`: template dirs → index provider/origin oracle
+> for `so:`/`pc:`/`cmd:` → `@subpackage(...)` search), `cbuild pkg` the
+> missing templates, repeat; hard failure listing unresolved deps on
+> no-progress/cap. Verified both modes: binary (converges round 1, only
+> Astro-touched templates built) and source (removed `libedit-*.apk` from
+> the repo → round 1 detects `so:libedit.so.0`, maps to `main/libedit`,
+> rebuilds it, round 2 converges). `--allow-untrusted` is gone from the
+> rootfs stage in both modes (source installs verify against the cbuild dev
+> pubkeys, binary additionally against the pinned Chimera keys).
+
 - `build/lib/packages.sh` builds exactly the listed packages; the rootfs needs the full **runtime** closure (~25 extra templates were built by hand this run: base-files, ca-certificates, openssl3, zlib-ng-compat, zstd, debianutils, ncurses, libedit, acl, bzip2, xz, kmod, file, linux-pam, libxo, tzdb, openresolv, snooze, sd-tools, util-linux, udev, chimera-repo-main, libcap, shadow, resolvconf, ldns, libfido2…).
 - Suggested fix: resolve the closure via apk against the repo index and `cbuild pkg` anything missing (or use `cbuild`'s bulk facilities) — belongs in the `packages` stage rework of the `astro` CLI (docs/03 §5).
 
 ### 3.5 rootfs stage smaller gaps
 
-- The **manual-extraction fallback is dead code**: apk-tools 3.x `.apk` files are ADB, not gzip tarballs; `tar -xzf` silently extracts nothing and the build "passes" with an empty rootfs. Should be deleted or made a hard error.
-- `apk --usermode` files are owned by the build uid, not root — fine for dev ext4 images (and `mkfs.ext4 -d` normalizes to root), but the prod squashfs path must own files correctly (fakeroot or apk in a userns).
-- dinit service enablement hook (`20-enable-services.sh`) symlinks into `/etc/dinit.d/boot.d/` — needs validation against dinit-chimera 0.99.x conventions once a full rootfs boots.
+> **Phase 1 (2026-07-17): FIXED (except ownership, still open).**
+> The manual-extraction fallback was deleted; apk failures are now hard
+> errors (`die`) in both packages modes, and a missing repo dir is a hard
+> error too. `20-enable-services.sh` was validated against the booted
+> rootfs: dinit-chimera's `boot` service uses `waits-for.d:
+> /etc/dinit.d/boot.d`, where entries activate services **by name** (even a
+> dangling link works — the old `../dhcpcd` link pointed at a nonexistent
+> `/etc/dinit.d/dhcpcd` yet dhcpcd ran); the hook now mirrors the packaged
+> convention and links to the real service file
+> (`../../../usr/lib/dinit.d/<svc>` for packaged services, `../<svc>` for
+> /etc-local ones). The `--usermode` ownership caveat below remains open
+> (prod squashfs work).
+
+- ~~The **manual-extraction fallback is dead code**: apk-tools 3.x `.apk` files are ADB, not gzip tarballs; `tar -xzf` silently extracts nothing and the build "passes" with an empty rootfs. Should be deleted or made a hard error.~~ (fixed, see above)
+- ~~`apk --usermode` files are owned by the build uid, not root — fine for dev ext4 images (and `mkfs.ext4 -d` normalizes to root), but the prod squashfs path must own files correctly (fakeroot or apk in a userns). **(still open)**~~ **M1 wave 1 (2026-07-17): FIXED (apk in a userns).** The rootfs stage runs as a child process (`build/lib/rootfs-stage.sh`); the prod squashfs path wraps it in `unshare -r` (build uid → 0), apk drops `--usermode` and applies real package ownership/modes, and mksquashfs runs in the same namespace — root-owned squashfs without sudo, `/etc/shadow` back at packaged 000. Verified via `unsquashfs -lln` (zero non-root entries, setuid intact). Known limitation: chowns to unmapped ids (`/var/log/{wtmp,btmp,lastlog}` root:utmp, `/var/lib/dhcpcd`) degrade to root with a loud apk warning; the shipped tmpfiles.d entries re-apply them at boot on mutable mounts. See MIGRATION-NOTES §11.
+- ~~dinit service enablement hook (`20-enable-services.sh`) symlinks into `/etc/dinit.d/boot.d/` — needs validation against dinit-chimera 0.99.x conventions once a full rootfs boots.~~ (validated + fixed, see above)
 
 ### 3.6 SDK toolchain gaps (hit while building the boot-smoke init)
 
-- The generated `<triple>-clang` wrappers do not pass `-fuse-ld=lld`; on a GNU-ld host the link fails (`unrecognised emulation mode: aarch64linux`).
-- The SDK sysroot ships no compiler-rt `crt*.o` for `-static` linking (`cannot open crtbeginT.o`); freestanding `-nostdlib` was needed for the smoke-test init.
+> **Phase 1 (2026-07-17): FIXED.** The generated wrappers now pass
+> `-fuse-ld=lld`, and the compiler-rt builtins build enables
+> `COMPILER_RT_BUILD_CRT=ON` (verified present in LLVM 22's standalone
+> builtins cmake, gated on `COMPILER_RT_HAS_CRT`); the resulting
+> `clang_rt.crtbegin.o`/`clang_rt.crtend.o` are installed into the clang
+> resource dir per-triple (plus arch-suffixed copies in
+> `sysroot/lib/linux/`). Acceptance test passed: the boot-smoke init was
+> rebuilt as a normal libc program with `-static` (not `-nostdlib`), linked
+> clean, and printed its banner from `/init` in QEMU
+> (`build/state/logs/p1-02-qemu-smoke-static.log`).
+
+- ~~The generated `<triple>-clang` wrappers do not pass `-fuse-ld=lld`; on a GNU-ld host the link fails (`unrecognised emulation mode: aarch64linux`).~~ (fixed)
+- ~~The SDK sysroot ships no compiler-rt `crt*.o` for `-static` linking (`cannot open crtbeginT.o`); freestanding `-nostdlib` was needed for the smoke-test init.~~ (fixed)
 
 ### 3.7 Process notes (build-environment data)
 
-- The kernel stage and the SDK share `sources/linux-<ver>`; the SDK's `headers_install` leaves the tree unclean and breaks the kernel's `O=` build (fix #2 was a one-time `mrproper`; real fix: SDK should install headers from a pristine copy or its own `O=` dir).
+> **Phase 1 (2026-07-17): headers issue FIXED.** `install_kernel_headers`
+> now runs `make O=build/state/<arch>/kernel-headers-obj headers_install`
+> so all generated state lands outside the shared source tree; verified the
+> tree stays pristine (no `include/generated`, no `.config`) after a full
+> headers reinstall, and the kernel stage builds from it unchanged.
+
+- ~~The kernel stage and the SDK share `sources/linux-<ver>`; the SDK's `headers_install` leaves the tree unclean and breaks the kernel's `O=` build (fix #2 was a one-time `mrproper`; real fix: SDK should install headers from a pristine copy or its own `O=` dir).~~ (fixed via `O=`)
 - zsh `noclobber` on the host bit twice (`>` and `>>` to fresh files); build scripts themselves are bash and unaffected.
 
 ## 4. Distance to M1 (per docs/11 §1 and docs/03/04)
@@ -92,15 +178,17 @@ Entry point: `./build/astro-build.sh qemu-aarch64 dev --step=<stage>` (astro-bui
 What M0/M1 need that this run showed is still missing, in rough order:
 
 1. **Upstream/productize the llvm cross patch** (§3.1) and fix heimdal cross (§3.2) so a clean `hm sync --locked` tree builds unmodified; wire quilt-style `build/patches/cports/` application into the packages stage.
-2. **`image` stage** — `build/lib/image.sh` is a stub. Needs the docs/04 §6 layout: GPT via sfdisk, ESP population via mtools (no loop devices/sudo — `create-system-image.sh`'s parted+losetup+sudo approach contradicts the container design and parted isn't installed), per-slot `root=PARTLABEL=`, `.img.zst` + `.qcow2` outputs. Schema still has `[disk]`, needs `[partitions]`.
+2. ~~**`image` stage** — `build/lib/image.sh` is a stub. Needs the docs/04 §6 layout: GPT via sfdisk, ESP population via mtools (no loop devices/sudo — `create-system-image.sh`'s parted+losetup+sudo approach contradicts the container design and parted isn't installed), per-slot `root=PARTLABEL=`, `.img.zst` + `.qcow2` outputs.~~ ~~Schema still has `[disk]`, needs `[partitions]`.~~ **M1 wave 1 (2026-07-17): schema DONE** — `[partitions]`/`[rauc]`/`[image]`/`[api]` + `grub-efi` landed, `root=` is rejected in board cmdlines (run-qemu.sh injects it for direct boots), `[disk]` maps with a deprecation warning for one release; boards migrated. **M1 wave 2 (2026-07-17): image stage DONE** — fully unprivileged AD-007 A/B GPT assembly (sfdisk on plain files, mtools-populated vfat, `mkfs.ext4 -d` under `unshare -r`, per-slot `root=PARTLABEL=`, `.img.zst` + `.qcow2` + SHA256SUMS + manifest.json); layout math in `build/lib/image_layout.py` (pure, SOURCE_DATE_EPOCH-deterministic GUIDs); `create-system-image.sh` + `cbuild-profiles/devices/` deleted. See MIGRATION-NOTES §12.
 3. **Packages-stage closure resolution** (§3.4) so a green build is reproducible from `astro build` alone, plus signed-index verification instead of `--allow-untrusted`.
-4. **Bootloader stage** — stub today; qemu-aarch64 uses direct kernel boot (fine for M0 smoke, docs/11 M1 wants real U-Boot; `qemu-x86_64`/`x86_64-efi` boards + GRUB path don't exist yet).
-5. **RO squashfs rootfs + A/B layout** — current rootfs is the rw-ext4 single-partition dev model; prod squashfs assembly (mksquashfs is already in the container) and the A/B `[partitions]`/RAUC `bundle` stage are M1/M2 work. RAUC host tools are already in the container.
+4. ~~**Bootloader stage** — stub today; qemu-aarch64 uses direct kernel boot (fine for M0 smoke, docs/11 M1 wants real U-Boot; `qemu-x86_64`/`x86_64-efi` boards + GRUB path don't exist yet).~~ **M1 wave 2 (2026-07-17): DONE** — U-Boot 2026.07 built from source per board (Fedora cross-gcc; the clang/lld build hangs at self-relocation — deviation recorded), boot.scr implements the AD-009 BOOT_ORDER/BOOT_x_LEFT flow, env-in-FAT on the bootenv partition (AD-009 raw-redundant-env deviation recorded — no U-Boot raw-block env backend for virtio); GRUB EFI core image via grub2-mkimage + static AD-008 ORDER/x_OK/x_TRY grub.cfg + grubenv on bootenv; new boards `qemu-x86_64` (OVMF) and `qemu-armv7` exist and boot through them. See MIGRATION-NOTES §12.
+5. **RO squashfs rootfs + A/B layout** — ~~current rootfs is the rw-ext4 single-partition dev model; prod squashfs assembly (mksquashfs is already in the container)~~ **M1 wave 1 (2026-07-17): prod squashfs assembly DONE** — `qemu-aarch64/prod` variant (`[rootfs] type = "squashfs"`, minimal package set) produces a root-owned zstd squashfs (51 MB, checked against `[partitions].rootfs_size`) via the userns path, honors `SOURCE_DATE_EPOCH` (`-mkfs-time`/`-all-time`), and boot-smokes to `qemu-aarch64-production login:` on a RO squashfs root. **M1 wave 2 (2026-07-17): A/B image assembly DONE** (item 2 above) — both slots populated, real-bootloader boots select slot A and mount `root=PARTLABEL=rootfs.A` RO with `/data` mounted and zero failed services (`build/state/logs/w2-boot-*.log`). The RAUC `bundle` stage remains M2 work; RAUC host tools are already in the container.
 6. **`astro` CLI stage contract** — this run drove `astro-build.sh --step=...` + hand-run cbuild; stage contracts with cache keys (docs/03 §5) would have avoided most manual glue.
 7. **Reproducibility plumbing** (docs/03 §7): SOURCE_DATE_EPOCH, deterministic apk ordering, lock-drift refusal (`hm status` gate is not wired into the build yet).
 8. **Boot-smoke test stage** — the QEMU tests in §1 rows 10a/10b should become `astro test boot-smoke <board>` (junit output per docs/03 §5), with a login-prompt assertion and timeout instead of hand-run timeouts.
-9. **Small kernel-fragment follow-up** — `early-sysctl` and `early-binfmt` fail on boot (only non-OK services): add `CONFIG_BINFMT_MISC` (+ whatever sysctl needs) to `boards/common/kernel/` fragments.
-10. **Ownership correctness** — `--usermode` apk leaves all files owned by the build uid; acceptable for the dev ext4 path, wrong for prod squashfs (needs fakeroot or rootless uid-mapping in the image stage).
+9. ~~**Small kernel-fragment follow-up** — `early-sysctl` and `early-binfmt` fail on boot (only non-OK services): add `CONFIG_BINFMT_MISC` (+ whatever sysctl needs) to `boards/common/kernel/` fragments.~~ **M1 wave 1 (2026-07-17): FIXED.** Diagnosis: binfmt needed `CONFIG_BINFMT_MISC` (mount of /proc/sys/fs/binfmt_misc failed); sysctl needed `CONFIG_SECURITY_YAMA` (`kernel.yama.ptrace_scope` from 10-chimera-user.conf had no /proc/sys node). New `boards/common/kernel/dinit.fragment` + `rauc.fragment` (SQUASHFS+zstd+xattr, LOOP, DM_VERITY+DM+MD, NBD, SHA256 — all =y per AD-006); dev boot now has **zero failed services** (`build/state/logs/w1-05-boot-dev.log`).
+10. ~~**Ownership correctness** — `--usermode` apk leaves all files owned by the build uid; acceptable for the dev ext4 path, wrong for prod squashfs (needs fakeroot or rootless uid-mapping in the image stage).~~ **M1 wave 1 (2026-07-17): FIXED** via `unshare -r` userns around the prod rootfs stage (§3.5 above; MIGRATION-NOTES §11).
+11. **Kernel stage staleness detection** (found during the post-reboot resume, 2026-07-17): the skip check is `.kernel-version` marker + built image only — changing `boards/common/kernel/*.fragment` (or a board fragment/defconfig) does NOT trigger a rebuild; both the x86_64 sysctl refresh and the armv7 cgroup fix required deleting the markers by hand. The stage should hash its config inputs (defconfig + ordered fragment list) into the marker. Same class of gap: `configure_kernel` skips on `.astro-kernel-configured` and would keep a stale `.config` even after a forced build.
+12. **gettext parallel-make flake on cross armv7** (MIGRATION-NOTES §12 armv7 notes): gnulib's generated `error.h` can be compiled against half-written under `make -j24` (`error_at_line` undeclared); succeeded on retry, no patch carried. If it recurs, cap gettext's build jobs or patch the gnulib-lib Makefile dependency.
 
 ## 5. Artifacts and logs
 

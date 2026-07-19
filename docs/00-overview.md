@@ -79,7 +79,7 @@ Explicitly out of scope for the first release. Some are "never", some are "later
 - **Cellular WAN** — architected for (API namespace reserved), not implemented in v1.
 - **Verified/secure boot** — v1 signs updates and packages; it does not attest the boot chain. Staged roadmap in [09-security.md](09-security.md).
 - **Fleet management server.** RAUC's hawkBit client is a planned optional package; Astro does not host or ship a fleet server.
-- **armv7 and riscv64 targets** — future, just not initial.
+- **riscv64 targets** — future, just not initial.
 
 ## 5. Supported targets (v1)
 
@@ -87,8 +87,10 @@ Explicitly out of scope for the first release. Some are "never", some are "later
 |---|---|---|---|
 | `qemu-x86_64` | x86_64 | OVMF EFI + GRUB | first-class dev/CI board |
 | `qemu-aarch64` | aarch64 | U-Boot (`-bios`) | first-class dev/CI board |
+| `qemu-armv7` | armv7hf | U-Boot (`-bios`) | first-class dev/CI board |
 | `x86_64-efi` | x86_64 | GRUB on EFI | generic industrial PC / gateway |
 | `rpi4` / `rpi5` | aarch64 | RPi firmware → U-Boot | accessible reference hardware |
+| `beaglebone-black` | armv7hf | ROM → SPL → U-Boot | accessible reference hardware (M5) |
 
 QEMU boards are not second-class: they boot through the **real bootloaders**, so the complete A/B update-and-rollback cycle runs in CI and on a laptop in minutes ([04-boards-images-boot.md](04-boards-images-boot.md), [10-release-ci.md](10-release-ci.md)).
 

@@ -52,21 +52,31 @@ create_users() {
         log_info "Created user: ${name} (uid=${uid}, groups=${groups}, shell=${shell})"
     done
 
-    # Leave /etc/shadow owner-readable (600) rather than the packaged 000:
-    # the unprivileged dev-image path (mkfs.ext4 -d) must be able to read
-    # every file. 000 is shadow's packaged mode; the prod image path should
-    # restore it (or build under fakeroot). See GAP-REPORT §3.5.
-    if [ -n "$shadow_mode" ]; then
-        chmod 600 "${ROOTFS_DIR}/etc/shadow"
-    fi
-
-    # Same treatment for the shadow-suite backup files: the shadow package
-    # trigger (pwconv/grpconv) leaves e.g. /etc/shadow- at mode 000, which
-    # breaks the unprivileged mkfs.ext4 -d read of the tree.
     local f
-    for f in shadow- gshadow gshadow- passwd- group-; do
-        [ -f "${ROOTFS_DIR}/etc/${f}" ] && chmod u+rw "${ROOTFS_DIR}/etc/${f}"
-    done
+    if [ "${ROOTFS_TYPE:-ext4}" = "squashfs" ]; then
+        # Prod path: restore the packaged shadow permissions. The stage runs
+        # as root inside a user namespace (unshare -r, see rootfs-stage.sh),
+        # so mksquashfs can read 000-mode files and records root ownership —
+        # no readability workaround needed or wanted on a production image.
+        # /etc/shadow -> packaged 000; backups (shadow- etc.) -> 600 root.
+        if [ -n "$shadow_mode" ]; then
+            chmod "$shadow_mode" "${ROOTFS_DIR}/etc/shadow"
+        fi
+        for f in shadow- gshadow gshadow- passwd- group-; do
+            [ -f "${ROOTFS_DIR}/etc/${f}" ] && chmod 600 "${ROOTFS_DIR}/etc/${f}"
+        done
+    else
+        # Dev path (GAP fix #11, dev-only): leave /etc/shadow owner-readable
+        # (600) rather than the packaged 000 — the unprivileged dev-image
+        # path (mkfs.ext4 -d) must be able to read every file. Same for the
+        # shadow-suite backup files the pwconv/grpconv trigger leaves at 000.
+        if [ -n "$shadow_mode" ]; then
+            chmod 600 "${ROOTFS_DIR}/etc/shadow"
+        fi
+        for f in shadow- gshadow gshadow- passwd- group-; do
+            [ -f "${ROOTFS_DIR}/etc/${f}" ] && chmod u+rw "${ROOTFS_DIR}/etc/${f}"
+        done
+    fi
     return 0
 }
 

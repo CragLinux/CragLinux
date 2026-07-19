@@ -85,6 +85,9 @@ export VARIANT_CONFIG_JSON
 # Extract key values for shell use
 BOARD_NAME=$(echo "$BOARD_CONFIG_JSON" | jq -r '.board.name')
 BOARD_ARCH=$(echo "$BOARD_CONFIG_JSON" | jq -r '.board.arch')
+# cbuild/apk arch (armv7hf -> armv7; see cbuild_arch_for in lib/common.sh)
+CBUILD_ARCH=$(cbuild_arch_for "$BOARD_ARCH")
+export CBUILD_ARCH
 VARIANT_NAME=$(echo "$VARIANT_CONFIG_JSON" | jq -r '.variant.name')
 KERNEL_PACKAGE=$(echo "$BOARD_CONFIG_JSON" | jq -r '.kernel.package')
 KERNEL_CMDLINE=$(echo "$BOARD_CONFIG_JSON" | jq -r '.kernel.cmdline')
@@ -103,8 +106,13 @@ fi
 PACKAGES_MODE="${PACKAGES_MODE_CLI:-$(echo "$VARIANT_CONFIG_JSON" | jq -r '.packages.mode // "source"')}"
 export PACKAGES_MODE
 
+# Rootfs type (docs/02 §3 AD-004): ext4 for dev, squashfs for prod.
+# config.py defaults it by variant id when the [rootfs] section is absent.
+ROOTFS_TYPE=$(echo "$VARIANT_CONFIG_JSON" | jq -r '.rootfs.type // "ext4"')
+export ROOTFS_TYPE
+
 # Export for hooks
-export BOARD_NAME BOARD_ARCH VARIANT_NAME KERNEL_PACKAGE KERNEL_CMDLINE BOOTLOADER_TYPE
+export BOARD BOARD_NAME BOARD_ARCH VARIANT VARIANT_NAME KERNEL_PACKAGE KERNEL_CMDLINE BOOTLOADER_TYPE
 export PROJECT_ROOT EXTERNAL_DIR BOARD_DIR
 
 # Services (space-separated for hooks)
@@ -154,11 +162,16 @@ should_run_step() {
 }
 
 if should_run_step "toolchain"; then
-    if [ ! -f "${PROJECT_ROOT}/toolchain/bin/clang" ]; then
-        log_step "Toolchain not found, building..."
+    # Per-arch check: the LLVM toolchain is shared (toolchain/bin/clang),
+    # but each board arch needs its own sysroot + compiler wrappers under
+    # build/state/<arch>/bin (build-toolchain.sh skips the LLVM build when
+    # it is already present, so a second arch only adds musl/compiler-rt/
+    # libc++ — minutes, not hours).
+    if ! ls "${PROJECT_ROOT}/build/state/${BOARD_ARCH}/bin/"*-clang &>/dev/null; then
+        log_step "Toolchain for ${BOARD_ARCH} not found, building..."
         "${PROJECT_ROOT}/sdk/build-toolchain.sh" "$BOARD_ARCH"
     else
-        log_info "Toolchain already built, skipping"
+        log_info "Toolchain for ${BOARD_ARCH} already built, skipping"
     fi
 fi
 
@@ -237,7 +250,20 @@ if should_run_step "packages"; then
     BUILD_LIST_FILE="$MANIFEST_FILE"
     if [ "$PACKAGES_MODE" = "binary" ]; then
         log_step "Resolving source-build subset (binary packages-mode)..."
-        resolve_source_package_list > "$SOURCE_MANIFEST_FILE"
+        # M1 wave 2 refinement: PATCH-derived templates are built only when
+        # the manifest actually lists them. The llvm cross patch is a no-op
+        # for native profiles (and *removes* mlir/flang on cross), so
+        # building it for hours on boards that never install it (x86_64
+        # prod) buys nothing — and where a Chimera binary shadows a subset
+        # template anyway, the skew report flags it loudly
+        # (build/lib/skew_check.py). astro-cports shadows and the explicit
+        # boards/common/source-packages.list keep their unconditional
+        # forced-source semantics.
+        {
+            resolve_source_package_list \
+                | grep -Fxv -f <(resolve_patched_templates) || true
+            resolve_patched_templates | grep -Fx -f "$MANIFEST_FILE" || true
+        } | awk '!seen[$0]++' > "$SOURCE_MANIFEST_FILE"
         BUILD_LIST_FILE="$SOURCE_MANIFEST_FILE"
         if [ -s "$SOURCE_MANIFEST_FILE" ]; then
             log_info "Source-build subset ($(wc -l < "$SOURCE_MANIFEST_FILE") packages):"
@@ -249,9 +275,19 @@ if should_run_step "packages"; then
         fi
     fi
 
-    # Build packages via cbuild
+    # Build packages via cbuild. The pinned cports checkout is prepared
+    # (build/patches/cports + astro-cports shadow templates) before any
+    # cbuild invocation and reset to the pristine pin afterwards — on
+    # success AND on failure (GAP §3.1).
     if [ -d "${PROJECT_ROOT}/cports" ] && [ -f "${PROJECT_ROOT}/cports/cbuild" ]; then
-        build_packages "$BOARD_ARCH" "$BUILD_LIST_FILE"
+        prepare_cports_tree
+        # Reset the tree no matter how the stage ends (set -e exits and die
+        # paths included); cleared + run explicitly on the success path.
+        trap reset_cports_tree EXIT
+        build_packages "$CBUILD_ARCH" "$BUILD_LIST_FILE"
+        resolve_dependency_closure "$CBUILD_ARCH" "$MANIFEST_FILE" "$PACKAGES_MODE"
+        trap - EXIT
+        reset_cports_tree
     else
         log_warn "cports checkout not found at ${PROJECT_ROOT}/cports — skipping package build"
         log_warn "cports is managed by Harbormaster; run 'hm sync --locked' to materialize it"
@@ -268,26 +304,21 @@ if should_run_step "rootfs"; then
         die "Package manifest not found: ${MANIFEST_FILE} (run --step=packages first)"
     fi
 
-    # Clean previous rootfs
-    if [ -d "$ROOTFS_DIR" ]; then
-        log_info "Removing previous rootfs..."
-        rm -rf "$ROOTFS_DIR"
+    # The stage runs as a child process (build/lib/rootfs-stage.sh) so the
+    # prod squashfs path can be wrapped in a user namespace: with the build
+    # uid mapped to root (unshare -r), apk installs WITHOUT --usermode and
+    # applies real package-metadata ownership, and mksquashfs records
+    # root-owned files — no sudo involved (GAP §3.5 ownership item).
+    # The dev ext4 path is unchanged (plain unprivileged run; mkfs.ext4 -d
+    # normalizes ownership to root at image-creation time).
+    if [ "$ROOTFS_TYPE" = "squashfs" ] && [ "$(id -u)" -ne 0 ]; then
+        log_step "Assembling prod rootfs in a user namespace (unshare -r)..."
+        unshare -r bash "${SCRIPT_DIR}/lib/rootfs-stage.sh" || \
+            die "rootfs stage failed (squashfs/userns path)"
+    else
+        bash "${SCRIPT_DIR}/lib/rootfs-stage.sh" || \
+            die "rootfs stage failed"
     fi
-
-    # Create rootfs from packages (source: local repo only;
-    # binary: local repo + Chimera's signed binary repo, docs/03 §1)
-    create_rootfs "$ROOTFS_DIR" "$BOARD_ARCH" "$MANIFEST_FILE" "$PACKAGES_MODE"
-
-    # Apply overlays
-    apply_overlays "$ROOTFS_DIR" "$BOARD_DIR" "$VARIANT" "$EXTERNAL_DIR"
-
-    # Install kernel into rootfs
-    install_kernel_to_rootfs "$ROOTFS_DIR" "$BOARD" "$BOARD_ARCH" "$BOARD_CONFIG_JSON"
-
-    # Run hooks
-    run_hooks "$ROOTFS_DIR" "$BOARD_DIR"
-
-    log_info "Rootfs assembled at: ${ROOTFS_DIR}"
 fi
 
 ##############################################################################

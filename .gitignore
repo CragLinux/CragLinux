@@ -45,6 +45,7 @@ zig-out/
 *.swp
 *~
 .DS_Store
+.obsidian/
 
 # generated cbuild user config (recreated by build)
 /.config/

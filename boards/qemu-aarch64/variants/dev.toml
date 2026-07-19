@@ -8,11 +8,11 @@ description = "QEMU virtual machine for testing without hardware"
 # with --packages-mode=source; release/nightly variants are full-source.
 mode = "binary"
 install = [
-    # TODO(phase-3): openssh + openssh-dinit disabled — its runtime dep
-    # heimdal does not cross-build yet (asn1_compile native-tool failure,
-    # see build/state/GAP-REPORT.md §3.2). Re-enable once heimdal builds.
-    # "openssh",
-    # "openssh-dinit",
+    # openssh comes from the kerberos-free astro-cports shadow template
+    # (astro-cports/main/openssh) — upstream cports openssh needs heimdal,
+    # which does not cross-build (GAP §3.2).
+    "openssh",
+    "openssh-dinit",
     "opendoas",
     "nano",
     "less",
@@ -21,7 +21,7 @@ install = [
 ]
 
 [services]
-enable = ["dhcpcd"]
+enable = ["dhcpcd", "sshd"]
 
 [users]
 create = [

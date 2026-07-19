@@ -1,0 +1,2 @@
+# QEMU ARMv7 board-specific packages
+# Kernel is built directly (not through cbuild)

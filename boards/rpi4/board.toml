@@ -6,18 +6,37 @@ arch = "aarch64"
 version = "6.12.95"
 source = "upstream"
 defconfig = "defconfig"
-cmdline = "console=ttyAMA0,115200 console=tty1 root=/dev/mmcblk0p2 rootwait rw"
+# No root= here: the image stage owns root=PARTLABEL=... per A/B slot
+# (docs/03 §6).
+cmdline = "console=ttyAMA0,115200 console=tty1 rootwait"
 dtb = "broadcom/bcm2711-rpi-4-b.dtb"
 lto = "none"
 
 [bootloader]
 type = "rpi-boot"
 
-[disk]
-boot_size = "256M"
-root_size = "4G"
-boot_fs = "vfat"
-root_fs = "ext4"
+# AD-007 GPT layout sizes (docs/04 §2). Partition 1 (esp) doubles as the
+# RPi firmware boot partition, hence the larger size.
+[partitions]
+table = "gpt"
+esp_size = "256M"
+bootenv_size = "1M"
+boot_size = "64M"          # per slot
+rootfs_size = "512M"       # per slot; build fails if squashfs exceeds it
+data_min_size = "64M"
+
+[rauc]
+compatible = "astro-rpi4"
+bootloader = "uboot"
+
+[image]
+formats = ["img"]
+
+[api]
+wifi = true
+ap_provisioning = true
+mdns = true
+lan_exposure = false       # AD-025 default
 
 [firmware]
 packages = ["firmware-linux-brcm-rpi"]

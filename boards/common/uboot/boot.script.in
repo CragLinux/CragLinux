@@ -1,0 +1,56 @@
+# Astro U-Boot boot script (docs/04 §4, AD-009) — RAUC uboot-backend slot
+# selection with BOOT_ORDER / BOOT_<slot>_LEFT.
+#
+# Compiled to boot.scr with mkimage by the image stage, which substitutes:
+#   @CMDLINE@    board+variant kernel cmdline (console=..., no root=)
+#   @ROOTFLAGS@  "ro" (prod squashfs) or "rw" (dev ext4)
+#   @KERNEL_IMG@ kernel file name in the boot partitions (Image / zImage)
+#   @BOOTCMD@    booti (aarch64) / bootz (armv7)
+#
+# QEMU-specific bits, isolated on purpose (hardware boards get their own
+# template at M5): storage is virtio 0, and the DTB is QEMU's generated
+# one, already in RAM at ${fdtcontroladdr} — nothing is loaded from the
+# boot partitions' dtbs/ directory.
+#
+# Flow per slot in BOOT_ORDER (AD-009 pseudocode): tries left? ->
+# decrement + saveenv (power-cut safety) -> locate PARTLABEL boot.<slot>
+# -> load kernel -> boot with root=PARTLABEL=rootfs.<slot>. Any failure
+# falls through to the next slot; nothing bootable -> reset.
+
+test -n "${BOOT_ORDER}" || setenv BOOT_ORDER "A B"
+test -n "${BOOT_A_LEFT}" || setenv BOOT_A_LEFT 3
+test -n "${BOOT_B_LEFT}" || setenv BOOT_B_LEFT 3
+
+for BOOT_SLOT in ${BOOT_ORDER}; do
+    if test "x${BOOT_SLOT}" = "xA"; then
+        if test ${BOOT_A_LEFT} -gt 0; then
+            setexpr BOOT_A_LEFT ${BOOT_A_LEFT} - 1
+            echo "Astro: trying slot A (${BOOT_A_LEFT} attempts left)"
+            saveenv
+            if part number virtio 0 boot.A astro_bootpart; then
+                if fatload virtio 0:${astro_bootpart} ${kernel_addr_r} @KERNEL_IMG@; then
+                    setenv bootargs "@CMDLINE@ root=PARTLABEL=rootfs.A @ROOTFLAGS@ rauc.slot=A"
+                    @BOOTCMD@ ${kernel_addr_r} - ${fdtcontroladdr}
+                fi
+            fi
+            echo "Astro: slot A failed to boot"
+        fi
+    fi
+    if test "x${BOOT_SLOT}" = "xB"; then
+        if test ${BOOT_B_LEFT} -gt 0; then
+            setexpr BOOT_B_LEFT ${BOOT_B_LEFT} - 1
+            echo "Astro: trying slot B (${BOOT_B_LEFT} attempts left)"
+            saveenv
+            if part number virtio 0 boot.B astro_bootpart; then
+                if fatload virtio 0:${astro_bootpart} ${kernel_addr_r} @KERNEL_IMG@; then
+                    setenv bootargs "@CMDLINE@ root=PARTLABEL=rootfs.B @ROOTFLAGS@ rauc.slot=B"
+                    @BOOTCMD@ ${kernel_addr_r} - ${fdtcontroladdr}
+                fi
+            fi
+            echo "Astro: slot B failed to boot"
+        fi
+    fi
+done
+
+echo "Astro: no bootable slot (all attempts exhausted) - resetting"
+reset

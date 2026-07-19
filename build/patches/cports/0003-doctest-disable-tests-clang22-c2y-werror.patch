@@ -1,0 +1,24 @@
+main/doctest: don't build the bundled tests/examples.
+
+doctest is header-only; the package ships only headers + CMake config.
+The bundled examples compile with -Werror (set by doctest's own example
+CMakeLists), and clang 22 introduces -Wc2y-extensions which fires on
+doctest's use of __COUNTER__ — 20+ errors, build dies. Chimera's binary
+repos still carry a pre-clang-22 build, so this is latent upstream until
+their next doctest rebuild.
+
+Disabling DOCTEST_WITH_TESTS skips the examples (nothing packaged from
+them). Alternative considered: appending -Wno-c2y-extensions to CXXFLAGS;
+rejected since building test binaries for a header-only package is wasted
+work in the first place (and cross builds never run them).
+
+--- a/main/doctest/template.py
++++ b/main/doctest/template.py
+@@ -3,6 +3,7 @@ pkgver = "2.4.12"
+ pkgrel = 0
+ build_style = "cmake"
+ configure_args = [
++    "-DDOCTEST_WITH_TESTS=OFF",
+     "-DDOCTEST_USE_STD_HEADERS=ON",
+ ]
+ hostmakedepends = [

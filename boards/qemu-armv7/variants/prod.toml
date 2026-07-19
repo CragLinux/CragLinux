@@ -1,0 +1,21 @@
+[variant]
+name = "Production"
+description = "Minimal read-only production image (squashfs rootfs, AD-004)"
+
+[packages]
+# Release path: everything is built from the pinned cports (docs/03 §1).
+# armv7 has no Chimera binary repo anyway — source mode is the only option.
+mode = "source"
+# Minimal set on top of the fixed base (boards/common/packages.list):
+# network only (docs/02 §2: production images ship no SSH daemon).
+install = [
+    "dhcpcd",
+    "dhcpcd-dinit",    # dinit service file (auto-split subpackage)
+]
+
+[services]
+enable = ["dhcpcd"]
+
+[rootfs]
+# squashfs is also the default for a variant named "prod"; explicit here.
+type = "squashfs"

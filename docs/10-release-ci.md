@@ -60,12 +60,12 @@ Channel = **URL** a device's update source points at. One keyring trusts all cha
 
 Consequences of local-first: no pipeline logic lives in workflow YAML — workflows only checkout, `hm sync --locked`, restore caches, and invoke `astro ci <suite>`; a developer reproduces any CI failure with the same command; the future hosted runner choice (GitHub-hosted vs self-hosted) becomes a capacity decision, not an architecture one. Heavy caches (bldroot, distfiles, ccache, apk repo) are content-addressed volumes restorable from any object store.
 
-**Packages-mode per pipeline** ([03 §1](03-build-system.md) "Binary consumption for dev builds"): PR builds run `--packages-mode=binary` — only Astro-touched templates are built from source, everything else comes from Chimera's signed binary repo (keys pinned in `build/keys/chimera/`, trusted for dev artifacts only). Nightly and release pipelines run `--packages-mode=source` — full-source under Astro keys, immune to the binary-mode version-skew that the warn-only skew report tracks on PRs.
+**Packages-mode per pipeline** ([03 §1](03-build-system.md) "Binary consumption for dev builds"): PR builds run `--packages-mode=binary` — only Astro-touched templates are built from source, everything else comes from Chimera's signed binary repo (keys pinned in `build/keys/chimera/`, trusted for dev artifacts only). Exception: armv7 has no Chimera binary repo, so `qemu-armv7` builds in source mode on every pipeline, warmed by Astro's own published CI-built armv7 repo ([03 §1](03-build-system.md)). Nightly and release pipelines run `--packages-mode=source` — full-source under Astro keys, immune to the binary-mode version-skew that the warn-only skew report tracks on PRs.
 
 **Per-PR** (target: warm ≤ 60 min):
 1. Lint: shellcheck, ruff (build/lib), `zig fmt --check`, TOML schema self-tests, template lint for astro-cports.
 2. astrod unit tests (`zig build test`) + OpenAPI ↔ router conformance check.
-3. Full build of **one QEMU board per arch** (`qemu-x86_64` + `qemu-aarch64`, prod variant, warm caches) through image + bundle stages.
+3. Full build of **one QEMU board per arch** (`qemu-x86_64` + `qemu-aarch64` + `qemu-armv7`, prod variant, warm caches) through image + bundle stages — `qemu-armv7` in source mode per the exception above, kept inside the time budget by the published armv7 repo cache.
 4. **The AD-020 gate**, per board: boot smoke (reaches `boot-success`, astrod healthy) → install current-build bundle over previous-release image → verify slot flip + mark-good → install a poisoned test bundle (boot-success unreachable) → verify automatic rollback to the good slot ([04 §7](04-boards-images-boot.md) sequence).
 5. astrod API integration suite against the booted QEMU device (provisioning state machine driven via QMP-simulated conditions).
 6. `examples/external-tree-acme` build — keeps the external-tree contract and the SDK green.

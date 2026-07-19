@@ -206,7 +206,7 @@ check_and_clean_compiler_rt() {
     local version_file="${BUILD_DIR}/.compiler-rt-version"
     if ! check_version "$version_file" "$LLVM_VERSION"; then
         if [ -d "${BUILD_DIR}/compiler-rt-builtins" ]; then
-            log_warn "Cleaning compiler-rt due to LLVM version change..."
+            log_warn "Cleaning compiler-rt (builtins + crt) due to LLVM version change..."
             rm -rf "${BUILD_DIR}/compiler-rt-builtins"
             rm -rf "${SYSROOT}/lib/linux"
             rm -rf "${TOOLCHAIN_DIR}/lib/clang/${LLVM_VERSION%%.*}/lib/${TARGET_TRIPLE}"
@@ -248,6 +248,7 @@ check_and_clean_kernel_headers() {
             rm -rf "${SYSROOT}/include/linux"
             rm -rf "${SYSROOT}/include/asm"
             rm -rf "${SYSROOT}/include/asm-generic"
+            rm -rf "${BUILD_DIR}/kernel-headers-obj"
         fi
     fi
 }
@@ -489,13 +490,23 @@ install_kernel_headers() {
         return 0
     fi
 
-    cd "${SRC_DIR}/linux-${LINUX_VERSION}"
-
     # ARCH is parameterized per target (KERNEL_ARCH set in the arch case
     # block above: arm64 for aarch64, x86 for x86_64, arm for armv7hf,
     # riscv for riscv64). Header version tracks the board kernels'
     # LTS line (docs/03-build-system.md §3 fix list, items 2 and 4).
-    make ARCH="${KERNEL_ARCH}" INSTALL_HDR_PATH="${SYSROOT}" headers_install
+    #
+    # O= keeps all generated state out of the shared sources/linux-* tree:
+    # the kernel stage builds from the same extracted tree with its own O=
+    # and Kbuild refuses to run in a dirtied source tree (GAP fix #2 was a
+    # one-time 'make mrproper'; this is the root-cause fix — the tree stays
+    # pristine).
+    local hdr_obj="${BUILD_DIR}/kernel-headers-obj"
+    mkdir -p "${hdr_obj}"
+    make -C "${SRC_DIR}/linux-${LINUX_VERSION}" \
+        ARCH="${KERNEL_ARCH}" \
+        O="${hdr_obj}" \
+        INSTALL_HDR_PATH="${SYSROOT}" \
+        headers_install
 
     # Record the version we just installed
     write_version "${BUILD_DIR}/.kernel-headers-version" "$LINUX_VERSION"
@@ -531,8 +542,9 @@ build_compiler_rt() {
     mkdir -p "${build_dir}"
     cd "${build_dir}"
 
-    if [ -f "${SYSROOT}/lib/linux/libclang_rt.builtins-${COMPILER_RT_ARCH}.a" ]; then
-        log_info "compiler-rt builtins already built, skipping..."
+    if [ -f "${SYSROOT}/lib/linux/libclang_rt.builtins-${COMPILER_RT_ARCH}.a" ] && \
+       [ -f "${TOOLCHAIN_DIR}/lib/clang/${LLVM_VERSION%%.*}/lib/${TARGET_TRIPLE}/clang_rt.crtbegin.o" ]; then
+        log_info "compiler-rt builtins + crt already built, skipping..."
         return 0
     fi
 
@@ -568,6 +580,7 @@ build_compiler_rt() {
         -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
         -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
         -DCOMPILER_RT_OS_DIR="linux" \
+        -DCOMPILER_RT_BUILD_CRT=ON \
         -DCOMPILER_RT_INSTALL_PATH="${SYSROOT}/lib/clang/${LLVM_VERSION%%.*}" \
         "${SRC_DIR}/llvm-project/compiler-rt/lib/builtins"
 
@@ -582,6 +595,20 @@ build_compiler_rt() {
 
     cp lib/linux/libclang_rt.builtins-${COMPILER_RT_ARCH}.a "${sysroot_dir}/"
     cp lib/linux/libclang_rt.builtins-${COMPILER_RT_ARCH}.a "${toolchain_rt_dir}/libclang_rt.builtins.a"
+
+    # crt begin/end objects (COMPILER_RT_BUILD_CRT=ON above): required for
+    # -static linking — the clang driver with -rtlib=compiler-rt looks for
+    # clang_rt.crtbegin.o/clang_rt.crtend.o in the per-triple resource dir
+    # (GAP §3.6: '-static' previously failed with 'cannot open crtbeginT.o').
+    local crt
+    for crt in crtbegin crtend; do
+        if [ ! -f "lib/linux/clang_rt.${crt}-${COMPILER_RT_ARCH}.o" ]; then
+            log_error "compiler-rt did not produce clang_rt.${crt}-${COMPILER_RT_ARCH}.o (COMPILER_RT_BUILD_CRT)"
+            exit 1
+        fi
+        cp "lib/linux/clang_rt.${crt}-${COMPILER_RT_ARCH}.o" "${sysroot_dir}/"
+        cp "lib/linux/clang_rt.${crt}-${COMPILER_RT_ARCH}.o" "${toolchain_rt_dir}/clang_rt.${crt}.o"
+    done
 
     # Record the version we just built
     write_version "${BUILD_DIR}/.compiler-rt-version" "$LLVM_VERSION"
@@ -685,6 +712,7 @@ exec "\${TOOLCHAIN_DIR}/bin/clang" \\
     ${ARCH_FLAGS} \\
     --sysroot="\${SYSROOT}" \\
     -rtlib=compiler-rt \\
+    -fuse-ld=lld \\
     "\$@"
 EOF
 
@@ -702,6 +730,7 @@ exec "\${TOOLCHAIN_DIR}/bin/clang++" \\
     -rtlib=compiler-rt \\
     -stdlib=libc++ \\
     -unwindlib=libunwind \\
+    -fuse-ld=lld \\
     "\$@"
 EOF
 
@@ -718,6 +747,12 @@ EOF
     ln -sf "${TOOLCHAIN_DIR}/bin/llvm-objdump" "${BIN_DIR}/${TARGET_TRIPLE}-objdump"
     ln -sf "${TOOLCHAIN_DIR}/bin/llvm-strip" "${BIN_DIR}/${TARGET_TRIPLE}-strip"
     ln -sf "${TOOLCHAIN_DIR}/bin/ld.lld" "${BIN_DIR}/${TARGET_TRIPLE}-ld"
+    # readelf: used by U-Boot's checkarmreloc target (M1 wave 2 bootloader
+    # stage) and generally expected next to the other binutils names.
+    # The LLVM install ships no llvm-readelf binary — it is llvm-readobj
+    # switching on argv[0] (a *readelf* name selects GNU output style).
+    ln -sf llvm-readobj "${TOOLCHAIN_DIR}/bin/llvm-readelf"
+    ln -sf "${TOOLCHAIN_DIR}/bin/llvm-readelf" "${BIN_DIR}/${TARGET_TRIPLE}-readelf"
 
     log_info "Wrapper scripts created in ${BIN_DIR}"
 }

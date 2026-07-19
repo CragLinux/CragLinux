@@ -1,0 +1,7 @@
+# Astro mutable-state layer (docs/02 §4, AD-005) — required on every board.
+#
+# /data is an ext4 partition mounted by the data-mount early service;
+# /etc is an overlayfs (upper/work in /data/overlay). Both must be built
+# in (=y): they are mounted pre-userspace-modules, no initramfs (AD-006).
+CONFIG_EXT4_FS=y
+CONFIG_OVERLAY_FS=y

@@ -1,0 +1,23 @@
+# Astro SHADOW of dinit-chimera's early-fs-local.target (/etc/dinit.d
+# precedes /usr/lib/dinit.d in dinit's service dirs, so this file wins).
+#
+# Identical to the packaged target (dinit-chimera at the current cports
+# pin) plus ONE line: waits-for: data-mount. That inserts the Astro
+# mutable-state mounts (AD-005: /data, /etc overlay, seed/log binds —
+# see data-mount.sh) into the early graph before early-rng and
+# early-machine-id, which order themselves after early-fs-local.target.
+# waits-for (not depends-on): a missing/failed data partition degrades
+# the boot instead of stopping it (direct-boot dev disks have no /data).
+#
+# NOTE: re-diff against dinit-chimera's early-fs-local.target when the
+# cports pin moves.
+
+# all non-network filesystems are mounted
+
+type = internal
+depends-on: early-fs-pre.target
+waits-for: early-fs-btrfs
+waits-for: early-fs-zfs
+waits-for: early-root-rw.target
+waits-for: early-fs-fstab.target
+waits-for: data-mount

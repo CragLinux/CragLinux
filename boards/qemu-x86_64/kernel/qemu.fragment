@@ -1,0 +1,35 @@
+# QEMU x86_64 (q35) - VirtIO, EFI and virtual hardware support
+#
+# x86_64 defconfig has SATA/e1000 style hardware; the q35 board here uses
+# virtio-blk/virtio-net, which must be =y for the no-initramfs boot
+# (AD-006). EFI bits per docs/02 §6 (rauc.fragment note: efivarfs is a
+# per-board x86_64 concern).
+
+# VirtIO core
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_PCI=y
+CONFIG_VIRTIO_MMIO=y
+
+# VirtIO block device (root disk — must be =y, no initramfs)
+CONFIG_VIRTIO_BLK=y
+
+# VirtIO networking
+CONFIG_VIRTIO_NET=y
+
+# VirtIO console + RNG
+CONFIG_VIRTIO_CONSOLE=y
+CONFIG_HW_RANDOM_VIRTIO=y
+
+# EFI (OVMF boot; GRUB loads the kernel via the EFI stub)
+CONFIG_EFI=y
+CONFIG_EFI_STUB=y
+CONFIG_EFIVAR_FS=y
+
+# Serial console (defconfig has 8250; keep explicit for clarity)
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+
+# tmpfs + devtmpfs
+CONFIG_TMPFS=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y

@@ -148,6 +148,10 @@ configure_kernel() {
     local lto_setting="$5"
     local config_fragments_json="$6"
 
+    # HOSTLD/HOSTAR: LLVM=1 defaults them to bare "ld.lld"/"llvm-ar",
+    # which are not on PATH in the container — host tool builds (objtool
+    # on x86_64) fail with exit 127 otherwise. Same absolute-path
+    # treatment as the modules_install STRIP fix below.
     local make_env=(
         make -j${JOBS}
         O="${build_dir}"
@@ -156,6 +160,8 @@ configure_kernel() {
         LLVM_IAS=1
         HOSTCC="${TOOLCHAIN_DIR}/bin/clang"
         HOSTCXX="${TOOLCHAIN_DIR}/bin/clang++"
+        HOSTLD="${TOOLCHAIN_DIR}/bin/ld.lld"
+        HOSTAR="${TOOLCHAIN_DIR}/bin/llvm-ar"
         CC="${TOOLCHAIN_DIR}/bin/clang"
         LD="${TOOLCHAIN_DIR}/bin/ld.lld"
         AR="${TOOLCHAIN_DIR}/bin/llvm-ar"
@@ -332,6 +338,8 @@ build_kernel() {
         LLVM_IAS=1 \
         HOSTCC="${TOOLCHAIN_DIR}/bin/clang" \
         HOSTCXX="${TOOLCHAIN_DIR}/bin/clang++" \
+        HOSTLD="${TOOLCHAIN_DIR}/bin/ld.lld" \
+        HOSTAR="${TOOLCHAIN_DIR}/bin/llvm-ar" \
         CC="${TOOLCHAIN_DIR}/bin/clang" \
         LD="${TOOLCHAIN_DIR}/bin/ld.lld" \
         AR="${TOOLCHAIN_DIR}/bin/llvm-ar" \
@@ -345,9 +353,13 @@ build_kernel() {
     # Install modules to staging area
     local modules_dir="${build_dir}/modules_install"
     rm -rf "$modules_dir"
+    # STRIP must be the toolchain's llvm-strip by absolute path: LLVM=1 alone
+    # makes Makefile.modinst call bare "llvm-strip", which is not on PATH in
+    # the container (INSTALL_MOD_STRIP path, exit 127).
     make O="${build_dir}" \
         ARCH="${KARCH}" \
         LLVM=1 \
+        STRIP="${TOOLCHAIN_DIR}/bin/llvm-strip" \
         INSTALL_MOD_PATH="$modules_dir" \
         INSTALL_MOD_STRIP=1 \
         modules_install

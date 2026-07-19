@@ -1,0 +1,23 @@
+[variant]
+name = "Production"
+description = "Minimal read-only production image (squashfs rootfs, AD-004)"
+
+[packages]
+# DEVIATION (recorded in MIGRATION-NOTES §12): release policy is source
+# mode, but a cold x86_64 source build re-runs the multi-hour llvm
+# template natively before anything boots. Until CI seeds a persistent
+# x86_64 package cache, this dev-hardware board consumes Chimera's signed
+# x86_64 binary repo (keys pinned at build/keys/chimera/). Flip to
+# "source" (or pass --packages-mode=source) for release-path validation.
+mode = "binary"
+install = [
+    "dhcpcd",
+    "dhcpcd-dinit",    # dinit service file (auto-split subpackage)
+]
+
+[services]
+enable = ["dhcpcd"]
+
+[rootfs]
+# squashfs is also the default for a variant named "prod"; explicit here.
+type = "squashfs"

@@ -1,0 +1,26 @@
+# Astro Linux - A/B update + read-only rootfs support (docs/02 §6 rauc.fragment)
+# Required shared fragment: squashfs-as-root boots without an initramfs
+# (AD-006), so everything needed to mount the prod rootfs must be built in
+# (=y, never =m).
+
+# Read-only squashfs rootfs, zstd-compressed (AD-004; mksquashfs -comp zstd)
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_ZSTD=y
+CONFIG_SQUASHFS_XATTR=y
+
+# Loop devices (RAUC bundle mounting, local image inspection)
+CONFIG_BLK_DEV_LOOP=y
+
+# dm-verity for verified slots (AD-018 groundwork)
+CONFIG_MD=y
+CONFIG_BLK_DEV_DM=y
+CONFIG_DM_VERITY=y
+
+# NBD for HTTP streaming installs (RAUC casync/streaming)
+CONFIG_BLK_DEV_NBD=y
+
+# RAUC bundle/manifest hashing
+CONFIG_CRYPTO_SHA256=y
+
+# Note: CONFIG_EFI_VARS/efivarfs is x86_64-only and lands with the
+# x86_64-efi board fragment, not here.

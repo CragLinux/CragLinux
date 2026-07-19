@@ -1,0 +1,31 @@
+[variant]
+name = "Development"
+description = "QEMU x86_64 development image (rw ext4 rootfs)"
+
+[packages]
+# Dev builds consume Chimera's signed x86_64 binaries for unmodified base
+# packages (docs/03 §1 "Binary consumption for dev builds").
+mode = "binary"
+install = [
+    # openssh comes from the kerberos-free astro-cports shadow template
+    # (astro-cports/main/openssh) — upstream cports openssh needs heimdal,
+    # which does not cross-build (GAP §3.2).
+    "openssh",
+    "openssh-dinit",
+    "opendoas",
+    "nano",
+    "less",
+    "dhcpcd",
+    "dhcpcd-dinit",    # dinit service file (auto-split subpackage)
+]
+
+[services]
+enable = ["dhcpcd", "sshd"]
+
+[users]
+create = [
+    { name = "dev", uid = 1000, groups = ["wheel"], shell = "/bin/sh" },
+]
+
+[kernel]
+cmdline_append = "loglevel=7"

@@ -1,0 +1,45 @@
+# Astro Linux - dinit-chimera early-boot service requirements
+#
+# Diagnosis of the two known boot failures on the M0 dev image
+# (GAP-REPORT §4 item 9, build/state/logs/p1-09-final-boot.log):
+#
+# early-binfmt: /usr/lib/dinit.d/early/scripts/binfmt.sh mounts
+#   /proc/sys/fs/binfmt_misc and runs the binfmt helper over binfmt.d.
+#   The arm64 defconfig leaves CONFIG_BINFMT_MISC unset, so the mount
+#   fails and the helper exits 1.
+CONFIG_BINFMT_MISC=y
+
+# early-sysctl: the sysctl helper applies /usr/lib/sysctl.d/*.conf.
+#   10-chimera-user.conf sets kernel.yama.ptrace_scope=1, but the arm64
+#   defconfig does not enable the Yama LSM, so the key does not exist and
+#   the helper exits 1. (All other shipped keys — kexec_load_disabled,
+#   unprivileged_bpf_disabled, perf_event_paranoid, dmesg_restrict, ... —
+#   already exist with defconfig.) The default CONFIG_LSM string already
+#   contains "yama", so enabling the option activates it.
+#   M1 wave 2 additions from the qemu-x86_64/qemu-armv7 boot bring-up:
+#   - CONFIG_SECURITY=y: multi_v7_defconfig ships without the LSM
+#     framework at all, which silently drops SECURITY_YAMA at
+#     olddefconfig (same ptrace_scope failure as arm64 had).
+#   - CONFIG_BPF_SYSCALL=y: kernel.unprivileged_bpf_disabled=1 needs the
+#     bpf() syscall to exist; x86_64 defconfig and multi_v7_defconfig
+#     leave it off (arm64 defconfig has it).
+CONFIG_SECURITY=y
+CONFIG_SECURITY_YAMA=y
+CONFIG_BPF_SYSCALL=y
+
+# early-cgroups: the cgroups.sh script mounts cgroup2 and then does
+#   `read -r CG_ACTIVE < /sys/fs/cgroup/cgroup.controllers` under `set -e`.
+#   With CONFIG_CGROUPS=y but no controllers compiled in (multi_v7_defconfig),
+#   cgroup.controllers is EMPTY, read returns 1, the service fails, and the
+#   whole early-prepare.target chain collapses (qemu-armv7 bring-up,
+#   build/state/logs/w2-boot-qemu-armv7-prod.log). Enable the controller set
+#   that arm64/x86_64 defconfigs already carry so all boards behave the same.
+CONFIG_CGROUPS=y
+CONFIG_MEMCG=y
+CONFIG_BLK_CGROUP=y
+CONFIG_CGROUP_SCHED=y
+CONFIG_CGROUP_PIDS=y
+CONFIG_CGROUP_FREEZER=y
+CONFIG_CGROUP_DEVICE=y
+CONFIG_CGROUP_CPUACCT=y
+CONFIG_CGROUP_BPF=y

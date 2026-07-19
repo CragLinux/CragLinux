@@ -1,0 +1,38 @@
+# QEMU ARMv7 (-M virt, cortex-a15) - VirtIO and virtual hardware support
+#
+# multi_v7_defconfig covers the platform basics (PL011, PCI, RTC) but
+# builds most peripherals as modules; everything the no-initramfs boot
+# needs is forced =y here (AD-006).
+
+# VirtIO core (QEMU arm virt exposes both MMIO and PCI transports)
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_PCI=y
+CONFIG_VIRTIO_MMIO=y
+
+# VirtIO block device (root disk — must be =y, no initramfs)
+CONFIG_VIRTIO_BLK=y
+
+# VirtIO networking
+CONFIG_VIRTIO_NET=y
+
+# VirtIO console
+CONFIG_VIRTIO_CONSOLE=y
+
+# VirtIO RNG
+CONFIG_HW_RANDOM_VIRTIO=y
+
+# PCI host for -M virt
+CONFIG_PCI=y
+CONFIG_PCI_HOST_GENERIC=y
+
+# Serial console
+CONFIG_SERIAL_AMBA_PL011=y
+CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
+
+# RTC
+CONFIG_RTC_DRV_PL031=y
+
+# tmpfs + devtmpfs
+CONFIG_TMPFS=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y

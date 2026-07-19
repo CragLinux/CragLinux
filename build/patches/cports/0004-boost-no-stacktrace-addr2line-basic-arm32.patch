@@ -1,0 +1,30 @@
+main/boost: don't package the stacktrace addr2line lib on 32-bit arm.
+
+On armv7 (arm_32 b2 variants), Boost.Stacktrace's build config disables
+the addr2line backend, so libboost_stacktrace_addr2line*.so is never
+produced and the boost-stacktrace_addr2line-libs subpackage fails with
+take(): 'usr/lib/libboost_stacktrace_addr2line*.so.*' did not match
+anything. (The b2 configure summary also prints "boost.stacktrace.basic
+: no" for some variants, but libboost_stacktrace_basic.so.1.91.0 is in
+fact built — only addr2line is missing from destdir.) Chimera has no
+32-bit arm binary repo, so this only shows up when self-building the
+armv7 repo (observed on the Astro armv7 port, boost 1.91.0, clang 22.1.7
+cross from x86_64).
+
+Drop addr2line from _libs on armv7/armhf so neither the subpackage nor
+its provides are emitted there.
+
+--- a/main/boost/template.py
++++ b/main/boost/template.py
+@@ -60,6 +60,11 @@
+     "wserialization",
+ ]
+
++# b2's config checks disable this stacktrace backend on 32-bit arm
++# (arm_32: "boost.stacktrace.addr2line : no"); the lib is never built
++if self.profile().arch in ("armv7", "armhf"):
++    _libs.remove("stacktrace_addr2line")
++
+ match self.profile().arch:
+     case "ppc64le" | "ppc64" | "ppc":
+         _arch, _abi = "power", "sysv"

@@ -1,0 +1,77 @@
+# Astro shadow of cports main/openssh (GAP §3.2): identical to the pinned
+# template except GSSAPI/Kerberos support is removed (heimdal does not
+# cross-build — its asn1_compile generator is built target-arch and cannot
+# run in the bldroot). pkgrel is bumped so the kerberos-free build always
+# supersedes any same-version openssh (stale index entries, Chimera binary
+# repo) and so cbuild does not skip the build as already-present.
+pkgname = "openssh"
+pkgver = "10.3_p1"
+pkgrel = 2
+build_style = "gnu_configure"
+configure_args = [
+    "--datadir=/usr/share/openssh",
+    "--sysconfdir=/etc/ssh",
+    "--disable-wtmp",
+    "--disable-utmp",
+    "--without-selinux",
+    "--without-rpath",
+    "--without-zlib-version-check",
+    "--with-mantype=doc",
+    "--with-pam",
+    "--with-libedit",
+    "--with-pid-dir=/run",
+    "--with-privsep-user=nobody",
+    "--with-privsep-path=/var/chroot/ssh",
+    "--with-xauth=/usr/bin/xauth",
+    "--with-security-key-builtin",
+    "--with-ssl-engine",
+    "--disable-strip",
+    "ac_cv_header_sys_cdefs_h=false",
+]
+make_check_target = "tests"
+make_check_args = ["-j1"]
+hostmakedepends = [
+    "automake",
+    "pkgconf",
+]
+makedepends = [
+    "dinit-chimera",
+    "ldns-devel",
+    "libedit-devel",
+    "libfido2-devel",
+    "linux-pam-devel",
+    "openssl3-devel",
+    "zlib-ng-compat-devel",
+]
+pkgdesc = "OpenSSH free Secure Shell (SSH) client and server implementation"
+license = "SSH-OpenSSH"
+url = "https://www.openssh.com"
+source = f"https://ftp.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-{pkgver.replace('_', '')}.tar.gz"
+sha256 = "56682a36bb92dcf4b4f016fd8ec8e74059b79a8de25c15d670d731e7d18e45f4"
+file_modes = {"usr/lib/ssh-keysign": ("root", "root", 0o4755)}
+# CFI: does not work; maybe make testsuite work first
+hardening = ["vis", "!cfi"]
+# portable openssh is not very portable
+options = ["etcfiles", "!check"]
+
+
+def init_configure(self):
+    self.configure_args += [
+        "--with-ldns=" + str(self.profile().sysroot / "usr")
+    ]
+
+
+def post_install(self):
+    self.install_license("LICENCE")
+
+    self.install_file(
+        self.files_path / "sshd.pam", "usr/lib/pam.d", name="sshd"
+    )
+
+    self.install_bin("contrib/ssh-copy-id")
+    self.install_man("contrib/ssh-copy-id.1")
+
+    self.install_tmpfiles(self.files_path / "tmpfiles.conf")
+
+    self.install_service(self.files_path / "ssh-keygen")
+    self.install_service(self.files_path / "sshd")

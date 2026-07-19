@@ -32,6 +32,16 @@ LABEL description="Build environment for Astro Linux cross-compilation toolchain
 #                      population without loop mounts), dosfstools, e2fsprogs
 # Test stage:          qemu-system-x86 + qemu-system-aarch64,
 #                      edk2-ovmf (x86_64 EFI firmware) + edk2-aarch64 (AAVMF)
+#                      (qemu-system-aarch64 also runs 32-bit ARM guests:
+#                      -M virt -cpu cortex-a15 — no qemu-system-arm package)
+# Image stage (M1 w2): qemu-img (raw -> qcow2 conversion, docs/04 §6)
+# U-Boot build (w2):   swig + python3-devel + python3-setuptools (pylibfdt),
+#                      gnutls-devel + libuuid-devel (tools: mkeficapsule),
+#                      bzip2 (U-Boot release tarballs are .tar.bz2),
+#                      gcc-aarch64-linux-gnu + gcc-arm-linux-gnu (+binutils):
+#                      U-Boot's ARM self-relocation hangs when built with
+#                      the SDK clang/lld (boards set u_boot_compiler="gcc";
+#                      see MIGRATION-NOTES §12)
 # Utilities:           file, findutils, diffutils, which, rsync, gettext (envsubst)
 RUN dnf install -y --setopt=install_weak_deps=False \
         cmake \
@@ -77,8 +87,19 @@ RUN dnf install -y --setopt=install_weak_deps=False \
         e2fsprogs \
         qemu-system-x86 \
         qemu-system-aarch64 \
+        qemu-img \
         edk2-ovmf \
         edk2-aarch64 \
+        swig \
+        python3-devel \
+        python3-setuptools \
+        gnutls-devel \
+        libuuid-devel \
+        bzip2 \
+        gcc-aarch64-linux-gnu \
+        gcc-arm-linux-gnu \
+        binutils-aarch64-linux-gnu \
+        binutils-arm-linux-gnu \
         file \
         findutils \
         diffutils \

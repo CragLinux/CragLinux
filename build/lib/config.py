@@ -11,13 +11,26 @@ Usage:
 """
 
 import json
+import re
 import sys
 import tomllib
 from pathlib import Path
 
 # Add parent to path so we can import schema
 sys.path.insert(0, str(Path(__file__).parent))
-from schema import BOARD_SCHEMA, BOARD_CONDITIONAL_RULES, VARIANT_SCHEMA, USER_ENTRY_SCHEMA
+from schema import (
+    BOARD_SCHEMA,
+    BOARD_CONDITIONAL_RULES,
+    DEPRECATED_DISK_SCHEMA,
+    RAUC_BOOTLOADER_FOR_TYPE,
+    VARIANT_SCHEMA,
+    USER_ENTRY_SCHEMA,
+)
+
+# Partition sizes: integer + K/M/G suffix (docs/04 §2)
+SIZE_RE = re.compile(r"^[1-9][0-9]*[KMG]$")
+# root= anywhere in a kernel command line (start or after whitespace)
+ROOT_ARG_RE = re.compile(r"(^|\s)root=")
 
 
 class ConfigError(Exception):
@@ -41,6 +54,15 @@ def validate_field(section_name, field_name, value, field_schema):
             f"  [{section_name}].{field_name}: '{value}' not in "
             f"allowed values {field_schema['choices']}"
         )
+
+    # Per-item choices for list fields (e.g. [image].formats)
+    if "item_choices" in field_schema and isinstance(value, list):
+        for item in value:
+            if item not in field_schema["item_choices"]:
+                errors.append(
+                    f"  [{section_name}].{field_name}: '{item}' not in "
+                    f"allowed values {field_schema['item_choices']}"
+                )
 
     return errors
 
@@ -110,6 +132,34 @@ def validate_config(config, schema, config_path):
         for field in section_data:
             if field not in known_fields:
                 errors.append(f"  [{section_name}]: unknown field '{field}'")
+
+    # root= must never appear in a configured kernel command line: the image
+    # stage owns root=PARTLABEL=... per A/B slot (docs/03 §6). run-qemu.sh
+    # injects root= itself for the direct-boot developer flow.
+    if schema is BOARD_SCHEMA:
+        cmdline = config.get("kernel", {}).get("cmdline", "")
+        if isinstance(cmdline, str) and ROOT_ARG_RE.search(cmdline):
+            errors.append(
+                "  [kernel].cmdline: must not contain 'root=' — the image "
+                "stage sets root= per A/B slot (docs/03 §6); direct QEMU "
+                "boots get root= from run-qemu.sh"
+            )
+    else:
+        cmdline_append = config.get("kernel", {}).get("cmdline_append", "")
+        if isinstance(cmdline_append, str) and ROOT_ARG_RE.search(cmdline_append):
+            errors.append(
+                "  [kernel].cmdline_append: must not contain 'root=' — the "
+                "image stage sets root= per A/B slot (docs/03 §6)"
+            )
+
+    # Partition sizes must be <int><K|M|G>
+    if schema is BOARD_SCHEMA:
+        for field, value in config.get("partitions", {}).items():
+            if field.endswith("_size") and isinstance(value, str) and not SIZE_RE.match(value):
+                errors.append(
+                    f"  [partitions].{field}: '{value}' is not a valid size "
+                    "(expected e.g. '64M', '1G')"
+                )
 
     # Conditional validation (e.g., git_repo required when source="git")
     if schema is BOARD_SCHEMA:
@@ -185,6 +235,94 @@ def flatten_to_env(config, prefix=""):
     return "\n".join(lines)
 
 
+def migrate_deprecated_disk(config, config_path):
+    """DEPRECATED [disk] → [partitions] mapping (one release of grace).
+
+    boot_size → partitions.boot_size, root_size → partitions.rootfs_size;
+    boot_fs/root_fs are dropped (the AD-007 layout fixes the filesystems).
+    Emits a loud warning on stderr. Remove after M2.
+    """
+    if "disk" not in config:
+        return config
+    if "partitions" in config:
+        raise ConfigError(
+            f"Configuration errors in {config_path}:\n"
+            "  [disk] and [partitions] are both present — [disk] is "
+            "deprecated; remove it and keep [partitions] (docs/03 §6)"
+        )
+
+    disk = config["disk"]
+    errors = []
+    if not isinstance(disk, dict):
+        errors.append(f"  [disk]: expected table, got {type(disk).__name__}")
+    else:
+        for field_name, field_schema in DEPRECATED_DISK_SCHEMA.items():
+            if field_name in disk:
+                errors.extend(validate_field("disk", field_name, disk[field_name], field_schema))
+            elif field_schema["required"]:
+                errors.append(f"  [disk]: missing required field '{field_name}'")
+        for field in set(disk) - set(DEPRECATED_DISK_SCHEMA):
+            errors.append(f"  [disk]: unknown field '{field}'")
+    if errors:
+        raise ConfigError(f"Configuration errors in {config_path}:\n" + "\n".join(errors))
+
+    print(
+        f"WARNING: {config_path}: [disk] is DEPRECATED and will be removed "
+        "after M2.\n"
+        "         Replace it with the AD-007 [partitions] section "
+        "(docs/03 §6, docs/04 §2).\n"
+        f"         Mapping applied: boot_size={disk['boot_size']} -> "
+        f"partitions.boot_size, root_size={disk['root_size']} -> "
+        "partitions.rootfs_size;\n"
+        "         boot_fs/root_fs are ignored (AD-007 fixes the "
+        "filesystems per partition).",
+        file=sys.stderr,
+    )
+    config = dict(config)
+    del config["disk"]
+    config["partitions"] = {
+        "boot_size": disk["boot_size"],
+        "rootfs_size": disk["root_size"],
+    }
+    return config
+
+
+def derive_board_defaults(config, raw_config, config_path):
+    """Post-defaults derivations + cross-section validation for boards.
+
+    - [rauc].compatible defaults to "astro-<board-dir-name>"
+    - [rauc].bootloader defaults from [bootloader].type and, when explicit,
+      must be consistent with it (docs/03 §6)
+    - [image].formats gains "qcow2" for boards that declare [qemu]
+    """
+    board_id = Path(config_path).resolve().parent.name
+
+    rauc = config.setdefault("rauc", {})
+    if not rauc.get("compatible"):
+        rauc["compatible"] = f"astro-{board_id}"
+
+    bl_type = config.get("bootloader", {}).get("type", "")
+    expected = RAUC_BOOTLOADER_FOR_TYPE.get(bl_type)
+    if not rauc.get("bootloader"):
+        rauc["bootloader"] = expected or "uboot"
+    elif expected and rauc["bootloader"] != expected:
+        raise ConfigError(
+            f"Configuration errors in {config_path}:\n"
+            f"  [rauc].bootloader: '{rauc['bootloader']}' is inconsistent "
+            f"with [bootloader].type = \"{bl_type}\" (expected '{expected}')"
+        )
+
+    # qcow2 auto-added for QEMU-capable boards ([qemu] present in the TOML;
+    # apply_defaults materializes [qemu] for every board, so check the raw
+    # config).
+    if "qemu" in raw_config:
+        formats = config.setdefault("image", {}).setdefault("formats", ["img"])
+        if "qcow2" not in formats:
+            formats.append("qcow2")
+
+    return config
+
+
 def load_config(config_path, config_type):
     """Load, validate, and return a config with defaults applied."""
     path = Path(config_path)
@@ -192,11 +330,22 @@ def load_config(config_path, config_type):
         raise ConfigError(f"Config file not found: {config_path}")
 
     with open(path, "rb") as f:
-        config = tomllib.load(f)
+        raw_config = tomllib.load(f)
 
-    schema = BOARD_SCHEMA if config_type == "board" else VARIANT_SCHEMA
-    validate_config(config, schema, config_path)
-    return apply_defaults(config, schema)
+    if config_type == "board":
+        config = migrate_deprecated_disk(raw_config, config_path)
+        validate_config(config, BOARD_SCHEMA, config_path)
+        config = apply_defaults(config, BOARD_SCHEMA)
+        config = derive_board_defaults(config, raw_config, config_path)
+    else:
+        validate_config(raw_config, VARIANT_SCHEMA, config_path)
+        config = apply_defaults(raw_config, VARIANT_SCHEMA)
+        # [rootfs].type defaults by variant id: prod → squashfs (AD-004
+        # read-only root), everything else → ext4 (dev flow).
+        if not config.setdefault("rootfs", {}).get("type"):
+            variant_id = path.stem
+            config["rootfs"]["type"] = "squashfs" if variant_id == "prod" else "ext4"
+    return config
 
 
 def main():

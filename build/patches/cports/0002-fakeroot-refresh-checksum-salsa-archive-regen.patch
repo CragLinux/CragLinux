@@ -1,0 +1,25 @@
+Refresh main/fakeroot distfile checksum.
+
+salsa.debian.org regenerated the auto-generated tag archive for
+upstream/1.37.1.2 (GitLab archives are not byte-stable across archive-code
+upgrades), so the pinned sha256 no longer matches what the server serves.
+
+Content verified before accepting the new hash (2026-07-17): the tarball
+tree is byte-identical to a fresh `git clone --branch upstream/1.37.1.2`
+of the same salsa repo, modulo .gitattributes/.gitignore which are
+export-ignored from archives. Compression metadata is the only change.
+
+Upstream cports master still carries the stale hash and will hit the same
+failure on any cold fetch — upstreamable as-is (see UPSTREAMING.md).
+
+--- a/main/fakeroot/template.py
++++ b/main/fakeroot/template.py
+@@ -12,7 +12,7 @@ pkgdesc = "Tool for simulating superuser privileges"
+ license = "GPL-3.0-or-later"
+ url = "https://salsa.debian.org/clint/fakeroot"
+ source = f"{url}/-/archive/upstream/{pkgver}/fakeroot-upstream-{pkgver}.tar.gz"
+-sha256 = "2ffa2384d4b8f8d59ee54d94fa12d3ecdfe04d51dfa9c4e4668ba8b3c6e3424e"
++sha256 = "b418b14f55c2deb6bee699c6c539f4fbfd0d6affb2fac6374e8de748b13a0282"
+ options = ["bootstrap"]
+
+ if self.stage > 0:

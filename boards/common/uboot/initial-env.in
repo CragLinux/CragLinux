@@ -1,0 +1,7 @@
+# Astro initial U-Boot environment (docs/04 §4, AD-009), compiled with
+# mkenvimage into uboot.env on the bootenv partition by the image stage.
+# The RAUC uboot backend and rauc-mark-good maintain these at runtime.
+# Format: key=value per line, '#' comments (mkenvimage input).
+BOOT_ORDER=A B
+BOOT_A_LEFT=3
+BOOT_B_LEFT=3

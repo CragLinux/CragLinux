@@ -36,6 +36,20 @@ require_command() {
     fi
 }
 
+# Map a board arch ([board].arch in board.toml) to the cbuild/apk arch used
+# for cports profiles (cports/etc/build_profiles/<arch>.ini), the package
+# repo layout (cports/packages/main/<arch>/) and `apk --arch`.
+# armv7hf boards build with cbuild's "armv7" profile
+# (armv7-chimera-linux-musleabihf); every other board arch matches 1:1.
+# Kernel/toolchain build paths keep using the board arch
+# (build/state/<board-arch>/...).
+cbuild_arch_for() {
+    case "$1" in
+        armv7hf) echo "armv7" ;;
+        *)       echo "$1" ;;
+    esac
+}
+
 # Resolve the project root from any script location
 # (the repo root is identified by sdk/build-toolchain.sh)
 resolve_project_root() {

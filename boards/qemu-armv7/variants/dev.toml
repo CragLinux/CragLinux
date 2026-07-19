@@ -1,0 +1,32 @@
+[variant]
+name = "Development"
+description = "QEMU ARMv7 development image (rw ext4 rootfs)"
+
+[packages]
+# armv7 has NO Chimera binary repo — source mode even for dev builds
+# (docs/03 §1 binary consumption is aarch64/x86_64-only). The local
+# armv7 repo seeded by the first prod build makes this cheap afterwards.
+mode = "source"
+install = [
+    # openssh comes from the kerberos-free astro-cports shadow template
+    # (astro-cports/main/openssh) — upstream cports openssh needs heimdal,
+    # which does not cross-build (GAP §3.2).
+    "openssh",
+    "openssh-dinit",
+    "opendoas",
+    "nano",
+    "less",
+    "dhcpcd",
+    "dhcpcd-dinit",    # dinit service file (auto-split subpackage)
+]
+
+[services]
+enable = ["dhcpcd", "sshd"]
+
+[users]
+create = [
+    { name = "dev", uid = 1000, groups = ["wheel"], shell = "/bin/sh" },
+]
+
+[kernel]
+cmdline_append = "loglevel=7"

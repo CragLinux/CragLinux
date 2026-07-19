@@ -1,0 +1,12 @@
+# Astro: mount /data (PARTLABEL=data) + the mutable-state layer on the
+# read-only rootfs (docs/02 §4, AD-005). Equivalent of the docs/02 §5.1
+# "data.mount" graph node, expressed in dinit-chimera early conventions.
+# Pulled into the early graph by the early-fs-local.target shadow next to
+# this file (waits-for: data-mount), which orders it before early-rng and
+# early-machine-id.
+
+type = scripted
+command = /usr/lib/astro/data-mount.sh
+# fs-pre pulls in early-devices.target (blkid PARTLABEL resolution needs
+# populated /dev) and the pseudo-fs/tmpfs base.
+depends-on: early-fs-pre.target

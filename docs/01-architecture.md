@@ -41,7 +41,7 @@ The contract between them is the **image**: the build side produces immutable, s
 ├──────────────────────────────────────────────────────────────────┤
 │   Linux kernel (LTS, Clang-built, board fragments)               │
 ├──────────────────────────────────────────────────────────────────┤
-│   Bootloader: GRUB-on-EFI (x86_64) / U-Boot (aarch64)            │
+│   Bootloader: GRUB-on-EFI (x86_64) / U-Boot (aarch64, armv7)     │
 │   with RAUC slot selection (BOOT_ORDER / grubenv)                │
 ├──────────────────────────────────────────────────────────────────┤
 │   Hardware / QEMU                                                │
@@ -138,7 +138,7 @@ Status: **Accepted** = confirmed by project owner · **Recommended** = design's 
 | AD-006 | Initramfs | None in v1; direct squashfs root; tiny custom initramfs reserved for verity | Recommended | [04](04-boards-images-boot.md) |
 | AD-007 | Partition layout | GPT, PARTLABEL-addressed: esp/bootenv/boot.A/rootfs.A/boot.B/rootfs.B/data | Recommended | [04](04-boards-images-boot.md) |
 | AD-008 | x86_64 boot | GRUB-on-EFI + grub-editenv; dual-ESP+UKI documented as secure-boot end-state | Recommended | [04](04-boards-images-boot.md) |
-| AD-009 | aarch64 boot | U-Boot + redundant env + BOOT_ORDER script; QEMU uses real bootloaders | Recommended | [04](04-boards-images-boot.md) |
+| AD-009 | ARM boot (aarch64 + armv7) | U-Boot + redundant env + BOOT_ORDER script; QEMU uses real bootloaders | Recommended | [04](04-boards-images-boot.md) |
 | AD-010 | Bundle format | RAUC verity bundles + adaptive updates; plain rejected, crypt deferred | Recommended | [05](05-updates.md) |
 | AD-011 | Boot confirmation | dinit-supervised rauc + `rauc-mark-good` gated on boot-success milestone; opt-in app participation | Recommended | [05](05-updates.md) |
 | AD-012 | astrod language | **Zig** (static musl binaries, C interop for D-Bus, pinned compiler) | Accepted | [06](06-config-api.md) |
