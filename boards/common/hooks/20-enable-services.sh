@@ -12,6 +12,14 @@ enable_services() {
     local boot_d="${ROOTFS_DIR}/etc/dinit.d/boot.d"
     mkdir -p "$boot_d"
 
+    # Platform services (always in the boot set, not variant-selectable):
+    # boot-success is the docs/02 §5.1 milestone; it hard-depends on
+    # astrod (M1: the health-check stub) and data-mount, so enabling it
+    # by name activates the whole chain. Soft (waits-for) from 'boot', so
+    # a failed health check surfaces as [FAILED] without blocking login.
+    ln -sf "../boot-success" "${boot_d}/boot-success"
+    log_info "Enabled platform service: boot-success (-> ../boot-success)"
+
     # Enable services
     if [ -n "${SERVICES_ENABLE:-}" ]; then
         for svc in $SERVICES_ENABLE; do

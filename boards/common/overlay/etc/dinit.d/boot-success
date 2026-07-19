@@ -1,0 +1,11 @@
+# Astro: the boot-success milestone (docs/02 §5.1, docs/05 §4, AD-011).
+# Internal service whose dependencies DEFINE "this boot is good":
+#   base set (M1) = astrod healthy + data-mount done.
+# Rollback-participating app services (docs/08 §5) add themselves here as
+# depends-on at image assembly (M4). rauc-mark-good gains
+# "depends-on: boot-success" at M2 — if this milestone is never reached,
+# the bootloader's attempt counters fall back to the other slot.
+
+type = internal
+depends-on: astrod
+depends-on: data-mount

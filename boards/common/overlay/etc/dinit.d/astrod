@@ -1,0 +1,10 @@
+# Astro: astrod, currently the M1 health-check stub (docs/11 M1; the real
+# Zig daemon replaces the command at M3, keeping this graph position:
+# docs/02 §5.1). Scripted: "started" means the health check passed.
+# depends-on data-mount so the mutable-state layer is up first (already
+# started by the early graph; the hard dep also fails astrod — and thus
+# boot-success — if data-mount failed).
+
+type = scripted
+command = /usr/lib/astro/astrod-stub.sh
+depends-on: data-mount

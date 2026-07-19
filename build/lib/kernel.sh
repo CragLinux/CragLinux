@@ -139,6 +139,36 @@ patch_kernel_source() {
     cd "$PROJECT_ROOT"
 }
 
+# Hash of everything that determines the generated .config: defconfig
+# choice (and board defconfig content), every fragment's content in merge
+# order, and the LTO mode. Stored in the skip markers so that editing a
+# fragment (common or board) triggers reconfigure + rebuild instead of
+# silently reusing a stale kernel (GAP-REPORT §4 item 11 — this bit both
+# the x86_64 sysctl refresh and the armv7 cgroup fix).
+kernel_config_hash() {
+    local board_dir="$1"
+    local defconfig_name="$2"
+    local lto_setting="$3"
+    local config_fragments_json="$4"
+    local frag
+    {
+        echo "defconfig=${defconfig_name}"
+        echo "lto=${lto_setting}"
+        if [ -f "${board_dir}/kernel/defconfig" ]; then
+            echo "== board-defconfig"
+            cat "${board_dir}/kernel/defconfig"
+        fi
+        for frag in "${PROJECT_ROOT}/boards/common/kernel"/*.fragment \
+                    "${board_dir}/kernel"/*.fragment; do
+            if [ -f "$frag" ]; then
+                echo "== ${frag}"
+                cat "$frag"
+            fi
+        done
+        echo "fragments_json=${config_fragments_json}"
+    } | sha256sum | cut -c1-16
+}
+
 # Configure kernel
 configure_kernel() {
     local kernel_src="$1"
@@ -174,9 +204,12 @@ configure_kernel() {
 
     mkdir -p "$build_dir"
 
-    # Skip reconfiguration if .config exists and version matches
-    if [ -f "${build_dir}/.config" ] && [ -f "${build_dir}/.astro-kernel-configured" ]; then
-        log_info "Kernel already configured, skipping"
+    # Skip reconfiguration only if the config inputs are unchanged
+    local cfg_hash
+    cfg_hash=$(kernel_config_hash "$board_dir" "$defconfig_name" "$lto_setting" "$config_fragments_json")
+    if [ -f "${build_dir}/.config" ] && \
+       [ "$(cat "${build_dir}/.astro-kernel-configured" 2>/dev/null)" = "$cfg_hash" ]; then
+        log_info "Kernel already configured (inputs unchanged), skipping"
         return 0
     fi
 
@@ -266,7 +299,7 @@ configure_kernel() {
     # Step 4: Final resolve
     "${make_env[@]}" olddefconfig
 
-    touch "${build_dir}/.astro-kernel-configured"
+    echo "$cfg_hash" > "${build_dir}/.astro-kernel-configured"
     log_info "Kernel configured"
     cd "$PROJECT_ROOT"
 }
@@ -306,10 +339,13 @@ build_kernel() {
     local build_dir="${PROJECT_ROOT}/build/state/${board_arch}/kernel/${board}"
     local version_marker="${build_dir}/.kernel-version"
 
-    # Check if already built with same version
-    if [ -f "$version_marker" ] && [ "$(cat "$version_marker")" = "$version" ] && \
+    # Skip only if version AND all config inputs (fragments/defconfig/lto)
+    # are unchanged — the marker carries "version:config-hash"
+    local cfg_hash
+    cfg_hash=$(kernel_config_hash "$board_dir" "$defconfig" "$lto" "$config_fragments_json")
+    if [ -f "$version_marker" ] && [ "$(cat "$version_marker")" = "${version}:${cfg_hash}" ] && \
        [ -f "${build_dir}/${KERNEL_IMAGE}" ]; then
-        log_info "Kernel ${version} already built for ${board}, skipping"
+        log_info "Kernel ${version} already built for ${board} (inputs unchanged), skipping"
         return 0
     fi
 
@@ -365,7 +401,7 @@ build_kernel() {
         modules_install
 
     # Write version marker
-    echo "$version" > "$version_marker"
+    echo "${version}:${cfg_hash}" > "$version_marker"
 
     cd "$PROJECT_ROOT"
     log_info "Kernel ${version} built successfully"

@@ -18,8 +18,15 @@
 #
 # Direct-boot developer images have no data partition: the tmpfs mounts
 # still happen, everything /data-backed is skipped, exit 0 (a dev rootfs
-# is rw ext4 and needs none of it). Growing /data to fill the disk on
-# first boot is astrod/firstboot work (M2) — not done here.
+# is rw ext4 and needs none of it).
+#
+# Growth (docs/02 §4, M1 "grown+mounted"): the flashed image is sized
+# minimally; on a larger disk/card all slack belongs to /data (the last
+# partition, AD-007). Before mounting, if the disk has more than ~1 MiB
+# of slack past the data partition, the GPT entry is grown with sfdisk
+# (which also relocates the backup GPT header to the true end of the
+# disk), the kernel view is updated with resizepart, and the ext4 is
+# grown with resize2fs. Idempotent: a re-boot with no slack is a no-op.
 
 DINIT_SERVICE=data-mount
 
@@ -50,7 +57,50 @@ if [ -z "$data_dev" ]; then
     exit 0
 fi
 
+# --- grow to fill the disk (before fsck/mount; see header) ---------------
+grow_data() {
+    # all sizes below are 512-byte sectors, as /sys reports them
+    _pname=${data_dev##*/}
+    _pdir=/sys/class/block/$_pname
+    # not a partition (e.g. a whole-disk or loop /data on odd dev setups)
+    [ -r "$_pdir/partition" ] || return 0
+    _partno=$(cat "$_pdir/partition")
+    _diskdir=$(readlink -f "$_pdir")
+    _diskdir=${_diskdir%/*}
+    _disk=/dev/${_diskdir##*/}
+    [ -b "$_disk" ] || return 0
+    _dsize=$(cat "$_diskdir/size")
+    _pstart=$(cat "$_pdir/start")
+    _psize=$(cat "$_pdir/size")
+    # 33 sectors of backup GPT live at the disk end; only act on real slack
+    _slack=$((_dsize - _pstart - _psize - 33))
+    [ "$_slack" -gt 2048 ] || return 0
+
+    # to the console: rare + significant, and the boot-smoke stage asserts
+    # on this line (dinit does not forward early-script stdout to serial)
+    echo "data-mount: growing $data_dev by ${_slack} sectors to fill $_disk" > /dev/console 2>/dev/null || \
+        echo "data-mount: growing $data_dev by ${_slack} sectors to fill $_disk"
+    # ', +' = keep start, extend to maximum; --force because the disk
+    # carries the mounted root and (on a reflashed larger disk) a
+    # misplaced backup GPT header, both of which sfdisk would refuse
+    if ! printf ', +\n' | sfdisk -q --force --no-reread -N "$_partno" "$_disk"; then
+        echo "data-mount: sfdisk grow failed, keeping current size" >&2
+        return 0
+    fi
+    # tell the kernel (rereadpt would fail: root is on this disk), then
+    # grow the fs to the actual new GPT size
+    _newsize=$(sfdisk -q --dump "$_disk" | \
+        sed -n "s|^${data_dev}[[:space:]]*:.*size=[[:space:]]*\([0-9]*\).*|\1|p")
+    if [ -n "$_newsize" ] && [ "$_newsize" -gt "$_psize" ]; then
+        resizepart "$_disk" "$_partno" "$_newsize" || :
+        e2fsck -f -p "$data_dev" >/dev/null 2>&1 || :
+        resize2fs "$data_dev" >/dev/null 2>&1 || \
+            echo "data-mount: resize2fs failed, /data stays at its current size" >&2
+    fi
+}
+
 if ! mountpoint -q /data; then
+    grow_data
     mount -t ext4 -o noatime "$data_dev" /data || exit 1
 fi
 

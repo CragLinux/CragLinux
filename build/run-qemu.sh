@@ -14,17 +14,34 @@ set -e
 #     per BOOT_ORDER/ORDER; the kernel mounts root=PARTLABEL=rootfs.<slot>.
 #
 # Usage:
-#   ./build/run-qemu.sh <board> <variant> [--image]
+#   ./build/run-qemu.sh <board> <variant> [--image] [--scratch[=+SIZE]]
 #   ./build/run-qemu.sh qemu-aarch64 dev
 #   ./build/run-qemu.sh qemu-x86_64 prod --image
+#   ./build/run-qemu.sh qemu-armv7 prod --image --scratch=+1G
+#
+# --scratch (image mode): boot a throwaway qcow2 overlay instead of the
+#   artifact itself, so the built image stays pristine (without it, a
+#   --image boot writes bootloader env + /data changes INTO the artifact).
+#   An optional =+SIZE grows the overlay disk, exercising the on-device
+#   /data growth path (docs/02 §4). Used by test-boot-smoke.sh.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-BOARD="${1:?Usage: $0 <board> <variant> [--image]}"
-VARIANT="${2:?Usage: $0 <board> <variant> [--image]}"
+BOARD="${1:?Usage: $0 <board> <variant> [--image] [--scratch[=+SIZE]]}"
+VARIANT="${2:?Usage: $0 <board> <variant> [--image] [--scratch[=+SIZE]]}"
+shift 2
 IMAGE_MODE=false
-[ "${3:-}" = "--image" ] && IMAGE_MODE=true
+SCRATCH_MODE=false
+SCRATCH_GROW=""
+for arg in "$@"; do
+    case "$arg" in
+        --image) IMAGE_MODE=true ;;
+        --scratch) SCRATCH_MODE=true ;;
+        --scratch=*) SCRATCH_MODE=true; SCRATCH_GROW="${arg#--scratch=}" ;;
+        *) echo "ERROR: unknown option: $arg"; exit 1 ;;
+    esac
+done
 
 # Load config
 BOARD_DIR="${PROJECT_ROOT}/boards/${BOARD}"
@@ -158,6 +175,16 @@ if [ "$IMAGE_MODE" = true ]; then
             ;;
     esac
 
+    if [ "$SCRATCH_MODE" = true ]; then
+        SCRATCH_IMG="${BUILD_OUTPUT}/scratch.qcow2"
+        rm -f "$SCRATCH_IMG"
+        qemu-img create -q -f qcow2 -b "$IMAGE_FILE" -F "$IMAGE_FORMAT" "$SCRATCH_IMG"
+        if [ -n "$SCRATCH_GROW" ]; then
+            qemu-img resize -q "$SCRATCH_IMG" "$SCRATCH_GROW"
+        fi
+        IMAGE_FILE="$SCRATCH_IMG"
+        IMAGE_FORMAT="qcow2"
+    fi
     QEMU_ARGS+=(-drive "file=${IMAGE_FILE},format=${IMAGE_FORMAT},if=virtio")
     BOOT_DESC="full image via ${RAUC_BACKEND} (${IMAGE_FILE})"
 else

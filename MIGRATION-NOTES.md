@@ -796,3 +796,38 @@ login prompt with **zero failed services**:
 QEMU-boot capture note: `podman run … run-qemu.sh` must redirect output
 *inside* the container (host-side redirection of the podman invocation
 loses the serial stream under the CLI sandbox).
+
+## 13. M1 close-out: boot-success, /data growth, boot-smoke stage (2026-07-18)
+
+The remaining M1 definition-of-done items (docs/11 §1), verified by the
+new boot-smoke stage across all six board/variant combos (junit results
+in `build/state/test-results/`, serial logs `boot-smoke-<board>-<variant>.log`):
+
+- **`boot-success` milestone + astrod stub** (docs/02 §5.1, AD-011):
+  `astrod` is an M1 health-check placeholder (`/usr/lib/astro/astrod-stub.sh`,
+  scripted: /data mounted + /etc overlay active when a data partition
+  exists; the real Zig daemon takes over this graph position at M3).
+  `boot-success` is `type = internal`, `depends-on: astrod` + `data-mount`,
+  always enabled into `boot.d` by the common enable-services hook (soft
+  from `boot`, so a failed health check surfaces without blocking login).
+  `rauc-mark-good` gains `depends-on: boot-success` at M2.
+- **`/data` grown + mounted** (docs/02 §4): `data-mount.sh` grows the
+  last-partition GPT entry with sfdisk (`', +'`, `--force` relocates the
+  backup header on reflashed-larger disks), updates the kernel view with
+  `resizepart`, then `e2fsck -p` + `resize2fs`. Idempotent (no-op under
+  ~1 MiB slack). New base packages: `util-linux-fdisk`, `e2fsprogs`
+  (e2fsprogs cross-built clean for armv7 first try). The grow event is
+  echoed to `/dev/console` — dinit does not forward early-script stdout
+  to serial, and boot-smoke asserts on the line.
+- **boot-smoke test stage** (GAP §4 item 8): `build/test-boot-smoke.sh
+  <board> <variant>` — self-containerizing; boots the image via
+  `run-qemu.sh --image --scratch=+1G`; polls the serial log and exits at
+  verdict (~35-40 s) instead of a fixed timeout; asserts boot-success
+  reached, login prompt, zero `[FAILED]`, growth ran; writes junit XML.
+  `run-qemu.sh --scratch` also fixes a latent artifact-hygiene bug: a
+  plain `--image` boot writes bootloader env + /data mutations INTO the
+  built artifact; the scratch qcow2 overlay keeps it pristine.
+- **Kernel stage staleness** (GAP §4 item 11): both skip markers now
+  carry a hash of defconfig + all fragments (merge order) + LTO mode;
+  fragment edits trigger reconfigure+rebuild automatically, unchanged
+  inputs still skip. Validated in both directions on armv7.
