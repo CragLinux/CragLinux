@@ -831,3 +831,104 @@ in `build/state/test-results/`, serial logs `boot-smoke-<board>-<variant>.log`):
   carry a hash of defconfig + all fragments (merge order) + LTO mode;
   fragment edits trigger reconfigure+rebuild automatically, unchanged
   inputs still skip. Validated in both directions on armv7.
+
+## 14. M2: RAUC end-to-end — updates itself (2026-07-19)
+
+Definition of done (docs/11 §1): image + bundle stages, per-board
+system.conf, dinit glue, mark-good, poisoned-bundle rollback, AD-020
+gate on, dev PKI. All landed; the AD-020 gate passes on all three QEMU
+boards (junit in `build/state/test-results/ad020-<board>.xml`, serial
+logs `ad020-<board>.log`):
+
+| board | backend | flip verified | rollback verified |
+|---|---|---|---|
+| qemu-armv7 | uboot | 162 s | 517 s (3 watchdog reboots) |
+| qemu-aarch64 | uboot | 117 s | 404 s (3 watchdog reboots) |
+| qemu-x86_64 | grub | 103 s | 254 s (1 try — grub's x_TRY logic falls back faster than U-Boot's 3×LEFT counters, by design) |
+
+All six board/variant boot-smokes remain green with the update stack
+aboard (dbus-daemon, rauc, bootenv-mount, rauc-mark-good,
+astro-boot-watchdog).
+
+### What shipped
+
+- **Dev PKI** (`build/astro-keys.sh init-dev`, docs/05 §6): committed
+  dev RAUC CA + signing cert (EC P-256, "ASTRO DEV - DO NOT SHIP") and
+  an SSH test keypair installed as root authorized_keys on DEV variants
+  only (hook `30-dev-ssh-key.sh`) — the AD-020 harness and later `astro
+  deploy` (M4) drive dev guests with it. Per-artifact idempotent.
+- **Packages**: `astro-cports/main/rauc` (1.15.2: service+network+
+  streaming+json+gpt on, verity; no -devel) and
+  `astro-cports/main/libubootenv` (0.3.7). New base packages: dbus,
+  rauc; per-board: libubootenv-progs (uboot boards), grub (grub boards,
+  for grub-editenv — slim-subpackage optimization deferred).
+- **system.conf** generated in the rootfs stage from `[rauc]` board TOML
+  (compatible, backend; slots per AD-007; statusfile on /data;
+  bundle-formats=verity) + dev keyring at /etc/rauc/keyring.pem +
+  /etc/fw_env.config on uboot boards (env-in-FAT file, size read from
+  the board's CONFIG_ENV_SIZE fragment).
+- **dinit glue** (docs/05 §4): `rauc` (process, waits-for dbus-daemon),
+  `bootenv-mount` (vfat bootenv at /run/astro/bootenv — both backends
+  need the env as a file), `rauc-mark-good` (scripted, depends-on
+  boot-success + bootenv-mount; retry w/ backoff; console line asserted
+  by the gate), `astro-boot-watchdog` (docs/05 §4 watchdog: forces a
+  reboot when boot-success is not reached — default 300 s, overridable
+  via /data/.astro/boot-watchdog-timeout; detached via setsid so no
+  process-exit bookkeeping surfaces as a service failure).
+- **Bundle stage** (`build/lib/bundle.sh`, `--step=bundle`, in the
+  default pipeline): verity + `adaptive=block-hash-index` on the rootfs
+  image, boot slot vfat included, signed with the dev cert, verified
+  against the device keyring at build time (`.raucb.info` evidence).
+- **AD-020 harness** (`build/test-update-rollback.sh <board>`): SSH-driven
+  against the dev variant on a +1G scratch overlay; phase 2 installs the
+  current bundle and asserts the A→B flip + mark-good; phase 3 builds a
+  poisoned bundle at test time (debugfs removes the astrod stub from a
+  copy of the slot image → boot-success unreachable), installs it, and
+  asserts automatic fallback to the good slot after watchdog-forced
+  attempts. junit output.
+
+### Bugs found by the gate (the reason AD-020 exists)
+
+1. **libubootenv must be built with -DNDEBUG**: `libuboot_open()`
+   prints "Environment OK, copy 0" to **stdout** when NDEBUG is unset
+   (cbuild's buildtype=plain sets nothing). RAUC parses fw_printenv
+   stdout, so the diagnostic was ingested into variable values and
+   written back — after a few install/mark-good round-trips the env
+   contained several junk `BOOT_ORDER=… OK, copy 0` variables and slot
+   selection wedged (U-Boot looped loading the env without attempting
+   any slot). Fixed in the template (tool_flags CFLAGS -DNDEBUG);
+   upstreamable to libubootenv as "don't print to stdout from library
+   open".
+2. **sshd never started on any A/B dev image** (latent since M1 — a
+   never-activated service produces no [FAILED] line, so zero-FAILED
+   assertions can't see it): `ssh-keygen -A`'s RSA host key generation
+   is effectively unbounded on TCG-emulated guests (observed stuck
+   forever on qemu-armv7). The openssh shadow now generates an ed25519
+   host key only (`files/gen-host-keys`, pkgrel 3) — instant everywhere,
+   unique per device.
+3. **QEMU default-NIC double-slirp**: a bare `-netdev` does NOT
+   suppress QEMU's default NIC (only `-nic`/`-net` do) — with the boards'
+   old hardcoded hostfwd NIC plus the launcher's, guests had two
+   interfaces both claiming 10.0.2.15 and hostfwd replies died. Boards
+   no longer declare NICs (host ports are a launcher concern);
+   `run-qemu.sh --ssh-port=N` adds `-nic none` + one user netdev
+   (mmio virtio-net-device on arm virt, pci on q35).
+4. **glib/json-glib cannot cross-build as pinned** (rauc deps, first
+   cross exercise): gobject-introspection is `!cross`, and glib's
+   enabled sysprof leaves `Requires.private: sysprof-capture-4` in
+   glib-2.0.pc that nothing in a self-built repo provides — carried
+   patches 0006/0007 disable introspection (both) + sysprof (glib) for
+   cross profiles.
+5. **cross sysroot bootstrap residue**: glib's build leaves
+   glib-bootstrap pinned in the cross sysroot world; the real glib then
+   conflicts (`!glib`) on the next consumer. The cross dep-install path
+   never rewrites the world — resetting the sysroot
+   (`rm -rf cports/bldroot/usr/<triple>`) is the workaround; a proper
+   fix belongs in cbuild (noted, not carried).
+
+Also: `prepare_cports_tree` now runs `cbuild relink-subpkgs` after
+applying shadows (new-package shadow templates have no committed
+subpackage symlinks, and the tree reset removes generated ones);
+Chimera's lint forbids /usr/libexec in packages (gen-host-keys lives in
+/usr/lib/openssh; the overlay's /usr/libexec/astro/mark-good is
+image-level, not packaged, per docs/05 §4).

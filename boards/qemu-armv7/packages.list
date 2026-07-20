@@ -1,2 +1,3 @@
 # QEMU ARMv7 board-specific packages
 # Kernel is built directly (not through cbuild)
+libubootenv-progs  # fw_printenv/fw_setenv: RAUC uboot backend flips BOOT_ORDER/BOOT_x_LEFT (AD-009; env-in-FAT via /etc/fw_env.config)

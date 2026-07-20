@@ -1,0 +1,8 @@
+# Astro: the RAUC update daemon (docs/05 §4, AD-011). dinit-supervised —
+# D-Bus activation was considered and rejected (docs/05 §4). astrod (M3)
+# and rauc-mark-good talk to it over the system bus.
+
+type = process
+command = /usr/bin/rauc service
+waits-for: dbus-daemon
+restart = true

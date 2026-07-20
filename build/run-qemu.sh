@@ -34,11 +34,13 @@ shift 2
 IMAGE_MODE=false
 SCRATCH_MODE=false
 SCRATCH_GROW=""
+SSH_PORT=""
 for arg in "$@"; do
     case "$arg" in
         --image) IMAGE_MODE=true ;;
         --scratch) SCRATCH_MODE=true ;;
         --scratch=*) SCRATCH_MODE=true; SCRATCH_GROW="${arg#--scratch=}" ;;
+        --ssh-port=*) SSH_PORT="${arg#--ssh-port=}" ;;
         *) echo "ERROR: unknown option: $arg"; exit 1 ;;
     esac
 done
@@ -241,6 +243,25 @@ else
         -drive "file=${ROOTFS_IMG},format=raw,if=virtio"
     )
     BOOT_DESC="direct kernel boot (${ROOTFS_IMG})"
+fi
+
+# User-mode NIC with SSH forwarding (test harness / dev-variant access).
+# Passing an explicit -netdev suppresses QEMU's default NIC, so the guest
+# has exactly one interface and one slirp stack. Device type follows what
+# the boards used: mmio virtio-net-device on arm -M virt, pci on q35.
+if [ -n "$SSH_PORT" ]; then
+    case "$BOARD_ARCH" in
+        aarch64|armv7hf) NET_DEV="virtio-net-device" ;;
+        *)               NET_DEV="virtio-net-pci" ;;
+    esac
+    QEMU_ARGS+=(
+        # -nic none: a bare -netdev does NOT suppress QEMU's default NIC
+        # (only -nic/-net do) — without this the guest gets two slirp
+        # stacks both claiming 10.0.2.15 and hostfwd replies die
+        -nic none
+        -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22"
+        -device "${NET_DEV},netdev=n0"
+    )
 fi
 
 # Add extra args from board.toml

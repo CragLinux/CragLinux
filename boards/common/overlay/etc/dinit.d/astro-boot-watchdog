@@ -1,0 +1,14 @@
+# Astro: boot-success watchdog (docs/05 §4). A boot that starts dinit but
+# never reaches the boot-success milestone would otherwise sit forever and
+# never consume its bootloader attempt counters — this timer forces the
+# reboot so the AD-009/AD-008 fallback logic can do its job (3 attempts,
+# then the other slot). Timeout default 300 s; override via
+# /data/.astro/boot-watchdog-timeout (board/test configurable).
+# Only armed on A/B boots (rauc.slot= present on the kernel cmdline).
+# Scripted: the start command detaches the watcher (setsid) and returns,
+# so the service is simply STARTED and no process-exit bookkeeping can
+# surface as a failure.
+
+type = scripted
+command = /usr/lib/astro/boot-watchdog.sh
+depends-on: early-fs-local.target

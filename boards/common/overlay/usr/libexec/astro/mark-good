@@ -1,0 +1,34 @@
+#!/bin/sh
+#
+# Confirm the current boot to the bootloader (docs/05 §4, AD-011):
+# `rauc status mark-good` resets the active slot's attempt counters
+# (uboot: BOOT_x_LEFT via fw_setenv; grub: x_OK/x_TRY via grub-editenv).
+# Retries with backoff — the rauc daemon may still be settling on the
+# bus when boot-success is reached.
+#
+# Direct-boot developer disks have no A/B slots (no rauc.slot= on the
+# kernel cmdline): nothing to confirm, exit 0.
+
+if ! grep -q 'rauc\.slot=' /proc/cmdline; then
+    echo "mark-good: no rauc.slot on cmdline (direct boot?), nothing to confirm"
+    exit 0
+fi
+
+attempt=1
+max=6
+while :; do
+    if out=$(rauc status mark-good 2>&1); then
+        slot=$(sed -n 's/.*rauc\.slot=\([A-Za-z0-9]*\).*/\1/p' /proc/cmdline)
+        # to the console: the AD-020 gate asserts on this line
+        echo "rauc: boot marked good (slot ${slot:-?})" > /dev/console 2>/dev/null || \
+            echo "rauc: boot marked good (slot ${slot:-?})"
+        exit 0
+    fi
+    if [ "$attempt" -ge "$max" ]; then
+        echo "mark-good: FAILED after ${max} attempts: ${out}" >&2
+        echo "rauc: mark-good FAILED — counters will keep decrementing" > /dev/console 2>/dev/null || :
+        exit 1
+    fi
+    sleep $((attempt * 2))
+    attempt=$((attempt + 1))
+done

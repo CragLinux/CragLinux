@@ -51,6 +51,9 @@ apply_overlays "$ROOTFS_DIR" "$BOARD_DIR" "$VARIANT" "${EXTERNAL_DIR:-}"
 # Install kernel into rootfs
 install_kernel_to_rootfs "$ROOTFS_DIR" "$BOARD" "$BOARD_ARCH" "$BOARD_CONFIG_JSON"
 
+# RAUC system.conf + keyring (+ fw_env.config on uboot boards) — docs/05 §2
+generate_rauc_config "$ROOTFS_DIR" "$BOARD_CONFIG_JSON"
+
 # Run hooks
 run_hooks "$ROOTFS_DIR" "$BOARD_DIR"
 

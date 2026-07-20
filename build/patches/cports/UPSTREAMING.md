@@ -35,6 +35,16 @@ fix drops that _libs entry on armv7/armhf. Proposed commits:
 `main/boost: fix packaging on 32-bit arm`. Same human-ownership process
 note as below.
 
+M2 additions (2026-07-18): `0006-glib-no-introspection-cross.patch` and
+`0007-json-glib-no-introspection-cross.patch` — gobject-introspection is
+`!cross` in its own template, so any template with
+`-Dintrospection=enabled` cannot cross-build; both patches append
+`-Dintrospection=disabled` for cross profiles (meson: later -D wins).
+Upstreamable as cross enablement. Also new in `astro-cports/main/`:
+`rauc` (1.15.2) and `libubootenv` (0.3.7) — standard ports with no
+Astro-specific content, upstreamable as new packages if Chimera wants
+them; proposed commits `main/rauc: new package` etc.
+
 Also carried, **not** upstreamable in its current form:
 `0005-elfutils-no-debuginfod-arm32.patch` — disables debuginfod on
 armv7/armhf because its closure dead-ends in `main/protobuf`, which is

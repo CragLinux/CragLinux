@@ -16,6 +16,7 @@ source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/packages.sh"
 source "${SCRIPT_DIR}/lib/rootfs.sh"
 source "${SCRIPT_DIR}/lib/image.sh"
+source "${SCRIPT_DIR}/lib/bundle.sh"
 
 ##############################################################################
 # Parse arguments
@@ -327,6 +328,14 @@ fi
 
 if should_run_step "image"; then
     create_image "$BOARD" "$VARIANT" "$ROOTFS_DIR"
+fi
+
+##############################################################################
+# Step: Bundle (docs/05 §3, AD-010)
+##############################################################################
+
+if should_run_step "bundle"; then
+    create_bundle "$BOARD" "$VARIANT" "$ROOTFS_TYPE" "$BOARD_CONFIG_JSON"
 fi
 
 ##############################################################################

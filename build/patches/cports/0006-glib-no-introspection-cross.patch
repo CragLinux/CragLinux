@@ -1,0 +1,42 @@
+main/glib: disable introspection and sysprof when cross-compiling.
+
+Two independent cross blockers for a self-built (no Chimera binary repo)
+arch, found on the Astro armv7 port with glib as a rauc dependency:
+
+1. gobject-introspection is marked !cross in its own template ("cross
+   compiling tons of janky hackery"), so -Dintrospection=enabled can
+   never be satisfied in a cross build — meson fails with "Dependency
+   gobject-introspection-1.0 not found".
+2. With -Dsysprof=enabled, the generated glib-2.0.pc carries
+   "Requires.private: sysprof-capture-4"; in the cross sysroot no
+   package provides that .pc, so every downstream pkg-config lookup of
+   glib-2.0/gio-2.0 fails ("Run-time dependency gio-2.0 found: NO")
+   even with glib-devel installed.
+
+The later -D wins in meson, so the base args stay untouched. Cross-built
+glib ships no .gir/.typelib data and no sysprof hooks; glib-devel's
+explicit take list has no introspection-only paths, so packaging is
+unaffected. Native builds unchanged.
+
+diff --git a/main/glib/template.py b/main/glib/template.py
+index c22e0d0e..25004017 100644
+--- a/main/glib/template.py
++++ b/main/glib/template.py
+@@ -50,6 +50,17 @@ if self.profile().arch == "riscv64":
+     # ftbfs
+     configure_args += ["-Dtests=false"]
+ 
++if self.profile().cross:
++    # gobject-introspection is marked !cross ("tons of janky hackery"),
++    # so a cross glib cannot have introspection data; nothing in a
++    # cross-built (self-hosted arch) repo consumes it either.
++    # sysprof is disabled with it: with it enabled, the generated
++    # glib-2.0.pc carries "Requires.private: sysprof-capture-4", which no
++    # package in a self-built repo provides (sysprof-capture's .pc ships
++    # inside glib-devel on native builds) — every downstream pkg-config
++    # lookup of glib-2.0 then fails.
++    configure_args += ["-Dintrospection=disabled", "-Dsysprof=disabled"]
++
+ 
+ def post_install(self):
+     from cbuild.util import python

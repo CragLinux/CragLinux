@@ -19,6 +19,18 @@ enable_services() {
     # a failed health check surfaces as [FAILED] without blocking login.
     ln -sf "../boot-success" "${boot_d}/boot-success"
     log_info "Enabled platform service: boot-success (-> ../boot-success)"
+    # dbus-daemon: system bus for rauc (and astrod at M3); the service
+    # definition ships in the dbus package as "dbus-daemon".
+    ln -sf "../../../usr/lib/dinit.d/dbus-daemon" "${boot_d}/dbus-daemon"
+    log_info "Enabled platform service: dbus-daemon"
+    # rauc-mark-good transitively activates bootenv-mount (depends-on)
+    # and the rauc daemon (waits-for) — docs/05 §4.
+    ln -sf "../rauc-mark-good" "${boot_d}/rauc-mark-good"
+    log_info "Enabled platform service: rauc-mark-good"
+    # watchdog: forces a reboot when boot-success is never reached, so
+    # bootloader attempt counters advance (docs/05 §4; no-op off A/B)
+    ln -sf "../astro-boot-watchdog" "${boot_d}/astro-boot-watchdog"
+    log_info "Enabled platform service: astro-boot-watchdog"
 
     # Enable services
     if [ -n "${SERVICES_ENABLE:-}" ]; then

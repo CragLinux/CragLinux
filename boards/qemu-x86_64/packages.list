@@ -1,2 +1,3 @@
 # QEMU x86_64 board-specific packages
 # Kernel is built directly (not through cbuild)
+grub               # grub-editenv: RAUC grub backend updates ORDER/x_OK/x_TRY in grubenv (AD-008; slim editenv-only subpackage is a later optimization)

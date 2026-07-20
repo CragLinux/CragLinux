@@ -59,4 +59,6 @@ memory = "1G"
 # OVMF code image inside the astro-builder container (edk2-ovmf package);
 # run-qemu.sh pairs it with a scratch copy of OVMF_VARS.fd on pflash.
 firmware = "/usr/share/edk2/ovmf/OVMF_CODE.fd"
-extra_args = "-device virtio-net-pci,netdev=net0 -netdev user,id=net0,hostfwd=tcp::2222-:22"
+# NIC: plain boots get QEMU's default user-mode NIC; SSH forwarding is
+# provided by run-qemu.sh --ssh-port=<port> (host ports are a launcher
+# concern — a board TOML must not bind them)

@@ -190,6 +190,15 @@ prepare_cports_tree() {
         shadows=$((shadows + 1))
     done
 
+    # 3. Regenerate subpackage symlinks (main/<pkg>-<sub> -> <pkg>): shadow
+    #    templates that do not exist upstream (e.g. rauc, libubootenv) have
+    #    no committed symlinks, and the reset removes any generated ones;
+    #    without them cbuild fails with "subpackage ... is missing a symlink".
+    if [ "$shadows" -gt 0 ]; then
+        (cd "$cbuild_dir" && ./cbuild relink-subpkgs > /dev/null 2>&1) || \
+            log_warn "cbuild relink-subpkgs failed (continuing)"
+    fi
+
     log_info "cports tree prepared: ${applied} patch(es) applied, ${present} already present, ${shadows} shadow template(s)"
 }
 

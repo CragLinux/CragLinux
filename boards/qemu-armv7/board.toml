@@ -65,4 +65,6 @@ baud = 115200
 machine = "virt"
 cpu = "cortex-a15"
 memory = "1G"
-extra_args = "-device virtio-net-device,netdev=net0 -netdev user,id=net0,hostfwd=tcp::2222-:22"
+# NIC: plain boots get QEMU's default user-mode NIC; SSH forwarding is
+# provided by run-qemu.sh --ssh-port=<port> (host ports are a launcher
+# concern — a board TOML must not bind them)

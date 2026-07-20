@@ -6,7 +6,7 @@
 # repo) and so cbuild does not skip the build as already-present.
 pkgname = "openssh"
 pkgver = "10.3_p1"
-pkgrel = 2
+pkgrel = 3
 build_style = "gnu_configure"
 configure_args = [
     "--datadir=/usr/share/openssh",
@@ -73,5 +73,10 @@ def post_install(self):
 
     self.install_tmpfiles(self.files_path / "tmpfiles.conf")
 
+    # Astro: ed25519-only host key generation (see files/gen-host-keys —
+    # ssh-keygen -A's RSA keygen never finishes on TCG-emulated guests)
+    self.install_file(
+        self.files_path / "gen-host-keys", "usr/lib/openssh", mode=0o755
+    )
     self.install_service(self.files_path / "ssh-keygen")
     self.install_service(self.files_path / "sshd")

@@ -12,3 +12,5 @@ nyagetty     # console getty (standalone util-linux agetty + dinit service), per
 dinit-chimera-udev  # udev-backed device manager glue (/usr/lib/dinit-devd) — early-devd fails 127 without it
 util-linux-fdisk    # sfdisk: on-device GPT growth of the data partition (docs/02 §4, M1 "grown+mounted")
 e2fsprogs           # e2fsck + resize2fs: fsck/grow the /data ext4 (same M1 item)
+dbus                # system bus (rauc service + astrod at M3; docs/02 §5.1 graph)
+rauc                # A/B updater (AD-010/AD-011; astro-cports template, docs/05)

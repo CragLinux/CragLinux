@@ -1,0 +1,10 @@
+#!/bin/sh
+# Astro: generate the sshd host key on first boot — ed25519 ONLY.
+# Upstream's `ssh-keygen -A` also generates an RSA host key, whose prime
+# search is effectively unbounded on TCG-emulated guests (observed: stuck
+# for minutes-to-forever on qemu-armv7 cortex-a15 emulation, leaving sshd
+# waiting on this service). ed25519 generation is O(instant) everywhere,
+# unique per device, and every relevant client supports it.
+set -e
+[ -f /etc/ssh/ssh_host_ed25519_key ] && exit 0
+exec /usr/bin/ssh-keygen -q -t ed25519 -N "" -f /etc/ssh/ssh_host_ed25519_key
