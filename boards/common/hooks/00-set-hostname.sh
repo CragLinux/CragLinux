@@ -1,3 +1,5 @@
+# shellcheck shell=bash
+# (sourced by build/lib/rootfs.sh run_hooks — not executed directly)
 # Set hostname from board and variant names
 # Runs inside rootfs assembly
 

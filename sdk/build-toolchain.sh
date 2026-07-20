@@ -332,7 +332,7 @@ check_prerequisites() {
 
     for cmd in cmake ninja git curl tar patch; do
         if ! command -v $cmd &> /dev/null; then
-            missing_deps+=($cmd)
+            missing_deps+=("$cmd")
         fi
     done
 

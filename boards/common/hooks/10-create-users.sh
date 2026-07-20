@@ -1,3 +1,5 @@
+# shellcheck shell=bash
+# (sourced by build/lib/rootfs.sh run_hooks — not executed directly)
 # Create users defined in variant config
 # Expects VARIANT_USERS_CREATE as JSON array (set by config loader)
 

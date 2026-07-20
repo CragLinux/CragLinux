@@ -66,8 +66,8 @@ check_dependencies() {
 
     # Required tools for building
     for tool in git cmake meson ninja pkg-config make flex byacc m4 perl patch xz zstd; do
-        if ! command -v $tool &> /dev/null; then
-            missing+=($tool)
+        if ! command -v "$tool" &> /dev/null; then
+            missing+=("$tool")
         fi
     done
 
@@ -259,15 +259,15 @@ verify_profiles() {
     # Profiles are committed at build/cbuild-profiles/ (no longer generated here).
     # TODO(migration): per AD-002 these should be regenerated to point at the
     # bldroot toolchain; profile generation moves into the build stages later.
-    local missing=0
-    for profile in aarch64; do
+    local missing_count=0
+    for profile in aarch64 armv7hf; do
         if [ ! -f "${PROFILES_DIR}/${profile}.conf" ]; then
             log_error "Missing profile: ${PROFILES_DIR}/${profile}.conf"
-            missing=1
+            missing_count=1
         fi
     done
 
-    if [ $missing -ne 0 ]; then
+    if [ "$missing_count" -ne 0 ]; then
         exit 1
     fi
 

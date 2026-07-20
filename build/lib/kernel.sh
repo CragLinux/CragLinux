@@ -183,7 +183,7 @@ configure_kernel() {
     # on x86_64) fail with exit 127 otherwise. Same absolute-path
     # treatment as the modules_install STRIP fix below.
     local make_env=(
-        make -j${JOBS}
+        make -j"${JOBS}"
         O="${build_dir}"
         ARCH="${KARCH}"
         LLVM=1
@@ -367,7 +367,7 @@ build_kernel() {
     local JOBS=${JOBS:-$(nproc)}
 
     cd "$kernel_src"
-    make -j${JOBS} \
+    make -j"${JOBS}" \
         O="${build_dir}" \
         ARCH="${KARCH}" \
         LLVM=1 \

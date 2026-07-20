@@ -1,3 +1,5 @@
+# shellcheck shell=bash
+# (sourced by build/lib/rootfs.sh run_hooks — not executed directly)
 # Install Raspberry Pi boot firmware to boot partition
 # This hook handles the RPi-specific boot setup
 

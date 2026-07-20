@@ -72,7 +72,7 @@ check_tools() {
 
     for tool in mksquashfs zstd; do
         if ! command -v $tool &> /dev/null; then
-            missing+=($tool)
+            missing+=("$tool")
         fi
     done
 
@@ -186,7 +186,7 @@ EOF
         -noappend \
         -no-exports \
         -no-progress \
-        -processors $(nproc) >&2
+        -processors "$(nproc)" >&2
 
     # Clean up staging
     rm -rf "${staging_dir}"

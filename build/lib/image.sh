@@ -304,6 +304,7 @@ create_image() {
     (
         cd "$out_dir"
         rm -f SHA256SUMS
+        # shellcheck disable=SC2046  # qcow2 arg is deliberately empty/absent for non-qemu boards
         sha256sum "$(basename "$img")" "$(basename "$img").zst" \
             $( [ -f "${img%.img}.qcow2" ] && basename "${img%.img}.qcow2" ) > SHA256SUMS
     )

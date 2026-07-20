@@ -1,3 +1,5 @@
+# shellcheck shell=bash
+# (sourced by build/lib/rootfs.sh run_hooks — not executed directly)
 # DEV variants only: install the committed dev SSH test key as root's
 # authorized_keys (docs/02 §3: dev images are loudly unsealed; sshd is in
 # the dev package set). This is what lets the AD-020 update/rollback test

@@ -1,3 +1,5 @@
+# shellcheck shell=bash
+# (sourced by build/lib/rootfs.sh run_hooks — not executed directly)
 # Enable/disable dinit services based on variant config.
 #
 # dinit-chimera layout (verified against the built rootfs): the 'boot'

@@ -1,0 +1,67 @@
+# Astro Linux - per-PR pipeline (AD-024, docs/10 §4)
+#
+# THIN WRAPPER ONLY: no pipeline logic lives here. Everything runs via
+# `./build/astro-ci.sh pr` inside the astro-builder container — a
+# developer reproduces any failure with the same command locally.
+# Runner choice is a capacity decision (AD-024); GitHub-hosted works for
+# QEMU-TCG suites since no KVM is required.
+
+name: pr
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pr-suite:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      # cports is Harbormaster-managed (AD-001/AD-003): materialize the
+      # pinned checkout. hm itself is a static binary; pin its release.
+      - name: Materialize cports (hm sync --locked)
+        run: |
+          # TODO(release-eng): replace with a pinned hm release download;
+          # until then a direct pinned clone is equivalent to the lock.
+          if command -v hm >/dev/null; then
+            hm sync --locked
+          else
+            PIN=$(python3 -c "import tomllib;print(tomllib.load(open('.harbormaster.lock','rb'))['entry']['cports']['resolved_sha'])" 2>/dev/null || true)
+            : "${PIN:?cannot resolve cports pin from .harbormaster.lock}"
+            git clone --no-checkout https://github.com/chimera-linux/cports.git cports
+            git -C cports checkout "$PIN"
+          fi
+
+      # Heavy caches (AD-024: content-addressed, restorable anywhere).
+      # Keyed on the cports pin — package/bldroot state is a function of it.
+      - name: Restore build caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            cports/packages
+            cports/sources
+            cports/cbuild_cache
+            sources
+            toolchain
+          key: astro-ci-${{ hashFiles('.harbormaster.lock') }}-${{ github.ref_name }}
+          restore-keys: |
+            astro-ci-${{ hashFiles('.harbormaster.lock') }}-
+            astro-ci-
+
+      - name: Build astro-builder container
+        run: podman build -t astro-builder -f container/Containerfile container/
+
+      - name: astro ci pr
+        run: ./build/astro-ci.sh pr
+
+      - name: Publish test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            build/state/test-results/
+            build/state/logs/boot-smoke-*.log
+            build/state/logs/ad020-*.log
+          if-no-files-found: warn

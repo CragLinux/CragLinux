@@ -363,6 +363,7 @@ build_system() {
     # Bootstrap build root if needed
     bootstrap_bldroot || return 1
 
+    # shellcheck disable=SC2207  # package list is whitespace-separated by contract
     local packages=($(get_package_list "$profile"))
     local total=${#packages[@]}
     local current=0

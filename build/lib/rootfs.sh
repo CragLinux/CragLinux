@@ -95,6 +95,7 @@ create_rootfs_source() {
     echo "v3 ${pkg_repo_base}" > "${rootfs_dir}/etc/apk/repositories"
 
     log_info "Installing packages via apk (signatures verified)..."
+    # shellcheck disable=SC2046  # apk_user_flags/manifest expansion: deliberate word splitting
     apk --root "$rootfs_dir" \
         --arch "$arch" \
         --keys-dir etc/apk/keys \
@@ -179,6 +180,7 @@ create_rootfs_binary() {
     done < "$manifest_file"
 
     log_info "Installing ${#install_args[@]} packages via apk (verified signatures)..."
+    # shellcheck disable=SC2046  # apk_user_flags: deliberate word splitting
     apk --root "$rootfs_dir" \
         --arch "$arch" \
         --keys-dir etc/apk/keys \
