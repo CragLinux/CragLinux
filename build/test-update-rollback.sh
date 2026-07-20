@@ -10,14 +10,24 @@ set -euo pipefail
 # Sequence (docs/10 §4 item 4):
 #   1. boot the built image on a +1G scratch overlay, wait for SSH
 #   2. assert slot A booted and was marked good
-#   3. install the current build's bundle over SSH -> installs to slot B
-#   4. reboot -> assert slot B booted + marked good (slot flip worked)
+#   3. install the current build's bundle THROUGH THE ASTROD API in-guest
+#      (astroctl update install -> staged upload -> AD-021 gate -> RAUC
+#      operation polled to completion) -> installs to slot B; assert the
+#      operation succeeded and update.progress events were published
+#   4. apply via the API (astroctl update apply) -> assert slot B booted
+#      + marked good (slot flip worked)
 #   5. build a POISONED bundle (astrod health check sabotaged ->
 #      boot-success unreachable), install -> goes to slot A
 #   6. reboot -> bootloader prefers A; each attempt fails, the
 #      boot-success watchdog forces reboots, attempt counters exhaust,
 #      bootloader falls back to B
 #   7. assert: back on slot B, marked good again -> automatic rollback OK
+#
+# BOTH-PATHS COVERAGE (deliberate): the good-bundle install (phase 2)
+# exercises the docs/05 §5.1 API-driven workflow end to end; the poisoned
+# install (phase 3) stays on direct `rauc install` over SSH so the non-API
+# entry point (docs/05 §5.2 USB/offline flows drive RAUC the same way)
+# keeps gate coverage too.
 #
 # Usage:
 #   ./build/test-update-rollback.sh <board> [--timeout=SECONDS]
@@ -74,12 +84,6 @@ SSH=(ssh -i "$SSH_KEY" -p "$SSH_PORT" -o StrictHostKeyChecking=no
 fail() { FAILURES+=("$1"); echo "[FAIL-POINT] $1"; }
 
 elapsed() { echo $(( $(date +%s) - START_TS )); }
-
-deadline_left() {
-    local left=$(( TIMEOUT - $(elapsed) ))
-    [ "$left" -gt 0 ] || { fail "global timeout (${TIMEOUT}s) exhausted"; finish; }
-    echo "$left"
-}
 
 wait_ssh() {
     # $1 = description; waits until the guest answers over SSH
@@ -171,26 +175,57 @@ wait_serial 'rauc: boot marked good (slot A)' "slot A was not marked good on fir
     fail "could not set watchdog timeout knob"
 
 ##############################################################################
-# Phase 2: install the current bundle -> slot B, reboot, verify flip
+# Phase 2: install the current bundle THROUGH THE ASTROD API -> slot B,
+# apply via the API, verify flip.
+#
+# This phase is the API-path half of the both-paths coverage (see header):
+# astroctl streams the bundle into POST /api/v1/update, the AD-021 gate and
+# InspectBundle run in astrod, and astroctl polls the returned operation to
+# a terminal state — its exit code IS the operation-completion assertion.
 ##############################################################################
-echo "[STEP] Installing bundle ($(basename "$BUNDLE"))..."
+echo "[STEP] Installing bundle via astrod API ($(basename "$BUNDLE"))..."
 "${SSH[@]}" "cat > /data/update.raucb" < "$BUNDLE" || fail "bundle upload failed"
-if ! "${SSH[@]}" "rauc install /data/update.raucb" >> "$SERIAL_LOG" 2>&1; then
-    fail "rauc install (good bundle) failed"
+INSTALL_LOG="${LOG_DIR}/ad020-${BOARD}-api-install.log"
+if ! "${SSH[@]}" "astroctl update install /data/update.raucb" > "$INSTALL_LOG" 2>&1; then
+    cat "$INSTALL_LOG" >> "$SERIAL_LOG"
+    fail "API install failed (astroctl update install — see transcript in serial log)"
     finish
 fi
-echo "[STEP] Rebooting into the new slot..."
-"${SSH[@]}" "reboot" 2>/dev/null || :
+cat "$INSTALL_LOG" >> "$SERIAL_LOG"
+grep -q 'install operation succeeded' "$INSTALL_LOG" || \
+    fail "install transcript missing the operation-succeeded line"
+
+# Event assertion: at least one update.progress event must have been
+# published. astroctl's drain mode replays the daemon's event ring
+# (Last-Event-ID: 0) and exits at the first quiet period.
+EVENTS_LOG="${LOG_DIR}/ad020-${BOARD}-events.log"
+"${SSH[@]}" "astroctl events" > "$EVENTS_LOG" 2>&1 || fail "astroctl events drain failed"
+cat "$EVENTS_LOG" >> "$SERIAL_LOG"
+grep -q 'update\.progress' "$EVENTS_LOG" || \
+    fail "no update.progress event observed in the event ring"
+
+echo "[STEP] Applying update via API (reboot into the new slot)..."
+# The 202 lands just before dinit teardown kills sshd, so the transcript
+# (or the ssh exit status) can be lost in that race — apply is best-effort
+# here; the hard assertions are the slot flip + mark-good below.
+"${SSH[@]}" "astroctl update apply" >> "$SERIAL_LOG" 2>&1 || \
+    echo "[WARN] apply transcript lost (connection dropped at reboot); relying on slot assertions"
 sleep 10
 wait_ssh "post-update boot"
 
 slot=$(guest_slot)
 [ "$slot" = "B" ] || fail "expected slot B after update, got '${slot}'"
 wait_serial 'rauc: boot marked good (slot B)' "slot B was not marked good after update" && \
-    echo "[OK] update installed, slot flip A->B verified ($(elapsed)s)"
+    echo "[OK] API update installed, slot flip A->B verified ($(elapsed)s)"
 
 ##############################################################################
 # Phase 3: poisoned bundle -> slot A, watch automatic rollback to B
+#
+# DELIBERATELY installs via direct `rauc install` over SSH, not the API:
+# phase 2 already covered the astrod path, and this keeps the non-API entry
+# point (docs/05 §5.2 USB/offline flows call RAUC the same way) under the
+# gate. It also sidesteps the AD-021 version gate for the poisoned bundle,
+# which is exactly the raw-RAUC behavior we want to prove rollback against.
 ##############################################################################
 echo "[STEP] Building poisoned bundle (astrod health check sabotaged)..."
 PW="${OUT}/image-work/poison"

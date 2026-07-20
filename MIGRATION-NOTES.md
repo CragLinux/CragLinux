@@ -992,3 +992,157 @@ clean dinit teardown → U-Boot → boot-success again. Boot-smoke green
   Linux" identity never actually served. The Astro document moved to
   `boards/common/overlay/usr/lib/os-release` (the canonical path);
   /etc/os-release stays the packaged symlink.
+
+## 16. M3 phase 2 spine: basu linkage, threaded astrod, stub surface (2026-07-20)
+
+The D-Bus/update groundwork under docs/06 §2 and docs/05 §5.1: astrod
+gains src/bus.zig (the ONLY file with C sd-bus types), a threaded HTTP
+server, and the routed-but-501 update/events/operations surface so the
+AD-013 conformance gate pins the v1 contract before stage 2 fills it in.
+
+- **basu static lib rebuilt with `!lto` (pkgrel 1)**: cbuild's LTO put
+  LLVM-bitcode members in libbasu.a (readelf: "LLVM bitcode file"),
+  which zig's linker rejects ("not an ELF file"). astro-cports/main/basu
+  sets `options=["!lto"]`; r0 apks were deleted from packages/main/*
+  (the mkndx staleness trap in packages.sh notes). apks are apk-tools 3
+  ADB archives, NOT gzip tars — extraction uses `apk extract`.
+- **astrod-deps extraction**: build/lib/astrod.sh `extract_astrod_deps`
+  apk-extracts basu-devel + basu-devel-static into
+  build/state/<board_arch>/astrod-deps/ (armv7hf maps to the armv7
+  repo); astrod/build.zig `-Dbasu-prefix` (default:
+  build/state/x86_64/astrod-deps so `zig build test` needs no flags —
+  astro-ci.sh astrod-unit extracts before testing).
+- **Zig 0.16 moved Mutex/RwLock behind std.Io** (Io.Mutex.lock(io));
+  astrod deliberately avoids std.Io, and links musl anyway for basu, so
+  src/sync.zig wraps pthread mutex/rwlock (zero-init == musl static
+  initializers). std.posix.getenv is gone → std.c.getenv;
+  init.gpa is documented threadsafe in 0.16 (no wrapper needed).
+- **Threading model**: accept loop spawns a detached std.Thread per
+  connection, cap 16 (over-cap: precomputed static 503
+  urn:astro:problem:overloaded, verified live with 16 idle conns + a
+  17th). auth token cache is mutex-guarded, store is RwLock-guarded
+  (beginMutate/endMutate + persistLocked for mutate+persist sequences),
+  system.collect* now allocates per-request (module statics removed),
+  deferred SHUTDOWN still runs on the connection thread after the
+  response bytes (discipline unchanged).
+- **bus.zig threading**: dedicated bus thread (sd_bus_process loop +
+  poll on bus fd + eventfd wake), ALL sd-bus access under one mutex;
+  signal callbacks run on the bus thread with the lock held (must not
+  re-enter Bus). Marshaling tests run offline on a socketpair-backed
+  never-connected bus — NOTE: test teardown must use sd_bus_close, not
+  sd_bus_flush_close_unref (flush waits ~90 s for the auth handshake
+  that never comes; cost 3 min of test time until found).
+- **RAUC interface truth** (rauc-1.15.2
+  src/de.pengutronix.rauc.Installer.xml): Progress is `(isi)` —
+  percentage, message, depth — not the `(iis)` some notes claimed.
+- **Deferred to stage 2**: D-Bus policy file
+  (usr/share/dbus-1/system.d/astrod.conf), astrod dinit service deps
+  (depends-on dbus-daemon, waits-for rauc) — they belong with the code
+  that actually opens the bus at startup.
+
+## 17. M3 phase 2 complete: the update endpoint group is live (2026-07-20)
+
+Stage-2 fill reconciled into the shared files: rauc.zig / ops.zig /
+update.zig / events.zig are wired through router.zig + main.zig, the
+OpenAPI spec matches the implementation, the D-Bus policy + service-graph
+pieces ship, and the whole docs/05 §5.1 API workflow is verified live on
+qemu-armv7 and by the AD-020 gate.
+
+### What landed
+
+- **Routes live**: `/update/status|/update|/update/apply|/update/rollback`
+  → update.zig handlers (503 urn:astro:problem:rauc-unavailable while the
+  daemon has no D-Bus connection — the API stays healthy without
+  dbus-daemon/rauc); `/events` → SSE (subscribe + serveStream on the
+  connection thread: no Content-Length, `retry:` prelude, 15 s keepalives,
+  Last-Event-ID replay from the 1024 ring, lap = `event: overflow` marker
+  then continue); `/operations[/{id}]` → ops.Registry snapshots
+  (ops.global module global set by main; pre-restart ids 404 by contract).
+- **HTTP layer**: query strings are split and threaded
+  (`POST /update?force=true` — the only channel the octet-stream form
+  has; OR-ed with the JSON body field); Content-Type + Last-Event-ID
+  extracted; `POST /api/v1/update` with application/octet-stream DIVERTS
+  the body straight into /data/.astro/staging via fsutil.writeStreamSync
+  (never buffered — bundles are 50+ MiB against a 16 MiB RSS budget; the
+  64 KiB body cap still guards every other route; auth is checked BEFORE
+  the sink so unauthorized bytes never touch /data); max_connections
+  16 → 32 (the 16-subscriber SSE budget must never starve interactive
+  requests); statusText knows 409/502/507.
+- **Startup wiring** (before the listeners bind, so readiness implies the
+  subsystems exist): ops.Registry + events.EventBus always;
+  bus.connectSystemRetry(5) + update.Manager.init (signal watches +
+  restart re-attach probe) when the system bus answers, warn-and-503
+  otherwise.
+- **Spec truth restored** (AD-013): problem URNs now match the code
+  (update-downgrade-refused, no-pending-update, no-rollback-target,
+  insufficient-storage as 507, rauc-error as 502 with the D-Bus error
+  name); UpdateStatus gained running_release/pending/current_operation/
+  history (AD-021 surfacing); Operation gained `result`; the SSE overflow
+  semantics are documented as marker-then-continue (supersedes the
+  stage-2 stub's drop-and-close comment).
+
+### Traps found live (each cost a debug cycle; recorded so they stay found)
+
+- **InspectBundle's reply is `"update" -> v(v(a{sv}))` — DOUBLE variant.**
+  rauc's r_manifest_to_dict inserts the group dicts with GVariantDict's
+  `"v"` format, which wraps the a{sv} in a second variant inside the
+  entry's own value variant (scalar keys like "manifest-hash" are
+  single-wrapped). The offline expectation scripts pinned v(a{sv}) per a
+  source reading that missed the GLib gotcha; live the parse failed with
+  InvalidReply. Corollary fix: a client-side parse failure no longer
+  prints lastDbusError — that error was STALE (a Spawn.PermissionsInvalid
+  from the boot-time re-attach probe racing rauc's bus-name claim) and
+  sent the diagnosis chasing dbus activation for a whole cycle.
+- **astrod cannot mkdir /data/.astro/staging** (parent is root-owned —
+  rauc.status lives there). tmpfiles.d/astrod.conf now creates it every
+  boot (`d /data/.astro/staging 0755 astrod astrod -`); ordering is safe
+  (early-tmpfiles runs after data-mount's target). Uploads 500'd with
+  staging-failed until this landed.
+- **dinit console handover swallows late OK lines.** astrod's new
+  depends-on dbus-daemon pushed astrod/boot-success past login.target
+  (options: runs-on-console) — the milestone WAS reached (rauc-mark-good
+  ran) but `[  OK  ] boot-success` never hit serial and boot-smoke
+  failed on a healthy boot. Fix in the service graph, not the assertion:
+  boot-success AND rauc-mark-good gained `before: login.target` (pure
+  ordering; also the honest UX — the login prompt now appears only after
+  the boot is confirmed good). On a bad slot the milestone fails and
+  login proceeds; watchdog rules unchanged (AD-011).
+- **astroctl uploads masked early server answers.** When astrod answers
+  before the body is done (401/503/507/staging-failed) and closes its
+  read side, the client's next body write dies with EPIPE — uploadBundle
+  used to report a bogus "cannot reach astrod" transport error and hide
+  the problem+json. It now falls through to READ the response after a
+  send failure.
+
+### Verified
+
+- Container `zig build test`: 106 pass, 3 skip (spec↔route conformance
+  11 ops ↔ 11 routes); `zig fmt --check` clean; shellcheck clean at the
+  repo's severity/exclusion set.
+- Cross ReleaseSafe, basu linked, static (no INTERP), ≤ 8 MiB budget:
+  armv7hf 5,279,016 B · aarch64 6,158,568 B · x86_64 6,118,856 B.
+- boot-smoke qemu-armv7 dev: PASS (45 s to verdict, zero FAILED).
+- In-guest e2e (qemu-armv7 dev, scratch overlay, 180 s): update status
+  shows 4 slots/booted A/compatible astro-qemu-armv7; API install of the
+  build's own bundle → op-1 polled to "install operation succeeded" with
+  live progress; update.progress + update.completed observed on a live
+  SSE stream AND again via Last-Event-ID replay; consumed staged upload
+  unlinked; apply → reboot into slot B, marked good; AD-021 downgrade
+  (0.0.0-aaa < 0.0.0-dev) refused 409 update-downgrade-refused with the
+  kept staged path named in the detail; astrod VmRSS after all of it:
+  1136 kB (budget 16 MiB).
+- AD-020 gate `./build/test-update-rollback.sh qemu-armv7`: PASS in
+  529 s — API-driven good-bundle install/apply with slot flip A→B at
+  171 s (phase 2, incl. the update.progress event-ring assert), then
+  direct-rauc poisoned install and automatic bootloader rollback to B
+  after 3 watchdog reboots (phase 3).
+
+### Still open (phase-3 material)
+
+- URL installs bypass the AD-021 gate (no pre-install metadata for
+  streamed sources) — documented v1 limitation in the spec.
+- Refused uploads are kept in staging for the force flow and never
+  auto-GC'd (operator-bounded); consider a startup sweep while RAUC is
+  idle.
+- The SSE subscriber a client abandons is reclaimed by the failing
+  keepalive write (≤ 15 s); no idle-session timeout beyond that.

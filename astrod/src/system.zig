@@ -29,24 +29,17 @@ const uptime_path = "/proc/uptime";
 const machine_id_path = "/etc/machine-id";
 const fallback = "unknown";
 
-// collect() is zero-arg by contract, so file-derived strings persist in
-// module statics rather than caller allocations. Safe because main.zig
-// serves one connection at a time and serializes the result before the
-// next request; revisit if the daemon goes concurrent.
-var board_buf: [64]u8 = undefined;
-var variant_buf: [64]u8 = undefined;
-var release_buf: [64]u8 = undefined;
-var slot_buf: [32]u8 = undefined;
-var machine_id_buf: [64]u8 = undefined;
-
 /// Store-less variant: provisioning reads as "factory", matching the store
 /// default for a device with no config document. The wired handler should
-/// call collectWith(store.getProvisioning()) instead.
-pub fn collect() SystemInfo {
-    return collectWith("factory");
+/// call collectWith(allocator, store.getProvisioning()) instead.
+pub fn collect(allocator: std.mem.Allocator) error{OutOfMemory}!SystemInfo {
+    return collectWith(allocator, "factory");
 }
 
-pub fn collectWith(provisioning: []const u8) SystemInfo {
+/// All file-derived strings are copied into `allocator` (per-request arena
+/// in the daemon), so concurrent collectors never share buffers — the old
+/// module-static interning was only safe single-connection-at-a-time.
+pub fn collectWith(allocator: std.mem.Allocator, provisioning: []const u8) error{OutOfMemory}!SystemInfo {
     var file_buf: [4096]u8 = undefined;
 
     var board: []const u8 = fallback;
@@ -54,20 +47,20 @@ pub fn collectWith(provisioning: []const u8) SystemInfo {
     var release: []const u8 = fallback;
     if (fsutil.readFileBounded(os_release_path, &file_buf)) |text| {
         const id = parseOsRelease(text);
-        if (id.board) |v| board = intern(&board_buf, v);
-        if (id.variant) |v| variant = intern(&variant_buf, v);
-        if (id.release) |v| release = intern(&release_buf, v);
+        if (id.board) |v| board = try allocator.dupe(u8, v);
+        if (id.variant) |v| variant = try allocator.dupe(u8, v);
+        if (id.release) |v| release = try allocator.dupe(u8, v);
     } else |_| {}
 
     var booted_slot: ?[]const u8 = null;
     if (fsutil.readFileBounded(cmdline_path, &file_buf)) |text| {
-        if (parseBootedSlot(text)) |v| booted_slot = intern(&slot_buf, v);
+        if (parseBootedSlot(text)) |v| booted_slot = try allocator.dupe(u8, v);
     } else |_| {}
 
     var machine_id: []const u8 = fallback;
     if (fsutil.readFileBounded(machine_id_path, &file_buf)) |text| {
         const trimmed = std.mem.trim(u8, text, " \t\r\n");
-        if (trimmed.len > 0) machine_id = intern(&machine_id_buf, trimmed);
+        if (trimmed.len > 0) machine_id = try allocator.dupe(u8, trimmed);
     } else |_| {}
 
     return .{
@@ -169,14 +162,6 @@ fn uptimeSeconds() u64 {
     return @intCast(@max(0, ts.sec));
 }
 
-/// Copy into a static buffer (truncating: identity strings are short, and
-/// a truncated field beats a dangling slice into a dead stack buffer).
-fn intern(dst: []u8, src: []const u8) []const u8 {
-    const n = @min(dst.len, src.len);
-    @memcpy(dst[0..n], src[0..n]);
-    return dst[0..n];
-}
-
 // ---- tests -----------------------------------------------------------------
 
 test "parseOsRelease handles the shipped common-overlay document" {
@@ -242,7 +227,9 @@ test "parseUptimeSeconds truncates to whole seconds" {
 }
 
 test "collect returns populated fields with real uptime" {
-    const info = collect();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const info = try collect(arena.allocator());
     try std.testing.expect(info.board.len > 0);
     try std.testing.expect(info.release.len > 0);
     try std.testing.expectEqualStrings(health_ok, info.health);
@@ -252,6 +239,8 @@ test "collect returns populated fields with real uptime" {
 }
 
 test "collectWith threads the store's provisioning state through" {
-    const info = collectWith("provisioned");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const info = try collectWith(arena.allocator(), "provisioned");
     try std.testing.expectEqualStrings("provisioned", info.provisioning);
 }

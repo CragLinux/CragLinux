@@ -116,7 +116,11 @@ astrod_unit() {
     # Unit/conformance tests with the container's pinned Zig, then the
     # docs/06 §3 budget: static x86_64 ReleaseSafe binary <= 8 MiB (the
     # same bound build_astrod enforces per-board at image assembly).
-    in_container 'cd astrod \
+    # extract_astrod_deps first: build.zig's default -Dbasu-prefix is
+    # build/state/x86_64/astrod-deps (basu sd-bus headers + libbasu.a).
+    in_container 'source build/lib/common.sh && source build/lib/astrod.sh \
+        && PROJECT_ROOT=/workspace extract_astrod_deps x86_64 \
+        && cd astrod \
         && zig build test --cache-dir /workspace/build/state/zig-cache-ci \
         && zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSafe \
             --cache-dir /workspace/build/state/zig-cache-ci --prefix /tmp/astrod-budget \

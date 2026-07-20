@@ -6,6 +6,7 @@ const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
 const fsutil = @import("fsutil.zig");
+const sync = @import("sync.zig");
 
 pub const default_token_path = "/data/config/api-token";
 
@@ -17,8 +18,9 @@ const max_path_len = 256;
 // In-memory token cache, reloaded when the file identity changes. The key
 // is (path, inode, size, mtime) rather than mtime alone because file
 // timestamps use the kernel's coarse clock — two rewrites within one tick
-// share an mtime. Plain module state is safe while the daemon serves one
-// connection at a time (main.zig); revisit with any concurrency work.
+// share an mtime. The daemon serves connections concurrently, so all
+// cache access (including the compare against the cached slice) happens
+// under cache_mu — see checkBearer.
 const TokenCache = struct {
     valid: bool = false,
     path_buf: [max_path_len]u8 = undefined,
@@ -31,17 +33,24 @@ const TokenCache = struct {
     token_len: usize = 0,
 };
 var cache: TokenCache = .{};
+/// Guards `cache` (connection threads race on it). Held across the whole
+/// check: the compare reads the cached slice, so releasing earlier would
+/// let a concurrent reload swap the bytes mid-comparison.
+var cache_mu: sync.Mutex = .{};
 
 /// Compare the request's Authorization header against the on-disk token.
 /// Fail-closed: missing header, missing/unreadable/oversized token file, or
 /// empty token all deny. Comparison is constant-time in the token contents;
 /// only the length mismatch is observable, which is standard practice.
+/// Thread-safe (cache_mu).
 pub fn checkBearer(token_file_path: []const u8, header_value: ?[]const u8) bool {
     const header = header_value orelse return false;
     const prefix = "Bearer ";
     if (!std.mem.startsWith(u8, header, prefix)) return false;
     const presented = header[prefix.len..];
 
+    cache_mu.lock();
+    defer cache_mu.unlock();
     const expected = cachedToken(token_file_path) orelse return false;
     return constantTimeEql(expected, presented);
 }
@@ -54,7 +63,7 @@ pub fn allowUnixPeer() bool {
 
 /// Return the trimmed token, from cache when the file is unchanged. Any
 /// failure invalidates the cache and denies (null): a deleted token file
-/// must not keep authenticating from memory.
+/// must not keep authenticating from memory. Caller holds cache_mu.
 fn cachedToken(path: []const u8) ?[]const u8 {
     if (path.len > max_path_len) {
         // Longer paths would silently bypass caching; the deployed path is

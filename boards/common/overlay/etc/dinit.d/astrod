@@ -16,6 +16,12 @@
 #   local.target  orders early-tmpfiles first: it creates /run/astro
 #                 (tmpfiles.d/astrod.conf) and opens /run/dinitctl to the
 #                 astrod group for the reboot/poweroff endpoints
+#   dbus-daemon   hard (docs/02 §5.1): the D-Bus spine (RAUC now, iwd in
+#                 phase 3) needs the system bus socket; without it the
+#                 update/network groups can only 503
+#   rauc          waits-for, not depends-on: astrod degrades cleanly
+#                 (503 rauc-unavailable + restart re-attach probe) if
+#                 rauc is down, and must not be pulled down with it
 
 type = process
 command = /usr/bin/astrod --ready-fd=4
@@ -26,3 +32,5 @@ logfile = /var/log/astrod.log
 depends-on: data-mount
 depends-on: firstboot
 depends-on: local.target
+depends-on: dbus-daemon
+waits-for: rauc

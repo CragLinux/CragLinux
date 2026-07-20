@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "astrod Device Configuration API",
-    "description": "Local HTTP API for Astro devices (docs/06, AD-013). Phase 1 surface only: system summary, reboot/poweroff actions, and this document — the spec documents what is implemented, nothing aspirational. Authored in JSON syntax (valid YAML) so the file is served verbatim at GET /api/v1/openapi.json and parsed by std.json in the route conformance test.",
+    "description": "Local HTTP API for Astro devices (docs/06, AD-013). Documented surface: system summary, reboot/poweroff actions, this document, and the update/events/operations group (docs/06 §5.3 + §4, docs/05 §5.1): RAUC-backed A/B updates modeled as operations, with an SSE event stream. Degradation: the update endpoints answer 503 urn:astro:problem:rauc-unavailable while the daemon has no D-Bus connection; a route whose subsystem is entirely absent from the build answers 501 (NotImplemented response component). Authored in JSON syntax (valid YAML) so the file is served verbatim at GET /api/v1/openapi.json and parsed by std.json in the route conformance test.",
     "version": "1.0.0"
   },
   "servers": [
@@ -102,6 +102,191 @@
           "401": { "$ref": "#/components/responses/Unauthorized" }
         }
       }
+    },
+    "/api/v1/update/status": {
+      "get": {
+        "operationId": "getUpdateStatus",
+        "summary": "RAUC slot states, booted slot, primary slot, installer operation, last install error (docs/06 §5.3)",
+        "description": "Snapshot assembled from RAUC's D-Bus surface: GetSlotStatus, GetPrimary, and the BootSlot/Operation/LastError/Compatible properties. Answers while an install is running (operation != \"idle\"), so it doubles as the coarse install-state probe.",
+        "responses": {
+          "200": {
+            "description": "Update status",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UpdateStatus" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "502": { "$ref": "#/components/responses/RaucError" },
+          "503": { "$ref": "#/components/responses/RaucUnavailable" }
+        }
+      }
+    },
+    "/api/v1/update": {
+      "post": {
+        "operationId": "startUpdate",
+        "summary": "Install a signed RAUC bundle from a URL (JSON body) or as a staged binary upload; returns 202 + an operation to poll",
+        "description": "Two request forms (docs/05 §5.1). application/json {\"url\", \"force\"}: an http(s) URL goes straight to RAUC InstallBundle (streamed verity install, no on-device staging) — the AD-021 version gate CANNOT run for URL installs (RAUC exposes no pre-install metadata for streamed sources; recorded v1 limitation — download first and POST the file to get the gate); an absolute on-device path (e.g. a kept staged upload) is inspected and gated like an upload. application/octet-stream: the raw bundle bytes are streamed to /data/.astro/staging (free-space checked, 507 when it does not fit), verified signature-first via InspectBundle, refused with 409 if the bundle version is lower than the running release (AD-021) unless force is set, then installed; a refused upload is KEPT in staging and the 409 detail names its path so {\"url\": \"<staged path>\", \"force\": true} can force it without re-uploading. Progress: poll the returned operation, or subscribe to /api/v1/events (update.progress, update.completed). Reboot is never automatic — follow with POST /api/v1/update/apply.",
+        "parameters": [
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "boolean", "default": false },
+            "description": "AD-021 downgrade-gate override for the octet-stream form, which has no JSON body to carry {\"force\": true}; accepted (OR-ed with the body field) on the JSON form too. Forced downgrades are logged and surfaced in update history."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InstallRequest" }
+            },
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "description": "Raw signed RAUC bundle bytes (.raucb, verity format — AD-010)."
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Install started; poll the operation or watch update.* events.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OperationRef" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": { "$ref": "#/components/responses/UpdateConflict" },
+          "502": { "$ref": "#/components/responses/RaucError" },
+          "503": { "$ref": "#/components/responses/RaucUnavailable" },
+          "507": { "$ref": "#/components/responses/InsufficientStorage" }
+        }
+      }
+    },
+    "/api/v1/update/apply": {
+      "post": {
+        "operationId": "applyUpdate",
+        "summary": "Reboot into the newly primary slot (docs/05 §5.1: reboot is never automatic; this is the explicit second step)",
+        "responses": {
+          "202": {
+            "description": "Apply accepted; the reboot is issued after this response is on the wire (same deferred discipline as the power actions).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PowerActionResult" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": { "$ref": "#/components/responses/NoPendingUpdate" },
+          "502": { "$ref": "#/components/responses/RaucError" },
+          "503": { "$ref": "#/components/responses/RaucUnavailable" }
+        }
+      }
+    },
+    "/api/v1/update/rollback": {
+      "post": {
+        "operationId": "rollbackUpdate",
+        "summary": "Mark the booted slot bad, make the other slot primary, reboot (docs/05 §5.1)",
+        "responses": {
+          "202": {
+            "description": "Rollback accepted; the reboot is issued after this response is on the wire.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PowerActionResult" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": { "$ref": "#/components/responses/NoRollbackTarget" },
+          "502": { "$ref": "#/components/responses/RaucError" },
+          "503": { "$ref": "#/components/responses/RaucUnavailable" }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "operationId": "getEvents",
+        "summary": "Server-sent events stream: typed events (update.progress, update.completed, network.wifi.state, ...) with Last-Event-ID replay from a 1024-event ring",
+        "description": "Responds 200 text/event-stream and holds the connection. Frames map to the Event schema: 'id:' = Event.id (monotonic from 1, never reused), 'event:' = Event.event_type, 'data:' = Event.payload (one self-contained JSON document). A comment line (': keepalive') is written during idle periods. Replay: send Last-Event-ID to receive retained events with greater ids before live delivery (an id older than the ring's oldest resumes from the oldest retained; 0 replays the whole ring; omit the header for live-only). Backpressure (docs/06 §7): at most 16 concurrent subscribers (503 beyond the cap); a subscriber the 1024-event ring laps is NOT dropped — it receives one 'event: overflow' marker frame and delivery resumes from the oldest retained event (the marker announces the gap).",
+        "parameters": [
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Standard SSE resume header: the last event id already seen (0 requests a full replay of the retained ring)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream; frame fields are documented by the Event schema.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "SSE wire format: 'id: <n>\\nevent: <type>\\ndata: <json>\\n\\n' frames, ': keepalive' comments while idle, an 'event: overflow' marker when the ring lapped this subscriber (delivery then resumes from the oldest retained event)."
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/EventStreamSaturated" }
+        }
+      }
+    },
+    "/api/v1/operations": {
+      "get": {
+        "operationId": "listOperations",
+        "summary": "All operations known to this daemon run, newest first (docs/06 §4 async model)",
+        "description": "The registry is in-memory and bounded (oldest finished operations evicted first); it does not survive a daemon restart — see the Operation schema for the restart re-attach contract.",
+        "responses": {
+          "200": {
+            "description": "Operations, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Operation" }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/v1/operations/{id}": {
+      "get": {
+        "operationId": "getOperation",
+        "summary": "One operation by id (op-<n>): state, progress, error",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operation snapshot.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Operation" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
     }
   },
   "components": {
@@ -121,8 +306,88 @@
           }
         }
       },
+      "BadRequest": {
+        "description": "Malformed request. Problem types: urn:astro:problem:bad-request — invalid JSON or unknown fields (AD-013 rejects them to surface client typos); urn:astro:problem:invalid-bundle — the uploaded/named bundle failed RAUC's signature-first InspectBundle verification.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "No such resource (problem type urn:astro:problem:not-found). For operations: the registry is in-memory, so ids from before a daemon restart no longer resolve (the Operation schema documents the re-attach contract).",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      },
+      "UpdateConflict": {
+        "description": "Install refused. Problem types: urn:astro:problem:update-downgrade-refused — the bundle's version is lower than the running release (or unknown) and the request did not carry force (AD-021 monotonic-version gate; the refusal is recorded in update history, and for uploads the detail names the kept staged path for the force flow); urn:astro:problem:update-in-progress — an install operation is already running (RAUC is single-flight).",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      },
+      "NoPendingUpdate": {
+        "description": "Apply refused. Problem types: urn:astro:problem:no-pending-update — no slot is pending activation, the primary slot is the booted slot (docs/06 §5.3: no-op error when none pending); urn:astro:problem:update-in-progress — RAUC is not idle yet, wait for the install operation to finish.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      },
+      "NoRollbackTarget": {
+        "description": "Rollback refused. Problem types: urn:astro:problem:no-rollback-target — the other slot has never held a release, so there is nothing to roll back to (docs/05 §5.1); urn:astro:problem:update-in-progress — RAUC is not idle yet.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      },
+      "InsufficientStorage": {
+        "description": "Bundle upload exceeds the free space available for staging under /data/.astro/staging plus a safety margin (problem type urn:astro:problem:insufficient-storage). The URL install form needs no staging and is unaffected.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      },
+      "RaucUnavailable": {
+        "description": "A required update backend is unreachable: urn:astro:problem:rauc-unavailable when the RAUC D-Bus connection is down (or was never established), urn:astro:problem:dinit-unavailable when an apply/rollback's reboot step cannot reach the dinit control socket. The daemon itself is healthy — retryable.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      },
+      "RaucError": {
+        "description": "RAUC rejected or garbled a D-Bus call (problem type urn:astro:problem:rauc-error): the transport is up but the backend answered with an error — the detail carries the D-Bus error name. 502 because astrod is a healthy gateway to an unhealthy backend.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      },
+      "EventStreamSaturated": {
+        "description": "SSE subscriber cap reached (16 concurrent — docs/06 §7 backpressure; problem type urn:astro:problem:overloaded). Retry after another subscriber disconnects.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      },
       "DinitUnavailable": {
         "description": "The dinit control socket could not be reached (problem type urn:astro:problem:dinit-unavailable). The daemon is healthy; the power-action mechanism is not — retryable.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      },
+      "NotImplemented": {
+        "description": "Reserved-endpoint response (problem type urn:astro:problem:not-implemented): used by namespaces documented as reserved (docs/06 §5.2 cellular) and by any routed endpoint whose subsystem is not yet wired in the running build.",
         "content": {
           "application/problem+json": {
             "schema": { "$ref": "#/components/schemas/Problem" }
@@ -156,14 +421,106 @@
       },
       "PowerActionResult": {
         "type": "object",
-        "description": "202 body for accepted power actions.",
+        "description": "202 body for accepted actions that end in a reboot/poweroff (power actions, update apply/rollback). These are deferred-shutdown actions, not tracked operations, so operation is null.",
         "properties": {
           "operation": {
             "type": ["string", "null"],
-            "description": "Operation resource URL for progress tracking (docs/06 §4); null until the operations subsystem lands"
+            "description": "Operation resource URL for progress tracking (docs/06 §4); null for plain deferred-shutdown actions"
           }
         },
         "required": ["operation"]
+      },
+      "UpdateStatus": {
+        "type": "object",
+        "description": "Response of GET /api/v1/update/status: rauc.Status (assembled from RAUC's GetSlotStatus, GetPrimary, and the BootSlot/Operation/LastError/Compatible properties) plus the daemon's AD-021 context — running release, pending flag, in-flight operation, and install history.",
+        "properties": {
+          "boot_slot": { "type": "string", "description": "Bootname of the booted slot (RAUC BootSlot property), e.g. \"A\"" },
+          "primary": { "type": ["string", "null"], "description": "Slot the bootloader tries first (GetPrimary); differs from the booted slot exactly when an installed update is pending apply. Null when the bootloader reports none." },
+          "operation": { "type": "string", "description": "Installer state: \"idle\", or \"installing\" while an install is in flight (non-idle right after daemon start triggers the docs/06 §7 re-attach)" },
+          "last_error": { "type": "string", "description": "RAUC LastError property; empty when the last install succeeded" },
+          "compatible": { "type": "string", "description": "This device's RAUC compatible string (docs/05 §6), e.g. \"astro-virt\"; bundles must match" },
+          "running_release": { "type": "string", "description": "The booted image's release version (os-release ASTRO_RELEASE) — the value the AD-021 monotonic-version gate compares candidate bundles against" },
+          "pending": { "type": "boolean", "description": "True when the primary slot is not the booted slot: an installed update awaits POST /api/v1/update/apply" },
+          "current_operation": { "type": ["string", "null"], "description": "Id (\"op-<n>\") of the in-flight install operation; null when none" },
+          "slots": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/SlotStatus" },
+            "description": "One entry per RAUC slot (boot and rootfs slots)"
+          },
+          "history": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/UpdateHistoryEntry" },
+            "description": "Install requests this daemon run handled, newest first, bounded (16); AD-021 refusals and forced installs are surfaced here"
+          }
+        },
+        "required": ["boot_slot", "primary", "operation", "last_error", "compatible", "running_release", "pending", "current_operation", "slots", "history"]
+      },
+      "UpdateHistoryEntry": {
+        "type": "object",
+        "description": "One install request in UpdateStatus.history (volatile, per daemon run).",
+        "properties": {
+          "operation": { "type": "string", "description": "Operation id (\"op-<n>\"); empty for refused requests — no operation was created" },
+          "version": { "type": "string", "description": "Bundle version from InspectBundle; empty when unknown (URL installs)" },
+          "source": { "type": "string", "enum": ["url", "upload", "path", "reattach"], "description": "How the bundle reached the daemon (reattach = restart re-attach to an in-flight RAUC install, docs/06 §7)" },
+          "forced": { "type": "boolean", "description": "AD-021: true when the request carried force and the downgrade gate was bypassed" },
+          "outcome": { "type": "string", "enum": ["installing", "succeeded", "failed", "refused"], "description": "Terminal state, or \"installing\" while in flight" }
+        },
+        "required": ["operation", "version", "source", "forced", "outcome"]
+      },
+      "SlotStatus": {
+        "type": "object",
+        "description": "One slot from RAUC GetSlotStatus, flattened to the fields the daemon serves; mirrors rauc.SlotStatus.",
+        "properties": {
+          "name": { "type": "string", "description": "Slot name, e.g. \"rootfs.0\"" },
+          "state": { "type": "string", "description": "\"booted\" | \"inactive\" | \"active\" (empty when RAUC omits the key)" },
+          "bundle_version": { "type": "string", "description": "Version of the bundle installed in the slot; empty when the slot was never written" },
+          "boot_status": { "type": "string", "description": "\"good\" | \"bad\" (bootloader-backed via the statusfile); empty when unknown" },
+          "boot_attempts_left": { "type": ["integer", "null"], "description": "Remaining bootloader boot attempts where the bootloader exposes them; null otherwise" },
+          "device": { "type": "string", "description": "Backing block device, e.g. \"/dev/disk/by-partlabel/rootfs.A\"" }
+        },
+        "required": ["name", "state", "bundle_version", "boot_status", "boot_attempts_left", "device"]
+      },
+      "InstallRequest": {
+        "type": "object",
+        "description": "JSON form of POST /api/v1/update: install from an http(s) URL (any server with Range support; RAUC streams verity bundles without on-device staging — docs/05 §3, AD-021 gate cannot run) or from an absolute on-device path (inspected + gated; this is also the force flow for a kept staged upload).",
+        "properties": {
+          "url": { "type": "string", "format": "uri", "description": "http(s) bundle URL handed to RAUC InstallBundle, or an absolute on-device bundle path (e.g. \"/data/.astro/staging/upload-1.raucb\")" },
+          "force": { "type": "boolean", "default": false, "description": "AD-021 override: allow installing a version lower than the running release (logged and surfaced in update history)" }
+        },
+        "required": ["url"],
+        "additionalProperties": false
+      },
+      "OperationRef": {
+        "type": "object",
+        "description": "202 body for accepted long-running work (AD-013 async model).",
+        "properties": {
+          "operation": { "type": "string", "description": "Operation resource path, e.g. \"/api/v1/operations/op-1\" — poll it, or match its id in update.* event payloads" }
+        },
+        "required": ["operation"]
+      },
+      "Operation": {
+        "type": "object",
+        "description": "One unit of long-running work (docs/06 §4); mirrors ops.Operation in the daemon. Ids are \"op-<n>\", monotonic per daemon run. The registry is volatile: after a daemon restart an in-flight RAUC install is re-attached under a NEW operation id (docs/06 §7), and pre-restart ids answer 404.",
+        "properties": {
+          "id": { "type": "string", "description": "\"op-<n>\"" },
+          "kind": { "type": "string", "enum": ["update_install", "wifi_scan"], "description": "What the operation does (wifi_scan lands with M3 phase 3)" },
+          "state": { "type": "string", "enum": ["pending", "running", "succeeded", "failed"] },
+          "progress": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percent complete; meaningful while running (RAUC progress percentage)" },
+          "message": { "type": "string", "description": "Human-readable current step, e.g. \"Copying image\"" },
+          "error": { "type": ["string", "null"], "description": "Failure detail when state is \"failed\"; null otherwise" },
+          "result": { "type": ["string", "null"], "description": "Outcome summary when state is \"succeeded\" (docs/06 §4 state/progress/error/result), e.g. the install's next step; null otherwise" }
+        },
+        "required": ["id", "kind", "state", "progress", "message", "error", "result"]
+      },
+      "Event": {
+        "type": "object",
+        "description": "Documents the SSE frames of GET /api/v1/events (the stream itself is text/event-stream, not JSON): id maps to the frame's 'id:' field, event_type to 'event:', payload to 'data:'. Mirrors events.Event in the daemon.",
+        "properties": {
+          "id": { "type": "integer", "minimum": 1, "description": "Monotonic, 1-based, never reused; usable as Last-Event-ID to resume the stream" },
+          "event_type": { "type": "string", "description": "Dotted type, e.g. \"update.progress\", \"update.completed\", \"network.wifi.state\", \"system.provisioned\"" },
+          "payload": { "type": "string", "description": "One self-contained JSON document; update.* payloads carry the operation id when applicable" }
+        },
+        "required": ["id", "event_type", "payload"]
       },
       "Problem": {
         "type": "object",

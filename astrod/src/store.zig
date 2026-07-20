@@ -11,6 +11,7 @@ const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
 const fsutil = @import("fsutil.zig");
+const sync = @import("sync.zig");
 
 pub const default_path = "/data/config/astro.json";
 pub const schema_version: u32 = 1;
@@ -56,6 +57,14 @@ pub const Store = struct {
     // Keeps string fields of `config` alive when they were parsed from disk;
     // null when `config` is all comptime defaults.
     parsed: ?std.json.Parsed(Config),
+    /// Connection threads read concurrently; mutations are exclusive.
+    /// Getters take the shared lock internally. A mutate-then-persist
+    /// sequence wraps itself in beginMutate()/endMutate() and calls
+    /// persistLocked() inside (persist() self-locks for standalone use).
+    /// String getters return slices into `config`; they stay valid because
+    /// the backing memory (`parsed`) is only replaced at load — a future
+    /// reload-in-place must copy instead.
+    mu: sync.RwLock = .{},
 
     /// Load the store. A missing file yields defaults (pre-firstboot
     /// device). A file with schema > schema_version is refused (see
@@ -89,24 +98,51 @@ pub const Store = struct {
         self.* = undefined;
     }
 
-    pub fn getSchema(self: *const Store) u32 {
+    pub fn getSchema(self: *Store) u32 {
+        self.mu.lockShared();
+        defer self.mu.unlockShared();
         return self.config.schema;
     }
 
-    pub fn getHostname(self: *const Store) []const u8 {
+    pub fn getHostname(self: *Store) []const u8 {
+        self.mu.lockShared();
+        defer self.mu.unlockShared();
         return self.config.hostname;
     }
 
-    pub fn getProvisioning(self: *const Store) []const u8 {
+    pub fn getProvisioning(self: *Store) []const u8 {
+        self.mu.lockShared();
+        defer self.mu.unlockShared();
         return self.config.system.provisioning;
     }
 
-    pub fn getLanExposure(self: *const Store) bool {
+    pub fn getLanExposure(self: *Store) bool {
+        self.mu.lockShared();
+        defer self.mu.unlockShared();
         return self.config.api.lan_exposure;
     }
 
-    pub fn getApi(self: *const Store) Config.Api {
+    pub fn getApi(self: *Store) Config.Api {
+        self.mu.lockShared();
+        defer self.mu.unlockShared();
         return self.config.api;
+    }
+
+    /// Take the exclusive lock for a config mutation + persistLocked()
+    /// sequence (PUT/PATCH handlers in stage 2+).
+    pub fn beginMutate(self: *Store) void {
+        self.mu.lock();
+    }
+
+    pub fn endMutate(self: *Store) void {
+        self.mu.unlock();
+    }
+
+    /// Standalone persist (no surrounding mutation): self-locking.
+    pub fn persist(self: *Store) !void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        try self.persistLocked();
     }
 
     /// Atomic persist: serialize → <path>.tmp (0640, fsync) → rename →
@@ -116,7 +152,8 @@ pub const Store = struct {
     /// astrod:astro-api 0710, so the unprivileged daemon can create the
     /// tmp file and rename; rewrites land 0640 astrod:astrod (the group
     /// is the daemon's primary group — sole member: the daemon).
-    pub fn persist(self: *const Store) !void {
+    /// Caller holds the exclusive lock (beginMutate or persist()).
+    pub fn persistLocked(self: *const Store) !void {
         var tmp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
         const tmp_path = try std.fmt.bufPrint(&tmp_path_buf, "{s}.tmp", .{self.path});
 

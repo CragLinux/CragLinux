@@ -5,6 +5,17 @@
 # depends-on at image assembly (M4). rauc-mark-good gains
 # "depends-on: boot-success" at M2 — if this milestone is never reached,
 # the bootloader's attempt counters fall back to the other slot.
+#
+# before login.target (M3 phase 2): astrod now depends-on dbus-daemon,
+# which itself is only "before: login.target" — without the same ordering
+# here, dinit reached login (and released the console) while astrod was
+# still coming up, so the "[  OK  ] boot-success" line never hit serial
+# (the milestone WAS reached — rauc-mark-good ran — but invisibly, which
+# broke the boot-smoke assertion and, more importantly, put the login
+# prompt ahead of the good-boot decision). Ordering only: on a broken
+# slot the milestone fails and login proceeds; the watchdog handles the
+# rest (AD-011).
+before: login.target
 
 type = internal
 depends-on: astrod

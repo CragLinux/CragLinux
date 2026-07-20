@@ -5,6 +5,17 @@
 # runs, the counters keep decrementing across reboots, and the
 # bootloader falls back to the other slot after 3 attempts.
 
+# before login.target (M3 phase 2, with boot-success's same clause):
+# dinit's console log stops at login.target (runs-on-console), and the
+# OK line of whatever starts LAST before the handover can race the
+# acquisition and vanish from serial. With mark-good ordered before
+# login, the boot-success line has flushed by the time the console is
+# released (mark-good spans real D-Bus work), and the login prompt only
+# appears once this boot is confirmed good — which is also the honest
+# ordering. On a bad slot boot-success fails, this never runs, and
+# login proceeds after the failure resolves (AD-011 watchdog rules).
+before: login.target
+
 type = scripted
 command = /usr/libexec/astro/mark-good
 depends-on: boot-success

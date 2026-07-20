@@ -7,6 +7,9 @@ const problem = @import("problem.zig");
 const system = @import("system.zig");
 const dinit = @import("dinit.zig");
 const store_mod = @import("store.zig");
+const update = @import("update.zig");
+const events = @import("events.zig");
+const ops = @import("ops.zig");
 
 /// Only the verbs the API uses (docs/06 §4); parse returns null for others
 /// so dispatch can answer 405 rather than crash on e.g. CONNECT.
@@ -24,10 +27,19 @@ pub const Method = enum {
 
 pub const Request = struct {
     method: Method,
-    /// Path only — query string already stripped by the HTTP layer.
+    /// Path only — the query string is split off by the HTTP layer.
     path: []const u8,
+    /// Raw query string without the '?' ("" when absent). Parsed by the
+    /// few handlers that document parameters (update.queryFlag).
+    query: []const u8 = "",
     authorization: ?[]const u8 = null,
+    /// SSE resume header (Last-Event-ID), threaded through for /events.
+    last_event_id: ?[]const u8 = null,
     body: []const u8 = "",
+    /// Set instead of `body` when the HTTP layer diverted a large
+    /// application/octet-stream upload straight to the staging directory
+    /// (POST /api/v1/update only): the staged bundle path.
+    staged_upload: ?[:0]const u8 = null,
 };
 
 pub const Response = struct {
@@ -42,11 +54,25 @@ pub const Context = struct {
     allocator: std.mem.Allocator,
     request: Request,
     store: *store_mod.Store,
+    /// Bound value of a trailing {param} route segment (e.g. the "op-3"
+    /// of GET /api/v1/operations/op-3); set by dispatch, slices into
+    /// request.path. Null on exact-match routes.
+    param: ?[]const u8 = null,
     /// Action the connection layer must run AFTER the response is on the
     /// wire. Power actions cannot run inline: dinit begins teardown (and
     /// kills astrod) immediately, so an inline SHUTDOWN raced the 202 and
     /// clients saw a truncated response (observed on qemu-armv7).
+    /// Per-connection by construction: each connection thread builds its
+    /// own Context, so deferred actions never cross threads.
     deferred: ?DeferredAction = null,
+    /// The daemon's event bus (null under router unit tests, which
+    /// construct no bus — GET /events answers 501 then).
+    event_bus: ?*events.EventBus = null,
+    /// Set by getEvents when the connection turns into an SSE stream: the
+    /// connection layer skips writeResponse and serves frames until the
+    /// client goes away, then cancels the subscription. Per-connection,
+    /// same discipline as `deferred`.
+    sse: ?*events.Subscription = null,
 };
 
 pub const DeferredAction = union(enum) {
@@ -62,21 +88,55 @@ pub const Route = struct {
 };
 
 /// Exported for the conformance test and future spec-driven codegen.
+/// Paths may end in exactly one "{param}" segment (OpenAPI syntax; the
+/// conformance test matches it verbatim against the spec's path key).
 pub const routes: []const Route = &.{
     .{ .method = .GET, .path = "/api/v1/system", .handler = getSystem },
     .{ .method = .POST, .path = "/api/v1/system/reboot", .handler = postReboot },
     .{ .method = .POST, .path = "/api/v1/system/poweroff", .handler = postPoweroff },
     .{ .method = .GET, .path = "/api/v1/openapi.json", .handler = getOpenapi },
+    // Stage-2 surface (docs/06 §5.3, §4): update group handlers live in
+    // update.zig; events/operations glue is below. When the backing
+    // subsystem is absent the update handlers answer 503
+    // rauc-unavailable and the events/operations handlers 501 (only unit
+    // tests run without a registry/event bus).
+    .{ .method = .GET, .path = "/api/v1/update/status", .handler = update.getUpdateStatus },
+    .{ .method = .POST, .path = "/api/v1/update", .handler = update.postUpdate },
+    .{ .method = .POST, .path = "/api/v1/update/apply", .handler = update.postUpdateApply },
+    .{ .method = .POST, .path = "/api/v1/update/rollback", .handler = update.postUpdateRollback },
+    .{ .method = .GET, .path = "/api/v1/events", .handler = getEvents },
+    .{ .method = .GET, .path = "/api/v1/operations", .handler = getOperations },
+    .{ .method = .GET, .path = "/api/v1/operations/{id}", .handler = getOperation },
 };
+
+/// Match a route path against a request path. Exact match, or — when the
+/// route ends in a "{param}" segment — prefix match binding the request's
+/// final segment (which must be non-empty and contain no further '/').
+/// Returns the bound param (null for exact routes), or null wrapped in
+/// no-match. Deliberately minimal: one trailing parameter only.
+fn matchPath(route_path: []const u8, req_path: []const u8) ?(?[]const u8) {
+    if (std.mem.endsWith(u8, route_path, "}")) {
+        const brace = std.mem.lastIndexOfScalar(u8, route_path, '{') orelse return null;
+        const prefix = route_path[0..brace]; // includes the trailing '/'
+        if (!std.mem.startsWith(u8, req_path, prefix)) return null;
+        const rest = req_path[prefix.len..];
+        if (rest.len == 0) return null;
+        if (std.mem.indexOfScalar(u8, rest, '/') != null) return null;
+        return rest;
+    }
+    if (std.mem.eql(u8, route_path, req_path)) return @as(?[]const u8, null);
+    return null;
+}
 
 /// Never returns an error: handler failures become 500 problem+json so the
 /// connection layer always has something well-formed to write.
 pub fn dispatch(ctx: *Context) Response {
     var path_known = false;
     for (routes) |route| {
-        if (std.mem.eql(u8, route.path, ctx.request.path)) {
+        if (matchPath(route.path, ctx.request.path)) |param| {
             path_known = true;
             if (route.method == ctx.request.method) {
+                ctx.param = param;
                 return route.handler(ctx) catch
                     problemResponse(ctx, .{
                         .type = "urn:astro:problem:internal",
@@ -114,7 +174,9 @@ pub fn problemResponse(ctx: *Context, p: problem.Problem) Response {
 // ---- v1 handlers -----------------------------------------------------------
 
 fn getSystem(ctx: *Context) anyerror!Response {
-    const info = system.collectWith(ctx.store.getProvisioning());
+    // Per-request arena allocation (thread-safe by construction; the old
+    // module-static buffers raced once the server went threaded).
+    const info = try system.collectWith(ctx.allocator, ctx.store.getProvisioning());
     return .{ .status = 200, .body = try std.json.Stringify.valueAlloc(ctx.allocator, info, .{}) };
 }
 
@@ -159,6 +221,64 @@ fn powerAction(ctx: *Context, t: dinit.ShutdownType) anyerror!Response {
 
 fn getOpenapi(_: *Context) anyerror!Response {
     return .{ .status = 200, .body = openapi_json };
+}
+
+/// 501 per docs/06 §5 practice for endpoints whose backing subsystem is
+/// not wired in the running build (in practice: unit tests, which
+/// construct no registry/event bus).
+fn notImplemented(ctx: *Context) anyerror!Response {
+    const detail = try std.fmt.allocPrint(
+        ctx.allocator,
+        "{t} {s}: the backing subsystem is not wired in this build",
+        .{ ctx.request.method, ctx.request.path },
+    );
+    return problemResponse(ctx, .{
+        .type = "urn:astro:problem:not-implemented",
+        .title = "Not Implemented",
+        .status = 501,
+        .detail = detail,
+    });
+}
+
+/// GET /api/v1/events — subscribe and flip the connection into SSE mode:
+/// the returned Response is a placeholder (the connection layer writes
+/// the stream head + frames itself once ctx.sse is set). Replay honors
+/// the Last-Event-ID header (docs/06 §7).
+fn getEvents(ctx: *Context) anyerror!Response {
+    const bus = ctx.event_bus orelse return notImplemented(ctx);
+    const sub = bus.subscribe(events.parseLastEventId(ctx.request.last_event_id)) catch |err| switch (err) {
+        error.TooManySubscribers => return problemResponse(ctx, .{
+            .type = "urn:astro:problem:overloaded",
+            .title = "Service Unavailable",
+            .status = 503,
+            .detail = "SSE subscriber limit (16) reached; retry after another consumer disconnects",
+        }),
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    ctx.sse = sub;
+    return .{ .status = 200, .content_type = events.sse_content_type, .body = "" };
+}
+
+/// GET /api/v1/operations — every operation this daemon run knows,
+/// newest first (docs/06 §4; the registry is volatile by contract).
+fn getOperations(ctx: *Context) anyerror!Response {
+    const reg = ops.global orelse return notImplemented(ctx);
+    const list = try reg.list(ctx.allocator);
+    return .{ .status = 200, .body = try std.json.Stringify.valueAlloc(ctx.allocator, list, .{}) };
+}
+
+/// GET /api/v1/operations/{id} — one operation; 404 for ids the volatile
+/// registry does not hold (including pre-restart ids, docs/06 §7).
+fn getOperation(ctx: *Context) anyerror!Response {
+    const reg = ops.global orelse return notImplemented(ctx);
+    const id = ctx.param.?;
+    const op = (try reg.get(ctx.allocator, id)) orelse return problemResponse(ctx, .{
+        .type = "urn:astro:problem:not-found",
+        .title = "Not Found",
+        .status = 404,
+        .detail = try std.fmt.allocPrint(ctx.allocator, "no operation {s} in this daemon run (the registry is in-memory and restarts empty)", .{id}),
+    });
+    return .{ .status = 200, .body = try std.json.Stringify.valueAlloc(ctx.allocator, op, .{}) };
 }
 
 /// The spec file (JSON-syntax YAML), served byte-for-byte.
@@ -213,6 +333,86 @@ test "dispatch answers 405 for known path with wrong method" {
     var ctx = testCtx(arena.allocator(), &st, .DELETE, "/api/v1/system");
     const resp = dispatch(&ctx);
     try std.testing.expectEqual(@as(u16, 405), resp.status);
+}
+
+test "matchPath: exact, trailing param, and rejections" {
+    try std.testing.expectEqual(@as(?[]const u8, null), matchPath("/api/v1/system", "/api/v1/system").?);
+    try std.testing.expect(matchPath("/api/v1/system", "/api/v1/systemx") == null);
+    const bound = matchPath("/api/v1/operations/{id}", "/api/v1/operations/op-3").?;
+    try std.testing.expectEqualStrings("op-3", bound.?);
+    // Empty and deeper segments do not match a single trailing param.
+    try std.testing.expect(matchPath("/api/v1/operations/{id}", "/api/v1/operations/") == null);
+    try std.testing.expect(matchPath("/api/v1/operations/{id}", "/api/v1/operations") == null);
+    try std.testing.expect(matchPath("/api/v1/operations/{id}", "/api/v1/operations/op-3/logs") == null);
+}
+
+test "unwired events/operations answer 501; param routes bind ctx.param" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var st = try testStore();
+    defer st.deinit();
+
+    // No event bus / registry is constructed under unit tests, so these
+    // routes take the notImplemented path. The /update/* handlers have
+    // their own no-manager (503) tests in update.zig.
+    const stub_cases = [_]struct { m: Method, p: []const u8 }{
+        .{ .m = .GET, .p = "/api/v1/events" },
+        .{ .m = .GET, .p = "/api/v1/operations" },
+        .{ .m = .GET, .p = "/api/v1/operations/op-3" },
+    };
+    for (stub_cases) |case| {
+        var ctx = testCtx(arena.allocator(), &st, case.m, case.p);
+        const resp = dispatch(&ctx);
+        try std.testing.expectEqual(@as(u16, 501), resp.status);
+        try std.testing.expectEqualStrings(problem.content_type, resp.content_type);
+        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:astro:problem:not-implemented") != null);
+    }
+
+    // The param binds; a deeper path under the param route is a 404.
+    var pctx = testCtx(arena.allocator(), &st, .GET, "/api/v1/operations/op-3");
+    _ = dispatch(&pctx);
+    try std.testing.expectEqualStrings("op-3", pctx.param.?);
+    var deep = testCtx(arena.allocator(), &st, .GET, "/api/v1/operations/op-3/logs");
+    try std.testing.expectEqual(@as(u16, 404), dispatch(&deep).status);
+    // Wrong method on a stub path is 405, proving path_known still works.
+    var wrong = testCtx(arena.allocator(), &st, .DELETE, "/api/v1/update/status");
+    try std.testing.expectEqual(@as(u16, 405), dispatch(&wrong).status);
+}
+
+test "operations routes serve the registry when wired" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var st = try testStore();
+    defer st.deinit();
+
+    var reg = ops.Registry.init(std.testing.allocator);
+    defer reg.deinit();
+    ops.global = &reg;
+    defer ops.global = null;
+    const id = try reg.create(.update_install);
+    reg.update(id, .running, 40, "Copying image");
+
+    var list_ctx = testCtx(arena.allocator(), &st, .GET, "/api/v1/operations");
+    const list_resp = dispatch(&list_ctx);
+    try std.testing.expectEqual(@as(u16, 200), list_resp.status);
+    var parsed = try std.json.parseFromSlice(std.json.Value, arena.allocator(), list_resp.body, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.array.items.len);
+    const op0 = parsed.value.array.items[0].object;
+    try std.testing.expectEqualStrings("op-1", op0.get("id").?.string);
+    try std.testing.expectEqualStrings("update_install", op0.get("kind").?.string);
+    try std.testing.expectEqualStrings("running", op0.get("state").?.string);
+    try std.testing.expectEqual(@as(i64, 40), op0.get("progress").?.integer);
+    // The @"error" field must serialize under the wire name "error".
+    try std.testing.expect(op0.get("error") != null);
+    try std.testing.expect(op0.get("error").? == .null);
+
+    var one_ctx = testCtx(arena.allocator(), &st, .GET, "/api/v1/operations/op-1");
+    try std.testing.expectEqual(@as(u16, 200), dispatch(&one_ctx).status);
+    var missing_ctx = testCtx(arena.allocator(), &st, .GET, "/api/v1/operations/op-99");
+    const missing = dispatch(&missing_ctx);
+    try std.testing.expectEqual(@as(u16, 404), missing.status);
+    try std.testing.expect(std.mem.indexOf(u8, missing.body, "urn:astro:problem:not-found") != null);
 }
 
 test "power actions answer 503 problem+json when dinit is unreachable" {
