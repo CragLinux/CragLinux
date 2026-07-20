@@ -23,6 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "${SCRIPT_DIR}/common.sh"
 source "${SCRIPT_DIR}/rootfs.sh"
+source "${SCRIPT_DIR}/astrod.sh"
 
 : "${PROJECT_ROOT:?rootfs-stage.sh must be launched by build-inner.sh}"
 : "${ROOTFS_DIR:?}" "${BOARD:?}" "${VARIANT:?}" "${BOARD_ARCH:?}"
@@ -56,6 +57,12 @@ generate_rauc_config "$ROOTFS_DIR" "$BOARD_CONFIG_JSON"
 
 # Baked astrod defaults for the firstboot oneshot — docs/06 §2, docs/07 §3
 generate_astro_defaults "$ROOTFS_DIR" "$BOARD_CONFIG_JSON"
+
+# Image identity for GET /system (system.zig prefers ASTRO_* keys)
+stamp_os_release "$ROOTFS_DIR" "$BOARD" "$VARIANT"
+
+# Build + install the astrod/astroctl binary (docs/06, AD-012)
+build_astrod "$BOARD_ARCH" "$ROOTFS_DIR"
 
 # Run hooks
 run_hooks "$ROOTFS_DIR" "$BOARD_DIR"

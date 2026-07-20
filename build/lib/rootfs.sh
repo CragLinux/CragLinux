@@ -553,6 +553,33 @@ generate_rauc_config() {
 # exists in the build container; the image has no jq).
 ##############################################################################
 
+# Stamp image identity into os-release: astrod's system info prefers
+# ASTRO_BOARD/ASTRO_VARIANT/ASTRO_RELEASE over the generic keys, so
+# GET /system reports the real board/variant instead of "unknown".
+# ASTRO_RELEASE mirrors the image/bundle version (ASTRO_VERSION, the same
+# source image.sh/bundle.sh use) so API clients and RAUC agree on it.
+#
+# The canonical document is /usr/lib/os-release, NOT /etc/os-release:
+# base-files ships a tmpfiles `L+ /etc/os-release -> ../usr/lib/os-release`
+# that force-recreates the symlink in the /etc overlay every boot, so a
+# regular file baked at /etc/os-release silently vanishes at runtime (found
+# by in-guest validation — the old common-overlay copy there was never
+# actually served). The Astro document therefore lives in the common
+# overlay at usr/lib/os-release and is stamped here.
+stamp_os_release() {
+    local rootfs_dir="$1" board="$2" variant="$3"
+    local osr="${rootfs_dir}/usr/lib/os-release"
+    [ -f "$osr" ] || { log_warn "no /usr/lib/os-release to stamp"; return 0; }
+
+    sed -i '/^ASTRO_/d' "$osr"
+    {
+        echo "ASTRO_BOARD=${board}"
+        echo "ASTRO_VARIANT=${variant}"
+        echo "ASTRO_RELEASE=${ASTRO_VERSION:-0.0.0-dev}"
+    } >> "$osr"
+    log_info "os-release stamped: ASTRO_BOARD=${board} ASTRO_VARIANT=${variant} ASTRO_RELEASE=${ASTRO_VERSION:-0.0.0-dev}"
+}
+
 generate_astro_defaults() {
     local rootfs_dir="$1"
     local board_config_json="$2"

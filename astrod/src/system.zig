@@ -1,0 +1,257 @@
+//! System info collection (GET /api/v1/system, docs/06 §5.1).
+//!
+//! Sources: /etc/os-release (identity), /proc/cmdline (RAUC booted slot),
+//! /proc/uptime, /etc/machine-id. All reads are fail-soft: a missing or
+//! malformed source degrades one field to its fallback, never the endpoint.
+
+const std = @import("std");
+const fsutil = @import("fsutil.zig");
+
+pub const SystemInfo = struct {
+    board: []const u8,
+    variant: []const u8,
+    release: []const u8,
+    /// null = no rauc.slot= on the kernel cmdline: a direct kernel boot
+    /// (dev QEMU) rather than a RAUC-managed slot. Serialized as JSON null.
+    booted_slot: ?[]const u8,
+    machine_id: []const u8,
+    uptime_s: u64,
+    provisioning: []const u8,
+    health: []const u8,
+};
+
+/// TODO(fill): reconciler summary (docs/06 §2) replaces this constant.
+pub const health_ok = "ok";
+
+const os_release_path = "/etc/os-release";
+const cmdline_path = "/proc/cmdline";
+const uptime_path = "/proc/uptime";
+const machine_id_path = "/etc/machine-id";
+const fallback = "unknown";
+
+// collect() is zero-arg by contract, so file-derived strings persist in
+// module statics rather than caller allocations. Safe because main.zig
+// serves one connection at a time and serializes the result before the
+// next request; revisit if the daemon goes concurrent.
+var board_buf: [64]u8 = undefined;
+var variant_buf: [64]u8 = undefined;
+var release_buf: [64]u8 = undefined;
+var slot_buf: [32]u8 = undefined;
+var machine_id_buf: [64]u8 = undefined;
+
+/// Store-less variant: provisioning reads as "factory", matching the store
+/// default for a device with no config document. The wired handler should
+/// call collectWith(store.getProvisioning()) instead.
+pub fn collect() SystemInfo {
+    return collectWith("factory");
+}
+
+pub fn collectWith(provisioning: []const u8) SystemInfo {
+    var file_buf: [4096]u8 = undefined;
+
+    var board: []const u8 = fallback;
+    var variant: []const u8 = fallback;
+    var release: []const u8 = fallback;
+    if (fsutil.readFileBounded(os_release_path, &file_buf)) |text| {
+        const id = parseOsRelease(text);
+        if (id.board) |v| board = intern(&board_buf, v);
+        if (id.variant) |v| variant = intern(&variant_buf, v);
+        if (id.release) |v| release = intern(&release_buf, v);
+    } else |_| {}
+
+    var booted_slot: ?[]const u8 = null;
+    if (fsutil.readFileBounded(cmdline_path, &file_buf)) |text| {
+        if (parseBootedSlot(text)) |v| booted_slot = intern(&slot_buf, v);
+    } else |_| {}
+
+    var machine_id: []const u8 = fallback;
+    if (fsutil.readFileBounded(machine_id_path, &file_buf)) |text| {
+        const trimmed = std.mem.trim(u8, text, " \t\r\n");
+        if (trimmed.len > 0) machine_id = intern(&machine_id_buf, trimmed);
+    } else |_| {}
+
+    return .{
+        .board = board,
+        .variant = variant,
+        .release = release,
+        .booted_slot = booted_slot,
+        .machine_id = machine_id,
+        .uptime_s = uptimeSeconds(),
+        .provisioning = provisioning,
+        .health = health_ok,
+    };
+}
+
+pub const OsReleaseInfo = struct {
+    board: ?[]const u8 = null,
+    variant: ?[]const u8 = null,
+    release: ?[]const u8 = null,
+};
+
+/// os-release KEY=VALUE lines, values optionally double-quoted. Explicit
+/// ASTRO_* keys win over the generic fields so images can stamp board and
+/// variant identity without repurposing standard keys. The rootfs stage
+/// stamps them into /usr/lib/os-release (the canonical document —
+/// /etc/os-release is a tmpfiles-recreated symlink to it; see
+/// stamp_os_release in build/lib/rootfs.sh). Returned slices point into
+/// `text`.
+pub fn parseOsRelease(text: []const u8) OsReleaseInfo {
+    var info: OsReleaseInfo = .{};
+    var astro_variant: ?[]const u8 = null;
+    var astro_release: ?[]const u8 = null;
+    var generic_variant: ?[]const u8 = null;
+    var version_id: ?[]const u8 = null;
+
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (line.len == 0 or line[0] == '#') continue;
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const key = line[0..eq];
+        const value = unquote(line[eq + 1 ..]);
+        if (value.len == 0) continue;
+
+        if (std.mem.eql(u8, key, "ASTRO_BOARD")) {
+            info.board = value;
+        } else if (std.mem.eql(u8, key, "ASTRO_VARIANT")) {
+            astro_variant = value;
+        } else if (std.mem.eql(u8, key, "ASTRO_RELEASE")) {
+            astro_release = value;
+        } else if (std.mem.eql(u8, key, "VARIANT")) {
+            generic_variant = value;
+        } else if (std.mem.eql(u8, key, "VERSION_ID")) {
+            version_id = value;
+        }
+    }
+    info.variant = astro_variant orelse generic_variant;
+    info.release = astro_release orelse version_id;
+    return info;
+}
+
+fn unquote(v: []const u8) []const u8 {
+    if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"') return v[1 .. v.len - 1];
+    return v;
+}
+
+/// rauc.slot=<name> from the kernel cmdline (RAUC's uboot/grub handlers
+/// both inject it). Whitespace-tokenized exact-prefix match so keys like
+/// "notrauc.slot=" cannot false-positive. Returned slice points into
+/// `cmdline`.
+pub fn parseBootedSlot(cmdline: []const u8) ?[]const u8 {
+    const key = "rauc.slot=";
+    var tokens = std.mem.tokenizeAny(u8, cmdline, " \t\n");
+    while (tokens.next()) |tok| {
+        if (std.mem.startsWith(u8, tok, key) and tok.len > key.len) {
+            return tok[key.len..];
+        }
+    }
+    return null;
+}
+
+/// First field of /proc/uptime ("123.45 67.89\n") truncated to whole
+/// seconds; null on malformed input.
+pub fn parseUptimeSeconds(text: []const u8) ?u64 {
+    const end = std.mem.indexOfAny(u8, text, ". \t\n") orelse text.len;
+    if (end == 0) return null;
+    return std.fmt.parseInt(u64, text[0..end], 10) catch null;
+}
+
+fn uptimeSeconds() u64 {
+    var buf: [64]u8 = undefined;
+    if (fsutil.readFileBounded(uptime_path, &buf)) |text| {
+        if (parseUptimeSeconds(text)) |s| return s;
+    } else |_| {}
+    // Fallback: CLOCK_BOOTTIME, the clock /proc/uptime derives from.
+    // Raw syscall: Zig 0.16 removed posix.clock_gettime; Linux-only is fine.
+    const linux = std.os.linux;
+    var ts: linux.timespec = undefined;
+    if (linux.errno(linux.clock_gettime(.BOOTTIME, &ts)) != .SUCCESS) return 0;
+    return @intCast(@max(0, ts.sec));
+}
+
+/// Copy into a static buffer (truncating: identity strings are short, and
+/// a truncated field beats a dangling slice into a dead stack buffer).
+fn intern(dst: []u8, src: []const u8) []const u8 {
+    const n = @min(dst.len, src.len);
+    @memcpy(dst[0..n], src[0..n]);
+    return dst[0..n];
+}
+
+// ---- tests -----------------------------------------------------------------
+
+test "parseOsRelease handles the shipped common-overlay document" {
+    // Verbatim from boards/common/overlay/usr/lib/os-release (pre-stamp).
+    const fixture =
+        \\NAME="Astro Linux"
+        \\ID=astro
+        \\ID_LIKE=chimera
+        \\VERSION_ID=0.1.0
+        \\PRETTY_NAME="Astro Linux 0.1.0"
+        \\HOME_URL="https://github.com/tierone/clang-cross"
+        \\
+    ;
+    const id = parseOsRelease(fixture);
+    try std.testing.expect(id.board == null);
+    try std.testing.expect(id.variant == null);
+    try std.testing.expectEqualStrings("0.1.0", id.release.?);
+}
+
+test "parseOsRelease prefers ASTRO_* keys and unquotes values" {
+    const fixture =
+        \\VERSION_ID=0.1.0
+        \\VARIANT="Development"
+        \\ASTRO_BOARD=qemu-aarch64
+        \\ASTRO_VARIANT="dev"
+        \\ASTRO_RELEASE=0.2.0-rc1
+        \\# comment line
+        \\MALFORMED_NO_EQUALS
+        \\EMPTY=
+        \\
+    ;
+    const id = parseOsRelease(fixture);
+    try std.testing.expectEqualStrings("qemu-aarch64", id.board.?);
+    try std.testing.expectEqualStrings("dev", id.variant.?);
+    try std.testing.expectEqualStrings("0.2.0-rc1", id.release.?);
+}
+
+test "parseOsRelease falls back to VARIANT when ASTRO_VARIANT is absent" {
+    const id = parseOsRelease("VARIANT=prod\nVERSION_ID=1.0.0\n");
+    try std.testing.expectEqualStrings("prod", id.variant.?);
+    try std.testing.expectEqualStrings("1.0.0", id.release.?);
+}
+
+test "parseBootedSlot extracts rauc.slot from the cmdline" {
+    try std.testing.expectEqualStrings(
+        "A",
+        parseBootedSlot("console=ttyAMA0,115200 rauc.slot=A root=PARTLABEL=system-a rw\n").?,
+    );
+    // Slot token at the very end, newline-terminated.
+    try std.testing.expectEqualStrings("B", parseBootedSlot("quiet rauc.slot=B\n").?);
+    // Direct boot: no slot key → null.
+    try std.testing.expect(parseBootedSlot("console=ttyAMA0 root=/dev/vda2 rw\n") == null);
+    // Prefix must match a whole token key; empty value is not a slot.
+    try std.testing.expect(parseBootedSlot("notrauc.slot=X\n") == null);
+    try std.testing.expect(parseBootedSlot("rauc.slot= quiet\n") == null);
+}
+
+test "parseUptimeSeconds truncates to whole seconds" {
+    try std.testing.expectEqual(@as(u64, 123), parseUptimeSeconds("123.45 67.89\n").?);
+    try std.testing.expectEqual(@as(u64, 0), parseUptimeSeconds("0.00 0.00\n").?);
+    try std.testing.expect(parseUptimeSeconds("garbage\n") == null);
+    try std.testing.expect(parseUptimeSeconds("") == null);
+}
+
+test "collect returns populated fields with real uptime" {
+    const info = collect();
+    try std.testing.expect(info.board.len > 0);
+    try std.testing.expect(info.release.len > 0);
+    try std.testing.expectEqualStrings(health_ok, info.health);
+    try std.testing.expectEqualStrings("factory", info.provisioning);
+    // Uptime is real; on any running system it is > 0.
+    try std.testing.expect(info.uptime_s > 0);
+}
+
+test "collectWith threads the store's provisioning state through" {
+    const info = collectWith("provisioned");
+    try std.testing.expectEqualStrings("provisioned", info.provisioning);
+}

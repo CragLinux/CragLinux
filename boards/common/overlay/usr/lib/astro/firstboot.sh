@@ -17,7 +17,9 @@
 #   1. API bearer token -> /data/config/api-token (0640 root:astro-api)
 #   2. initial /data/config/astro.json seeded from the image's baked
 #      defaults (/etc/astro/astro-defaults.json, rendered at rootfs
-#      assembly from the board TOML [api] section)
+#      assembly from the board TOML [api] section), owned astrod 0600 so
+#      the unprivileged daemon can rewrite it atomically (tmp + rename
+#      needs write on the file's directory, hence the /data/config chown)
 #   3. stamps /data/.astro/{firstboot-done,schema-version}
 
 DINIT_SERVICE=firstboot
@@ -36,6 +38,15 @@ echo "firstboot: initializing /data (first boot of this data lifetime)" > /dev/c
 umask 077
 mkdir -p /data/config /data/.astro
 
+# /data/config is the unprivileged daemon's working directory (docs/02
+# §7): owner astrod (atomic store rewrites create+rename entries here),
+# group astro-api traverse-only (0710) so socket clients can be handed
+# paths under it without reading the token. The names are baked into
+# /etc/passwd at image assembly (05-platform-users hook); numeric
+# fallback in case name resolution is unavailable this early.
+chown astrod:astro-api /data/config 2>/dev/null || chown 300:301 /data/config || :
+chmod 0710 /data/config
+
 # 1. API bearer token (docs/06 §6): 256 bits, hex
 if [ ! -f /data/config/api-token ]; then
     tok=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
@@ -48,8 +59,9 @@ fi
 #    forward from here — docs/05 §7)
 if [ ! -f /data/config/astro.json ] && [ -f /etc/astro/astro-defaults.json ]; then
     cp /etc/astro/astro-defaults.json /data/config/astro.json.tmp
-    chmod 0640 /data/config/astro.json.tmp
-    chown root:astro-api /data/config/astro.json.tmp 2>/dev/null || :
+    chmod 0600 /data/config/astro.json.tmp
+    chown astrod /data/config/astro.json.tmp 2>/dev/null || \
+        chown 300 /data/config/astro.json.tmp || :
     sync
     mv /data/config/astro.json.tmp /data/config/astro.json
 fi

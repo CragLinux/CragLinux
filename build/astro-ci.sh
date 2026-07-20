@@ -110,9 +110,21 @@ step "lint-config" lint_config
 step "lint-zig"    lint_zig
 
 ##############################################################################
-# 2. astrod unit tests — M3
+# 2. astrod unit tests + binary budget (docs/06 §3)
 ##############################################################################
-skip "astrod-unit" "astrod lands at M3"
+astrod_unit() {
+    # Unit/conformance tests with the container's pinned Zig, then the
+    # docs/06 §3 budget: static x86_64 ReleaseSafe binary <= 8 MiB (the
+    # same bound build_astrod enforces per-board at image assembly).
+    in_container 'cd astrod \
+        && zig build test --cache-dir /workspace/build/state/zig-cache-ci \
+        && zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSafe \
+            --cache-dir /workspace/build/state/zig-cache-ci --prefix /tmp/astrod-budget \
+        && size=$(stat -c %s /tmp/astrod-budget/bin/astrod) \
+        && echo "astrod x86_64-linux-musl ReleaseSafe: ${size} bytes" \
+        && [ "$size" -le $((8 * 1024 * 1024)) ]'
+}
+step "astrod-unit" astrod_unit
 
 ##############################################################################
 # 3+4. Per-board: build (dev + prod, image + bundle) -> boot-smoke -> AD-020
@@ -141,7 +153,7 @@ done
 ##############################################################################
 # 5+6. astrod API suite (M3), external-tree example (M4)
 ##############################################################################
-skip "astrod-api"    "astrod lands at M3"
+skip "astrod-api"    "API suite (hwsim rig) lands at M3 phase 3"
 skip "external-tree" "external-tree contract lands at M4"
 
 ##############################################################################

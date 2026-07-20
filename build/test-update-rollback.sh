@@ -196,8 +196,8 @@ echo "[STEP] Building poisoned bundle (astrod health check sabotaged)..."
 PW="${OUT}/image-work/poison"
 rm -rf "$PW"; mkdir -p "$PW"
 cp --reflink=auto "${OUT}/image-work/rootfs.ext4" "${PW}/rootfs.img"
-# remove the astrod stub -> astrod fails -> boot-success unreachable
-debugfs -w -R "rm /usr/lib/astro/astrod-stub.sh" "${PW}/rootfs.img" >/dev/null 2>&1
+# remove the astrod binary -> astrod fails -> boot-success unreachable
+debugfs -w -R "rm /usr/bin/astrod" "${PW}/rootfs.img" >/dev/null 2>&1
 cp --reflink=auto "${OUT}/image-work/boot.vfat" "${PW}/boot.vfat"
 COMPAT=$(python3 "${SCRIPT_DIR}/lib/config.py" board "${PROJECT_ROOT}/boards/${BOARD}/board.toml" --format=json | jq -r '.rauc.compatible')
 cat > "${PW}/manifest.raucm" <<EOF

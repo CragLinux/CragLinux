@@ -13,6 +13,7 @@ install = [
     # which does not cross-build (GAP §3.2).
     "openssh",
     "openssh-dinit",
+    "curl",            # dev tooling: exercise astrod's API by hand (docs/06 §8)
     "opendoas",
     "nano",
     "less",

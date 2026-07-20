@@ -1,0 +1,181 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "astrod Device Configuration API",
+    "description": "Local HTTP API for Astro devices (docs/06, AD-013). Phase 1 surface only: system summary, reboot/poweroff actions, and this document — the spec documents what is implemented, nothing aspirational. Authored in JSON syntax (valid YAML) so the file is served verbatim at GET /api/v1/openapi.json and parsed by std.json in the route conformance test.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost",
+      "description": "Unix socket /run/astro/astrod.sock — the default surface. Access is gated by membership in the astro-api group (filesystem permission on the socket); no bearer token is required. Example: curl --unix-socket /run/astro/astrod.sock http://localhost/api/v1/system"
+    },
+    {
+      "url": "http://127.0.0.1:8080",
+      "description": "Loopback TCP surface; every request requires the bearer token. Port 8080 rather than docs/06's :80 because astrod runs unprivileged (recorded deviation)."
+    }
+  ],
+  "security": [{ "bearerToken": [] }],
+  "paths": {
+    "/api/v1/system": {
+      "get": {
+        "operationId": "getSystem",
+        "summary": "System summary: board, variant, release, booted slot, uptime, provisioning state, health",
+        "responses": {
+          "200": {
+            "description": "System information",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SystemInfo" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/v1/system/reboot": {
+      "post": {
+        "operationId": "rebootSystem",
+        "summary": "Reboot via dinit's control-socket SHUTDOWN command",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PowerActionRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Reboot accepted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PowerActionResult" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/DinitUnavailable" }
+        }
+      }
+    },
+    "/api/v1/system/poweroff": {
+      "post": {
+        "operationId": "poweroffSystem",
+        "summary": "Power off via dinit's control-socket SHUTDOWN command",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PowerActionRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Poweroff accepted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PowerActionResult" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/DinitUnavailable" }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenapi",
+        "summary": "This OpenAPI document, served byte-for-byte",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document (this file)",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Token generated at firstboot into /data/config/api-token (0640, group astro-api). Required on the 127.0.0.1 TCP surface; a missing token file fails closed (401). Requests over the unix socket /run/astro/astrod.sock are pre-authorized by astro-api group membership at connect() time and need no token (AD-014)."
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Missing or invalid bearer token. Enforced on the TCP surface only; unix-socket peers are authorized by group membership.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      },
+      "DinitUnavailable": {
+        "description": "The dinit control socket could not be reached (problem type urn:astro:problem:dinit-unavailable). The daemon is healthy; the power-action mechanism is not — retryable.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "SystemInfo": {
+        "type": "object",
+        "description": "Response of GET /api/v1/system; mirrors system.SystemInfo in the daemon (field parity enforced by the conformance test).",
+        "properties": {
+          "board": { "type": "string", "description": "Board identity, e.g. qemu-aarch64 (placeholder until astro-release parsing lands)" },
+          "variant": { "type": "string", "description": "Image variant, e.g. dev or prod" },
+          "release": { "type": "string", "description": "Astro release version" },
+          "booted_slot": { "type": ["string", "null"], "description": "RAUC slot currently booted, from rauc.slot= on the kernel cmdline; null on a direct kernel boot (dev QEMU) with no RAUC-managed slot" },
+          "machine_id": { "type": "string", "description": "Stable per-device identity from /etc/machine-id" },
+          "uptime_s": { "type": "integer", "minimum": 0, "description": "Whole seconds since boot (/proc/uptime, CLOCK_BOOTTIME-derived so suspended time counts)" },
+          "provisioning": { "type": "string", "description": "Provisioning state machine summary (docs/07 §4)" },
+          "health": { "type": "string", "description": "Reconciler health summary" }
+        },
+        "required": ["board", "variant", "release", "booted_slot", "machine_id", "uptime_s", "provisioning", "health"]
+      },
+      "PowerActionRequest": {
+        "type": "object",
+        "description": "Optional body for reboot/poweroff. Phase 1 accepts and ignores it; delay is honored once the dinit client lands.",
+        "properties": {
+          "delay": { "type": "integer", "minimum": 0, "description": "Seconds to wait before executing; absent or 0 means immediately" }
+        },
+        "additionalProperties": false
+      },
+      "PowerActionResult": {
+        "type": "object",
+        "description": "202 body for accepted power actions.",
+        "properties": {
+          "operation": {
+            "type": ["string", "null"],
+            "description": "Operation resource URL for progress tracking (docs/06 §4); null until the operations subsystem lands"
+          }
+        },
+        "required": ["operation"]
+      },
+      "Problem": {
+        "type": "object",
+        "description": "RFC 7807 problem details (AD-013). type is a stable URN per error class, e.g. urn:astro:problem:not-found.",
+        "properties": {
+          "type": { "type": "string" },
+          "title": { "type": "string" },
+          "status": { "type": "integer" },
+          "detail": { "type": "string" }
+        },
+        "required": ["type", "title", "status"]
+      }
+    }
+  }
+}

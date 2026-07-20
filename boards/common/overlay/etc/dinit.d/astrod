@@ -1,10 +1,28 @@
-# Astro: astrod, currently the M1 health-check stub (docs/11 M1; the real
-# Zig daemon replaces the command at M3, keeping this graph position:
-# docs/02 §5.1). Scripted: "started" means the health check passed.
-# depends-on data-mount so the mutable-state layer is up first (already
-# started by the early graph; the hard dep also fails astrod — and thus
-# boot-success — if data-mount failed).
+# Astro: astrod, the device configuration API daemon (docs/06, M3 — the
+# real Zig daemon in the graph position the M1 health-check stub held,
+# docs/02 §5.1). Runs unprivileged (docs/02 §7): listeners are
+# /run/astro/astrod.sock (gated by the astro-api group on the parent dir)
+# and 127.0.0.1:8080 (bearer token; recorded deviation from docs/06's :80).
+#
+# "started" = readiness: the daemon writes one byte to fd 4 once both
+# listeners are bound (--ready-fd), so boot-success — and rauc-mark-good
+# behind it — only fire when the API is actually reachable.
+#
+# depends-on rationale:
+#   data-mount    hard: mutable-state layer failure must fail astrod and,
+#                 through it, boot-success (rollback semantics, AD-011)
+#   firstboot     bakes /data/config/{api-token,astro.json} before the
+#                 daemon first reads them
+#   local.target  orders early-tmpfiles first: it creates /run/astro
+#                 (tmpfiles.d/astrod.conf) and opens /run/dinitctl to the
+#                 astrod group for the reboot/poweroff endpoints
 
-type = scripted
-command = /usr/lib/astro/astrod-stub.sh
+type = process
+command = /usr/bin/astrod --ready-fd=4
+ready-notification = pipefd:4
+run-as = astrod
+restart = true
+logfile = /var/log/astrod.log
 depends-on: data-mount
+depends-on: firstboot
+depends-on: local.target

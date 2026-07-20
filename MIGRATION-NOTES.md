@@ -932,3 +932,63 @@ subpackage symlinks, and the tree reset removes generated ones);
 Chimera's lint forbids /usr/libexec in packages (gen-host-keys lives in
 /usr/lib/openssh; the overlay's /usr/libexec/astro/mark-good is
 image-level, not packaged, per docs/05 §4).
+
+## 15. M3 phase 1: real astrod aboard — walking skeleton on the image (2026-07-20)
+
+The Zig daemon (astrod/ — see docs/06) replaces the M1 health-check stub
+in the same graph position; `astroctl` ships as a multi-call symlink.
+Build integration: `build/lib/astrod.sh` (`build_astrod`) cross-builds
+ReleaseSafe static musl binaries with the container's pinned Zig inside
+the rootfs stage (no nested container), asserts no-INTERP + the docs/06
+§3 ≤ 8 MiB budget, and installs `/usr/bin/astrod` + `astroctl` symlink.
+Observed sizes: armv7hf 3.62 MiB, aarch64 4.10 MiB, x86_64 4.16 MiB.
+CI: `astrod-unit` now real (container `zig build test` + x86_64 budget
+assertion); `astrod-api` stays skipped until the phase-3 rig.
+
+Verified on qemu-armv7 dev in-guest (serial:
+`build/state/logs/astrod-validate.log`): `astroctl system`, both API
+surfaces (unix socket sans token; 127.0.0.1:8080 bearer token, 401
+problem+json without), `GET /openapi.json`, and `astroctl reboot` →
+clean dinit teardown → U-Boot → boot-success again. Boot-smoke green
+(zero FAILED) with readiness-gated astrod.
+
+### Deviations from the docs (recorded, revisit markers inline)
+
+- **Socket path** `/run/astro/astrod.sock` (docs/06 says
+  `/run/astrod.sock`): the tmpfiles.d-created parent dir
+  (0750 astrod:astro-api) is the group gate an unprivileged daemon can
+  own. `/run/astro` is shared with bootenv-mount's `bootenv/` mount —
+  tmpfiles re-owns the dir it already created.
+- **Localhost port 8080** (docs/06 says :80): uid 300 cannot bind 80;
+  revisit via dinit socket passing if :80 matters.
+- **`/run/dinitctl` group-opened to `astrod`** (dinit creates it 0600
+  root): tmpfiles `z /run/dinitctl 0660 root astrod` — timing safe
+  because dinit opens the socket at `early-root-rw.target`
+  (options: starts-rwfs → rootfs_is_rw()), strictly before
+  early-tmpfiles. Deliberately the daemon's primary group, NOT
+  astro-api: app users in astro-api must not get direct init control
+  (docs/06 §5.4).
+- **Reboot mechanism is dinit's control-socket SHUTDOWN command**, not
+  the docs/02 §7 `sys-reboot`/`sys-poweroff` oneshots: dinit-chimera
+  ships no such services (`/usr/bin/reboot` IS dinit's shutdown
+  client). The SHUTDOWN is issued *after* the 202 hits the wire
+  (router Context.deferred): issued inline, dinit killed astrod before
+  the response bytes left and every client saw a truncated reply.
+- **Store ownership**: firstboot seeds `/data/config/astro.json` as
+  astrod 0600 and chowns `/data/config` to astrod:astro-api 0710 so the
+  unprivileged daemon can do atomic tmp+rename rewrites; api-token
+  stays root:astro-api 0640 (astrod reads it via astro-api membership —
+  dinit run-as does initgroups). docs/06's "0640 root:astro-api" for
+  astro.json is superseded by daemon-owned 0600/0640.
+- os-release is now stamped at rootfs assembly with
+  ASTRO_BOARD/ASTRO_VARIANT/ASTRO_RELEASE (`stamp_os_release`,
+  build/lib/rootfs.sh; ASTRO_RELEASE = the same ASTRO_VERSION the
+  image/bundle stages use) — system.zig prefers these keys, so
+  `GET /system` reports real identity instead of "unknown". Found while
+  validating: base-files ships tmpfiles
+  `L+ /etc/os-release -> ../usr/lib/os-release`, force-recreated in the
+  /etc overlay every boot — the old common-overlay regular file at
+  `etc/os-release` was silently shadowed at runtime and its "Astro
+  Linux" identity never actually served. The Astro document moved to
+  `boards/common/overlay/usr/lib/os-release` (the canonical path);
+  /etc/os-release stays the packaged symlink.

@@ -18,6 +18,7 @@ install = [
     "less",
     "dhcpcd",
     "dhcpcd-dinit",    # dinit service file (auto-split subpackage)
+    "curl",            # dev tooling: exercise astrod's API by hand (docs/06 §8)
 ]
 
 [services]
