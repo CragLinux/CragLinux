@@ -541,3 +541,33 @@ generate_rauc_config() {
 
     log_info "RAUC config: system.conf + keyring.pem$([ "$backend" = uboot ] && echo ' + fw_env.config')"
 }
+
+##############################################################################
+# Baked astrod defaults (docs/06 §2, docs/07 §3; M3)
+#
+# /etc/astro/astro-defaults.json is the IMAGE's contribution to the
+# desired-state store: the firstboot oneshot copies it to
+# /data/config/astro.json on the first boot of a data lifetime, and
+# astrod migrates forward from there. Values come from the board TOML
+# [api] section (AD-025: lan_exposure defaults off). Shaped here (jq
+# exists in the build container; the image has no jq).
+##############################################################################
+
+generate_astro_defaults() {
+    local rootfs_dir="$1"
+    local board_config_json="$2"
+
+    mkdir -p "${rootfs_dir}/etc/astro"
+    echo "$board_config_json" | jq '{
+        schema: 1,
+        system: { provisioning: "factory" },
+        api: {
+            wifi:            (.api.wifi // true),
+            ap_provisioning: (.api.ap_provisioning // true),
+            mdns:            (.api.mdns // true),
+            lan_exposure:    (.api.lan_exposure // false)
+        }
+    }' > "${rootfs_dir}/etc/astro/astro-defaults.json"
+
+    log_info "astrod defaults baked: /etc/astro/astro-defaults.json"
+}

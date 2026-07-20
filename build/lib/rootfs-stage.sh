@@ -54,6 +54,9 @@ install_kernel_to_rootfs "$ROOTFS_DIR" "$BOARD" "$BOARD_ARCH" "$BOARD_CONFIG_JSO
 # RAUC system.conf + keyring (+ fw_env.config on uboot boards) — docs/05 §2
 generate_rauc_config "$ROOTFS_DIR" "$BOARD_CONFIG_JSON"
 
+# Baked astrod defaults for the firstboot oneshot — docs/06 §2, docs/07 §3
+generate_astro_defaults "$ROOTFS_DIR" "$BOARD_CONFIG_JSON"
+
 # Run hooks
 run_hooks "$ROOTFS_DIR" "$BOARD_DIR"
 

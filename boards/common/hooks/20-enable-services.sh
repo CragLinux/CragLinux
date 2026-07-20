@@ -33,6 +33,9 @@ enable_services() {
     # bootloader attempt counters advance (docs/05 §4; no-op off A/B)
     ln -sf "../astro-boot-watchdog" "${boot_d}/astro-boot-watchdog"
     log_info "Enabled platform service: astro-boot-watchdog"
+    # firstboot: once per /data lifetime (docs/07 §3; no-op on direct boots)
+    ln -sf "../firstboot" "${boot_d}/firstboot"
+    log_info "Enabled platform service: firstboot"
 
     # Enable services
     if [ -n "${SERVICES_ENABLE:-}" ]; then

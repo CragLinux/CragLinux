@@ -1,0 +1,10 @@
+# Astro: firstboot oneshot (docs/07 §3, docs/02 §5.1 graph node) — API
+# token + initial astro.json, once per /data lifetime (factory reset
+# wipes /data, so it reruns after one). No-op on direct-boot dev disks.
+# Ordered before astrod so the token and store exist when the daemon
+# starts reading them (M3).
+
+type = scripted
+command = /usr/lib/astro/firstboot.sh
+depends-on: data-mount
+before: astrod
