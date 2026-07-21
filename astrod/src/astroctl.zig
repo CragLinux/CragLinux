@@ -5,7 +5,12 @@
 //! Command groups: system/reboot/poweroff (phase 1), update */events
 //! (phase 2 — docs/05 §5.1 API-driven workflow: install returns 202 + an
 //! operation which this CLI polls to a terminal state, so scripts get the
-//! whole install as one exit code).
+//! whole install as one exit code), network/wifi/wan/ethernet (phase 3 —
+//! docs/06 §5.2: `wifi scan` triggers the scan operation, polls it, then
+//! prints the results; `wifi connect` persists the profile and polls
+//! GET /network/wifi until the station state reaches "connected" —
+//! the state endpoint is the authoritative view the events narrate, and
+//! polling it keeps the CLI independent of event payload shapes).
 //!
 //! Exit codes: 0 success, 1 API/transport/operation error (problem
 //! title+detail on stderr), 2 usage error.
@@ -33,6 +38,10 @@ pub const poll_interval_ms: u64 = 1000;
 /// Drain-mode `events`: exit once the stream has been quiet this long.
 pub const events_quiet_ms: i32 = 2000;
 
+/// `wifi connect`: how long to wait for the station state to reach
+/// "connected" before giving up (overridable with --timeout=SECONDS).
+pub const default_connect_timeout_s: u32 = 60;
+
 const usage_text =
     \\astroctl — Astro device control (thin client over astrod's API)
     \\
@@ -50,6 +59,17 @@ const usage_text =
     \\  update rollback            Mark booted slot bad, boot the other slot
     \\  events                     Print events (full ring replay), exit when the
     \\                             stream goes quiet
+    \\  network                    Interface overview + WAN order (GET /api/v1/network)
+    \\  wifi scan                  Trigger a scan, wait for it, list visible networks
+    \\  wifi networks              List the latest scan results
+    \\  wifi connect <ssid>        Configure + connect the station profile; the
+    \\                             passphrase comes from --psk= or is read from
+    \\                             stdin; waits until connected (or --timeout=)
+    \\  wifi forget                Forget the configured profile (disconnects)
+    \\  wan get                    Show the WAN interface-class order
+    \\  wan set <csv>              Replace it, e.g. `wan set ethernet,wifi`
+    \\  ethernet get <iface>       Show the wired config for one interface
+    \\  ethernet set <iface>       Replace it: --dhcp | --static=ADDR/PREFIX[,GW]
     \\  help                       Show this help
     \\
     \\  ("system reboot" / "system poweroff" are accepted aliases)
@@ -59,6 +79,12 @@ const usage_text =
     \\  --force           update install: bypass the AD-021 downgrade gate
     \\  --follow          events: keep the stream open (live tail) instead of
     \\                    exiting at the first quiet period
+    \\  --psk=PASSPHRASE  wifi connect: WPA-PSK passphrase (omit to read a line
+    \\                    from stdin — keeps the secret out of argv)
+    \\  --timeout=SECONDS wifi connect: association wait bound (default 60)
+    \\  --dhcp            ethernet set: IPv4 via DHCP
+    \\  --static=ADDR/PREFIX[,GW]
+    \\                    ethernet set: static IPv4 (gateway optional)
     \\
     \\Exit codes: 0 success, 1 API/operation error, 2 usage error
     \\
@@ -75,18 +101,37 @@ pub const Action = enum {
     update_apply,
     update_rollback,
     events,
+    network,
+    wifi_scan,
+    wifi_networks,
+    wifi_connect,
+    wifi_forget,
+    wan_get,
+    wan_set,
+    eth_get,
+    eth_set,
 };
 
 pub const Invocation = struct {
     action: Action,
     /// Slices into argv, which outlives the invocation.
     socket_path: []const u8 = default_socket_path,
-    /// update install: local bundle path or http(s) URL.
+    /// The positional argument: update install's bundle path/URL, wifi
+    /// connect's SSID, wan set's csv order, ethernet's interface name.
     target: []const u8 = "",
     /// events: keep streaming instead of drain-and-exit.
     follow: bool = false,
     /// update install: AD-021 downgrade-gate override.
     force: bool = false,
+    /// wifi connect: passphrase; null means read it from stdin.
+    psk: ?[]const u8 = null,
+    /// ethernet set: raw --static=ADDR/PREFIX[,GW] spec (validated at
+    /// parse time so a bad spec is a usage error, not an API round trip).
+    static_spec: ?[]const u8 = null,
+    /// ethernet set: DHCP mode.
+    dhcp: bool = false,
+    /// wifi connect: association wait bound.
+    timeout_s: u32 = default_connect_timeout_s,
 };
 
 pub const Parsed = union(enum) { help, usage_error, invoke: Invocation };
@@ -97,6 +142,11 @@ pub fn parseCommand(args: []const []const u8) Parsed {
     var socket_path: []const u8 = default_socket_path;
     var follow = false;
     var force = false;
+    var psk: ?[]const u8 = null;
+    var static_spec: ?[]const u8 = null;
+    var dhcp = false;
+    var timeout_s: u32 = default_connect_timeout_s;
+    var timeout_set = false;
     var words: [3][]const u8 = undefined;
     var nwords: usize = 0;
     for (args) |arg| {
@@ -107,6 +157,18 @@ pub fn parseCommand(args: []const []const u8) Parsed {
             follow = true;
         } else if (std.mem.eql(u8, arg, "--force")) {
             force = true;
+        } else if (std.mem.startsWith(u8, arg, "--psk=")) {
+            psk = arg["--psk=".len..];
+            if (psk.?.len == 0) return .usage_error;
+        } else if (std.mem.startsWith(u8, arg, "--static=")) {
+            static_spec = arg["--static=".len..];
+            if (static_spec.?.len == 0) return .usage_error;
+        } else if (std.mem.eql(u8, arg, "--dhcp")) {
+            dhcp = true;
+        } else if (std.mem.startsWith(u8, arg, "--timeout=")) {
+            timeout_s = std.fmt.parseInt(u32, arg["--timeout=".len..], 10) catch return .usage_error;
+            if (timeout_s == 0) return .usage_error;
+            timeout_set = true;
         } else if (std.mem.eql(u8, arg, "help") or std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return .help;
         } else if (std.mem.startsWith(u8, arg, "-")) {
@@ -130,6 +192,8 @@ pub fn parseCommand(args: []const []const u8) Parsed {
             .poweroff
         else if (std.mem.eql(u8, words[0], "events"))
             .events
+        else if (std.mem.eql(u8, words[0], "network"))
+            .network
         else
             return .usage_error,
         2 => if (std.mem.eql(u8, words[0], "system") and std.mem.eql(u8, words[1], "reboot"))
@@ -142,13 +206,39 @@ pub fn parseCommand(args: []const []const u8) Parsed {
             .update_apply
         else if (std.mem.eql(u8, words[0], "update") and std.mem.eql(u8, words[1], "rollback"))
             .update_rollback
+        else if (std.mem.eql(u8, words[0], "wifi") and std.mem.eql(u8, words[1], "scan"))
+            .wifi_scan
+        else if (std.mem.eql(u8, words[0], "wifi") and std.mem.eql(u8, words[1], "networks"))
+            .wifi_networks
+        else if (std.mem.eql(u8, words[0], "wifi") and std.mem.eql(u8, words[1], "forget"))
+            .wifi_forget
+        else if (std.mem.eql(u8, words[0], "wan") and std.mem.eql(u8, words[1], "get"))
+            .wan_get
         else
-            // Includes "update install" with no target: a usage error.
+            // Includes commands missing their positional argument
+            // ("update install", "wifi connect", "wan set",
+            // "ethernet get/set"): usage errors, not partial commands.
             return .usage_error,
         3 => blk: {
             if (std.mem.eql(u8, words[0], "update") and std.mem.eql(u8, words[1], "install")) {
                 target = words[2];
                 break :blk .update_install;
+            }
+            if (std.mem.eql(u8, words[0], "wifi") and std.mem.eql(u8, words[1], "connect")) {
+                target = words[2];
+                break :blk .wifi_connect;
+            }
+            if (std.mem.eql(u8, words[0], "wan") and std.mem.eql(u8, words[1], "set")) {
+                target = words[2];
+                break :blk .wan_set;
+            }
+            if (std.mem.eql(u8, words[0], "ethernet") and std.mem.eql(u8, words[1], "get")) {
+                target = words[2];
+                break :blk .eth_get;
+            }
+            if (std.mem.eql(u8, words[0], "ethernet") and std.mem.eql(u8, words[1], "set")) {
+                target = words[2];
+                break :blk .eth_set;
             }
             return .usage_error;
         },
@@ -158,12 +248,27 @@ pub fn parseCommand(args: []const []const u8) Parsed {
     // typos instead of silently ignoring intent.
     if (follow and action != .events) return .usage_error;
     if (force and action != .update_install) return .usage_error;
+    if (psk != null and action != .wifi_connect) return .usage_error;
+    if (timeout_set and action != .wifi_connect) return .usage_error;
+    if ((static_spec != null or dhcp) and action != .eth_set) return .usage_error;
+    if (action == .eth_set) {
+        // Exactly one mode: --dhcp XOR --static=..., and the static spec
+        // must parse — the API round trip should never see CLI typos.
+        if (dhcp == (static_spec != null)) return .usage_error;
+        if (static_spec) |spec| {
+            _ = parseStaticSpec(spec) catch return .usage_error;
+        }
+    }
     return .{ .invoke = .{
         .action = action,
         .socket_path = socket_path,
         .target = target,
         .follow = follow,
         .force = force,
+        .psk = psk,
+        .static_spec = static_spec,
+        .dhcp = dhcp,
+        .timeout_s = timeout_s,
     } };
 }
 
@@ -211,6 +316,10 @@ fn execute(gpa: std.mem.Allocator, inv: Invocation) u8 {
     return switch (inv.action) {
         .update_install => updateInstall(arena, inv),
         .events => eventsCommand(arena, inv),
+        .wifi_scan => wifiScan(arena, inv),
+        .wifi_connect => wifiConnect(arena, inv),
+        .wan_set => wanSet(arena, inv),
+        .eth_get, .eth_set => ethernetCommand(arena, inv),
         else => simpleRequest(arena, inv),
     };
 }
@@ -237,7 +346,11 @@ fn simpleRequest(arena: std.mem.Allocator, inv: Invocation) u8 {
         .update_status => formatUpdateStatus(arena, resp.body) catch resp.body,
         .update_apply => formatPowerResult(arena, "apply", resp.body) catch "apply accepted\n",
         .update_rollback => formatPowerResult(arena, "rollback", resp.body) catch "rollback accepted\n",
-        .update_install, .events => unreachable,
+        .network => formatNetworkOverview(arena, resp.body) catch resp.body,
+        .wifi_networks => formatWifiNetworks(arena, resp.body) catch resp.body,
+        .wan_get => formatWanPolicy(arena, resp.body) catch resp.body,
+        .wifi_forget => "wifi connection forgotten\n",
+        .update_install, .events, .wifi_scan, .wifi_connect, .wan_set, .eth_get, .eth_set => unreachable,
     };
     writeAll(posix.STDOUT_FILENO, out);
     return 0;
@@ -254,7 +367,11 @@ fn requestFor(action: Action) []const u8 {
         .update_status => "GET /api/v1/update/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
         .update_apply => "POST /api/v1/update/apply HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
         .update_rollback => "POST /api/v1/update/rollback HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        .update_install, .events => unreachable,
+        .network => "GET /api/v1/network HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        .wifi_networks => "GET /api/v1/network/wifi/networks HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        .wifi_forget => "DELETE /api/v1/network/wifi/connection HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        .wan_get => "GET /api/v1/network/wan HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        .update_install, .events, .wifi_scan, .wifi_connect, .wan_set, .eth_get, .eth_set => unreachable,
     };
 }
 
@@ -298,7 +415,7 @@ fn updateInstall(arena: std.mem.Allocator, inv: Invocation) u8 {
     };
     const started = std.fmt.allocPrint(arena, "installing; operation {s}\n", .{op_url}) catch return oom();
     writeAll(posix.STDOUT_FILENO, started);
-    return pollOperation(arena, inv.socket_path, op_url);
+    return pollOperation(arena, inv.socket_path, op_url, "install");
 }
 
 /// Stream a local bundle file as the application/octet-stream install form.
@@ -364,7 +481,8 @@ fn uploadBundle(arena: std.mem.Allocator, inv: Invocation) UploadError![]u8 {
 
 /// Poll one operation to a terminal state, printing progress transitions.
 /// Exit code is the operation outcome: 0 succeeded, 1 failed/unreachable.
-fn pollOperation(arena: std.mem.Allocator, socket_path: []const u8, op_url: []const u8) u8 {
+/// `label` names the work in the terminal lines ("install", "scan").
+fn pollOperation(arena: std.mem.Allocator, socket_path: []const u8, op_url: []const u8, label: []const u8) u8 {
     const req = std.fmt.allocPrint(arena, "GET {s} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", .{op_url}) catch return oom();
     var last_progress: i64 = -1;
     var last_message: []const u8 = "";
@@ -391,16 +509,216 @@ fn pollOperation(arena: std.mem.Allocator, socket_path: []const u8, op_url: []co
             last_message = op.message;
         }
         if (std.mem.eql(u8, op.state, "succeeded")) {
-            writeAll(posix.STDOUT_FILENO, "install operation succeeded\n");
+            const msg = std.fmt.allocPrint(arena, "{s} operation succeeded\n", .{label}) catch return oom();
+            writeAll(posix.STDOUT_FILENO, msg);
             return 0;
         }
         if (std.mem.eql(u8, op.state, "failed")) {
-            const msg = std.fmt.allocPrint(arena, "error: install operation failed: {s}\n", .{op.err orelse "(no detail)"}) catch "error: install operation failed\n";
+            const msg = std.fmt.allocPrint(arena, "error: {s} operation failed: {s}\n", .{ label, op.err orelse "(no detail)" }) catch "error: operation failed\n";
             writeAll(posix.STDERR_FILENO, msg);
             return 1;
         }
         sync.sleepMs(poll_interval_ms);
     }
+}
+
+// ---- network commands (phase 3, docs/06 §5.2) -------------------------------
+
+/// `wifi scan`: POST the scan, poll the returned operation to a terminal
+/// state, then fetch and print the results — one command, one exit code.
+fn wifiScan(arena: std.mem.Allocator, inv: Invocation) u8 {
+    const req = "POST /api/v1/network/wifi/scan HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    const raw = exchange(arena, inv.socket_path, req) catch |err|
+        return transportFail(arena, inv.socket_path, err);
+    const resp = parseResponse(raw) catch {
+        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        return 1;
+    };
+    if (resp.status != 202) {
+        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: scan request failed\n";
+        writeAll(posix.STDERR_FILENO, msg);
+        return 1;
+    }
+    const op_url = parseOperationRef(arena, resp.body) catch {
+        writeAll(posix.STDERR_FILENO, "astroctl: 202 response without an operation URL\n");
+        return 1;
+    };
+    const started = std.fmt.allocPrint(arena, "scanning; operation {s}\n", .{op_url}) catch return oom();
+    writeAll(posix.STDOUT_FILENO, started);
+    const rc = pollOperation(arena, inv.socket_path, op_url, "scan");
+    if (rc != 0) return rc;
+
+    const raw2 = exchange(arena, inv.socket_path, requestFor(.wifi_networks)) catch |err|
+        return transportFail(arena, inv.socket_path, err);
+    const resp2 = parseResponse(raw2) catch {
+        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        return 1;
+    };
+    if (resp2.status >= 400) {
+        const msg = formatProblem(arena, resp2.status, resp2.body) catch "astroctl: fetching scan results failed\n";
+        writeAll(posix.STDERR_FILENO, msg);
+        return 1;
+    }
+    writeAll(posix.STDOUT_FILENO, formatWifiNetworks(arena, resp2.body) catch resp2.body);
+    return 0;
+}
+
+/// `wifi connect <ssid>`: PUT the profile, then poll GET /network/wifi
+/// until the station state reaches "connected" (the authoritative view
+/// the network.wifi.state events narrate) or the timeout elapses. State
+/// transitions are printed as they are observed.
+fn wifiConnect(arena: std.mem.Allocator, inv: Invocation) u8 {
+    const psk = if (inv.psk) |p| p else readPskStdin(arena) catch |err| switch (err) {
+        error.EmptyPassphrase => {
+            writeAll(posix.STDERR_FILENO, "astroctl: empty passphrase on stdin (pass --psk= or pipe the passphrase)\n");
+            return 2;
+        },
+        error.InputOutput => {
+            writeAll(posix.STDERR_FILENO, "astroctl: cannot read the passphrase from stdin\n");
+            return 1;
+        },
+        error.OutOfMemory => return oom(),
+    };
+    const body = std.json.Stringify.valueAlloc(arena, .{ .ssid = inv.target, .psk = psk }, .{}) catch return oom();
+    const req = std.fmt.allocPrint(
+        arena,
+        "PUT /api/v1/network/wifi/connection HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}",
+        .{ body.len, body },
+    ) catch return oom();
+    const raw = exchange(arena, inv.socket_path, req) catch |err|
+        return transportFail(arena, inv.socket_path, err);
+    const resp = parseResponse(raw) catch {
+        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        return 1;
+    };
+    if (resp.status >= 300) {
+        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: connect request failed\n";
+        writeAll(posix.STDERR_FILENO, msg);
+        return 1;
+    }
+    const persisted = std.fmt.allocPrint(arena, "profile persisted; waiting for association (timeout {d}s)\n", .{inv.timeout_s}) catch return oom();
+    writeAll(posix.STDOUT_FILENO, persisted);
+
+    const state_req = "GET /api/v1/network/wifi HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    var waited_ms: u64 = 0;
+    var last_state: []const u8 = "";
+    while (true) {
+        const raw2 = exchange(arena, inv.socket_path, state_req) catch |err|
+            return transportFail(arena, inv.socket_path, err);
+        const resp2 = parseResponse(raw2) catch {
+            writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+            return 1;
+        };
+        if (resp2.status != 200) {
+            const msg = formatProblem(arena, resp2.status, resp2.body) catch "astroctl: wifi state poll failed\n";
+            writeAll(posix.STDERR_FILENO, msg);
+            return 1;
+        }
+        const view = parseWifiStateView(arena, resp2.body) catch {
+            writeAll(posix.STDERR_FILENO, "astroctl: malformed wifi state document\n");
+            return 1;
+        };
+        if (!std.mem.eql(u8, view.state, last_state)) {
+            const line = std.fmt.allocPrint(arena, "state: {s}\n", .{view.state}) catch return oom();
+            writeAll(posix.STDOUT_FILENO, line);
+            last_state = view.state;
+        }
+        if (std.mem.eql(u8, view.state, "connected")) {
+            const done = std.fmt.allocPrint(arena, "connected to {s}\n", .{view.connected_ssid orelse inv.target}) catch return oom();
+            writeAll(posix.STDOUT_FILENO, done);
+            return 0;
+        }
+        if (waited_ms >= @as(u64, inv.timeout_s) * 1000) {
+            const msg = std.fmt.allocPrint(arena, "error: not connected after {d}s (last state: {s})\n", .{ inv.timeout_s, last_state }) catch "error: connect timed out\n";
+            writeAll(posix.STDERR_FILENO, msg);
+            return 1;
+        }
+        sync.sleepMs(poll_interval_ms);
+        waited_ms += poll_interval_ms;
+    }
+}
+
+/// `wan set <csv>`: PUT the parsed order, print the applied policy.
+fn wanSet(arena: std.mem.Allocator, inv: Invocation) u8 {
+    const body = buildWanBody(arena, inv.target) catch |err| switch (err) {
+        error.BadOrder => {
+            writeAll(posix.STDERR_FILENO, "astroctl: bad wan order (comma-separated interface classes, e.g. ethernet,wifi)\n");
+            return 2;
+        },
+        error.OutOfMemory => return oom(),
+    };
+    const req = std.fmt.allocPrint(
+        arena,
+        "PUT /api/v1/network/wan HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}",
+        .{ body.len, body },
+    ) catch return oom();
+    const raw = exchange(arena, inv.socket_path, req) catch |err|
+        return transportFail(arena, inv.socket_path, err);
+    const resp = parseResponse(raw) catch {
+        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        return 1;
+    };
+    if (resp.status >= 400) {
+        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: wan set failed\n";
+        writeAll(posix.STDERR_FILENO, msg);
+        return 1;
+    }
+    writeAll(posix.STDOUT_FILENO, formatWanPolicy(arena, resp.body) catch resp.body);
+    return 0;
+}
+
+/// `ethernet get|set <iface>`: GET, or PUT built from --dhcp/--static=.
+fn ethernetCommand(arena: std.mem.Allocator, inv: Invocation) u8 {
+    const path = std.fmt.allocPrint(arena, "/api/v1/network/ethernet/{s}", .{inv.target}) catch return oom();
+    const req = blk: {
+        if (inv.action == .eth_get)
+            break :blk std.fmt.allocPrint(arena, "GET {s} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", .{path}) catch return oom();
+        // parseCommand already validated the spec/mode flags.
+        const body = buildEthernetBody(arena, inv.static_spec, inv.dhcp) catch |err| switch (err) {
+            error.BadSpec => {
+                writeAll(posix.STDERR_FILENO, "astroctl: bad --static spec (ADDR/PREFIX[,GW])\n");
+                return 2;
+            },
+            error.OutOfMemory => return oom(),
+        };
+        break :blk std.fmt.allocPrint(
+            arena,
+            "PUT {s} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}",
+            .{ path, body.len, body },
+        ) catch return oom();
+    };
+    const raw = exchange(arena, inv.socket_path, req) catch |err|
+        return transportFail(arena, inv.socket_path, err);
+    const resp = parseResponse(raw) catch {
+        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        return 1;
+    };
+    if (resp.status >= 400) {
+        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: ethernet request failed\n";
+        writeAll(posix.STDERR_FILENO, msg);
+        return 1;
+    }
+    writeAll(posix.STDOUT_FILENO, formatEthernetConfig(arena, resp.body) catch resp.body);
+    return 0;
+}
+
+/// Read the WPA passphrase from stdin (first line, or everything up to
+/// EOF): `wifi connect` without --psk= keeps the secret out of argv and
+/// thus out of /proc/*/cmdline.
+fn readPskStdin(arena: std.mem.Allocator) error{ EmptyPassphrase, InputOutput, OutOfMemory }![]const u8 {
+    var buf: [256]u8 = undefined;
+    var data: std.ArrayList(u8) = .empty;
+    while (data.items.len < 256) {
+        const n = posix.read(posix.STDIN_FILENO, &buf) catch return error.InputOutput;
+        if (n == 0) break;
+        try data.appendSlice(arena, buf[0..n]);
+        if (std.mem.indexOfScalar(u8, data.items, '\n') != null) break;
+    }
+    var s: []const u8 = data.items;
+    if (std.mem.indexOfScalar(u8, s, '\n')) |i| s = s[0..i];
+    s = std.mem.trimEnd(u8, s, "\r");
+    if (s.len == 0) return error.EmptyPassphrase;
+    return s;
 }
 
 // ---- events: SSE reader -----------------------------------------------------
@@ -700,14 +1018,16 @@ pub fn formatUpdateStatus(allocator: std.mem.Allocator, body: []const u8) ![]u8 
                 for (row, 0..) |cell, i| widths[i] = @max(widths[i], cell.len);
             }
             try out.appendSlice(allocator, "\n");
-            try appendRow(allocator, &out, headers, widths);
-            for (rows.items) |row| try appendRow(allocator, &out, row, widths);
+            try appendRow(allocator, &out, &headers, &widths);
+            for (rows.items) |row| try appendRow(allocator, &out, &row, &widths);
         }
     }
     return out.toOwnedSlice(allocator);
 }
 
-fn appendRow(allocator: std.mem.Allocator, out: *std.ArrayList(u8), cells: [6][]const u8, widths: [6]usize) !void {
+/// Append one two-space-separated table row; the last column is never
+/// padded (keeps lines free of trailing spaces).
+fn appendRow(allocator: std.mem.Allocator, out: *std.ArrayList(u8), cells: []const []const u8, widths: []const usize) !void {
     for (cells, 0..) |cell, i| {
         try out.appendSlice(allocator, cell);
         if (i + 1 < cells.len) {
@@ -716,6 +1036,277 @@ fn appendRow(allocator: std.mem.Allocator, out: *std.ArrayList(u8), cells: [6][]
         }
     }
     try out.append(allocator, '\n');
+}
+
+// ---- network parsing and rendering (pure, tested) ---------------------------
+
+/// The GET /api/v1/network/wifi fields the connect poll loop consumes
+/// (spec WifiState). Strings are duped into `allocator` — pass an arena.
+pub const WifiStateView = struct {
+    state: []const u8,
+    connected_ssid: ?[]const u8,
+};
+
+pub fn parseWifiStateView(allocator: std.mem.Allocator, body: []const u8) !WifiStateView {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.BadResponse;
+    const obj = parsed.value.object;
+    const state_v = obj.get("state") orelse return error.BadResponse;
+    if (state_v != .string) return error.BadResponse;
+    const ssid: ?[]const u8 = if (obj.get("connected_ssid")) |s| switch (s) {
+        .string => |x| try allocator.dupe(u8, x),
+        else => null,
+    } else null;
+    return .{ .state = try allocator.dupe(u8, state_v.string), .connected_ssid = ssid };
+}
+
+/// --static=ADDR/PREFIX[,GW] parsed; slices alias the argument.
+pub const StaticSpec = struct {
+    address: []const u8,
+    prefix: u8,
+    gateway: ?[]const u8,
+};
+
+pub fn parseStaticSpec(spec: []const u8) error{BadSpec}!StaticSpec {
+    var parts = std.mem.splitScalar(u8, spec, ',');
+    const addr_part = parts.next() orelse return error.BadSpec;
+    const gateway = parts.next();
+    if (parts.next() != null) return error.BadSpec;
+    const slash = std.mem.indexOfScalar(u8, addr_part, '/') orelse return error.BadSpec;
+    const address = addr_part[0..slash];
+    const prefix = std.fmt.parseInt(u8, addr_part[slash + 1 ..], 10) catch return error.BadSpec;
+    if (address.len == 0 or prefix > 32) return error.BadSpec;
+    if (gateway) |g| {
+        if (g.len == 0) return error.BadSpec;
+    }
+    return .{ .address = address, .prefix = prefix, .gateway = gateway };
+}
+
+/// PUT /api/v1/network/wan body from the CLI's comma-separated order.
+pub fn buildWanBody(allocator: std.mem.Allocator, csv: []const u8) error{ BadOrder, OutOfMemory }![]u8 {
+    var items: std.ArrayList([]const u8) = .empty;
+    defer items.deinit(allocator);
+    var it = std.mem.splitScalar(u8, csv, ',');
+    while (it.next()) |raw| {
+        const item = std.mem.trim(u8, raw, " \t");
+        if (item.len == 0) return error.BadOrder;
+        try items.append(allocator, item);
+    }
+    if (items.items.len == 0) return error.BadOrder;
+    return std.json.Stringify.valueAlloc(allocator, .{ .order = items.items }, .{});
+}
+
+/// PUT /api/v1/network/ethernet/{iface} body (spec EthernetConfig; full
+/// replace, so omitted members reset — the CLI sends only ipv4).
+pub fn buildEthernetBody(allocator: std.mem.Allocator, static_spec: ?[]const u8, dhcp: bool) error{ BadSpec, OutOfMemory }![]u8 {
+    if (dhcp)
+        return std.json.Stringify.valueAlloc(allocator, .{ .ipv4 = .{ .mode = "dhcp" } }, .{});
+    const spec = try parseStaticSpec(static_spec orelse return error.BadSpec);
+    return std.json.Stringify.valueAlloc(allocator, .{ .ipv4 = .{
+        .mode = "static",
+        .address = spec.address,
+        .prefix = spec.prefix,
+        .gateway = spec.gateway,
+    } }, .{});
+}
+
+fn jsonString(value: ?std.json.Value) ?[]const u8 {
+    const v = value orelse return null;
+    return switch (v) {
+        .string => |s| s,
+        else => null,
+    };
+}
+
+fn yesNo(value: ?std.json.Value) []const u8 {
+    const v = value orelse return "-";
+    return switch (v) {
+        .bool => |b| if (b) "yes" else "no",
+        else => "-",
+    };
+}
+
+/// Pretty-print GET /api/v1/network (spec NetworkStatus): an aligned
+/// interface table plus the WAN order line. Pass an arena — intermediate
+/// cell strings are not individually freed.
+pub fn formatNetworkOverview(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.BadResponse;
+    const obj = parsed.value.object;
+    const ifs_v = obj.get("interfaces") orelse return error.BadResponse;
+    if (ifs_v != .array) return error.BadResponse;
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    const headers = [_][]const u8{ "IFACE", "TYPE", "UP", "CARRIER", "ADDRESSES" };
+    var rows: std.ArrayList([5][]const u8) = .empty;
+    defer rows.deinit(allocator);
+    for (ifs_v.array.items) |iface_v| {
+        if (iface_v != .object) continue;
+        const io = iface_v.object;
+        var addrs: []const u8 = "-";
+        if (io.get("addresses")) |addrs_v| {
+            if (addrs_v == .array and addrs_v.array.items.len > 0) {
+                var joined: std.ArrayList(u8) = .empty;
+                for (addrs_v.array.items) |a| {
+                    if (a != .string) continue;
+                    if (joined.items.len > 0) try joined.append(allocator, ',');
+                    try joined.appendSlice(allocator, a.string);
+                }
+                if (joined.items.len > 0) addrs = joined.items;
+            }
+        }
+        try rows.append(allocator, .{
+            jsonString(io.get("name")) orelse "-",
+            jsonString(io.get("type")) orelse "-",
+            yesNo(io.get("up")),
+            yesNo(io.get("carrier")),
+            addrs,
+        });
+    }
+
+    var widths: [5]usize = undefined;
+    for (headers, 0..) |h, i| widths[i] = h.len;
+    for (rows.items) |row| {
+        for (row, 0..) |cell, i| widths[i] = @max(widths[i], cell.len);
+    }
+    try appendRow(allocator, &out, &headers, &widths);
+    for (rows.items) |row| try appendRow(allocator, &out, &row, &widths);
+
+    if (obj.get("wan")) |wan_v| {
+        if (wan_v == .object) {
+            if (wan_v.object.get("order")) |order_v| {
+                if (order_v == .array) {
+                    try out.appendSlice(allocator, "\nwan order: ");
+                    var first = true;
+                    for (order_v.array.items) |o| {
+                        if (o != .string) continue;
+                        if (!first) try out.appendSlice(allocator, ", ");
+                        try out.appendSlice(allocator, o.string);
+                        first = false;
+                    }
+                    try out.append(allocator, '\n');
+                }
+            }
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// Pretty-print GET /api/v1/network/wifi/networks (spec WifiNetwork[]).
+/// Pass an arena — intermediate cell strings are not individually freed.
+pub fn formatWifiNetworks(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+    defer parsed.deinit();
+    if (parsed.value != .array) return error.BadResponse;
+    const nets = parsed.value.array.items;
+    if (nets.len == 0)
+        return allocator.dupe(u8, "no networks seen; run 'astroctl wifi scan'\n");
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    const headers = [_][]const u8{ "SSID", "SIGNAL", "SECURITY", "KNOWN", "CONNECTED" };
+    var rows: std.ArrayList([5][]const u8) = .empty;
+    defer rows.deinit(allocator);
+    for (nets) |net_v| {
+        if (net_v != .object) continue;
+        const no = net_v.object;
+        const signal: []const u8 = if (no.get("signal_dbm")) |s| switch (s) {
+            .integer => |n| try std.fmt.allocPrint(allocator, "{d}", .{n}),
+            else => "-",
+        } else "-";
+        try rows.append(allocator, .{
+            jsonString(no.get("ssid")) orelse "-",
+            signal,
+            jsonString(no.get("security")) orelse "-",
+            if (no.get("known")) |k| (if (k == .bool and k.bool) "yes" else "-") else "-",
+            if (no.get("connected")) |c| (if (c == .bool and c.bool) "yes" else "-") else "-",
+        });
+    }
+    var widths: [5]usize = undefined;
+    for (headers, 0..) |h, i| widths[i] = h.len;
+    for (rows.items) |row| {
+        for (row, 0..) |cell, i| widths[i] = @max(widths[i], cell.len);
+    }
+    try appendRow(allocator, &out, &headers, &widths);
+    for (rows.items) |row| try appendRow(allocator, &out, &row, &widths);
+    return out.toOwnedSlice(allocator);
+}
+
+/// Render GET/PUT /api/v1/network/wan responses: "order: a, b".
+pub fn formatWanPolicy(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.BadResponse;
+    const order_v = parsed.value.object.get("order") orelse return error.BadResponse;
+    if (order_v != .array) return error.BadResponse;
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "order: ");
+    var first = true;
+    for (order_v.array.items) |o| {
+        if (o != .string) continue;
+        if (!first) try out.appendSlice(allocator, ", ");
+        try out.appendSlice(allocator, o.string);
+        first = false;
+    }
+    try out.append(allocator, '\n');
+    return out.toOwnedSlice(allocator);
+}
+
+/// Pretty-print an EthernetConfig document as aligned key/value lines.
+/// Pass an arena — intermediate strings are not individually freed.
+pub fn formatEthernetConfig(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.BadResponse;
+    const obj = parsed.value.object;
+
+    var mode: []const u8 = "-";
+    var address: []const u8 = "-";
+    var prefix: []const u8 = "-";
+    var gateway: []const u8 = "-";
+    if (obj.get("ipv4")) |ipv4_v| {
+        if (ipv4_v == .object) {
+            const v4 = ipv4_v.object;
+            mode = jsonString(v4.get("mode")) orelse "-";
+            address = jsonString(v4.get("address")) orelse "-";
+            gateway = jsonString(v4.get("gateway")) orelse "-";
+            if (v4.get("prefix")) |p| {
+                if (p == .integer) prefix = try std.fmt.allocPrint(allocator, "{d}", .{p.integer});
+            }
+        }
+    }
+    var dns: []const u8 = "-";
+    if (obj.get("dns")) |dns_v| {
+        if (dns_v == .array and dns_v.array.items.len > 0) {
+            var joined: std.ArrayList(u8) = .empty;
+            for (dns_v.array.items) |d| {
+                if (d != .string) continue;
+                if (joined.items.len > 0) try joined.append(allocator, ',');
+                try joined.appendSlice(allocator, d.string);
+            }
+            if (joined.items.len > 0) dns = joined.items;
+        }
+    }
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    const pairs = [_][2][]const u8{
+        .{ "mode", mode },
+        .{ "address", address },
+        .{ "prefix", prefix },
+        .{ "gateway", gateway },
+        .{ "dns", dns },
+    };
+    for (pairs) |pair| {
+        const line = try std.fmt.allocPrint(allocator, "{s:<9} {s}\n", .{ pair[0], pair[1] });
+        try out.appendSlice(allocator, line);
+    }
+    return out.toOwnedSlice(allocator);
 }
 
 /// Incremental SSE frame renderer: feed() consumes raw stream bytes and,
@@ -1072,6 +1663,216 @@ test "formatUpdateStatus renders scalars and an aligned slot table" {
         "rootfs.0  booted    0.0.0-dev  good  3         /dev/vda5\n" ++
         "rootfs.1  inactive  -          good  -         /dev/vda6\n";
     try std.testing.expectEqualStrings(expected, out);
+}
+
+test "parseCommand: network command group" {
+    const net = parseCommand(&.{"network"});
+    try std.testing.expectEqual(Action.network, net.invoke.action);
+
+    const scan = parseCommand(&.{ "wifi", "scan" });
+    try std.testing.expectEqual(Action.wifi_scan, scan.invoke.action);
+
+    const nets = parseCommand(&.{ "wifi", "networks" });
+    try std.testing.expectEqual(Action.wifi_networks, nets.invoke.action);
+
+    const forget = parseCommand(&.{ "wifi", "forget" });
+    try std.testing.expectEqual(Action.wifi_forget, forget.invoke.action);
+
+    const connect = parseCommand(&.{ "wifi", "connect", "cafe-24" });
+    try std.testing.expectEqual(Action.wifi_connect, connect.invoke.action);
+    try std.testing.expectEqualStrings("cafe-24", connect.invoke.target);
+    try std.testing.expectEqual(@as(?[]const u8, null), connect.invoke.psk);
+    try std.testing.expectEqual(default_connect_timeout_s, connect.invoke.timeout_s);
+
+    const with_psk = parseCommand(&.{ "wifi", "connect", "cafe-24", "--psk=hunter22", "--timeout=10" });
+    try std.testing.expectEqualStrings("hunter22", with_psk.invoke.psk.?);
+    try std.testing.expectEqual(@as(u32, 10), with_psk.invoke.timeout_s);
+
+    const wan_get = parseCommand(&.{ "wan", "get" });
+    try std.testing.expectEqual(Action.wan_get, wan_get.invoke.action);
+
+    const wan_set = parseCommand(&.{ "wan", "set", "wifi,ethernet" });
+    try std.testing.expectEqual(Action.wan_set, wan_set.invoke.action);
+    try std.testing.expectEqualStrings("wifi,ethernet", wan_set.invoke.target);
+
+    const eget = parseCommand(&.{ "ethernet", "get", "eth0" });
+    try std.testing.expectEqual(Action.eth_get, eget.invoke.action);
+    try std.testing.expectEqualStrings("eth0", eget.invoke.target);
+
+    const eset_dhcp = parseCommand(&.{ "ethernet", "set", "eth0", "--dhcp" });
+    try std.testing.expectEqual(Action.eth_set, eset_dhcp.invoke.action);
+    try std.testing.expect(eset_dhcp.invoke.dhcp);
+
+    const eset_static = parseCommand(&.{ "ethernet", "set", "eth0", "--static=192.168.7.2/24,192.168.7.1" });
+    try std.testing.expectEqual(Action.eth_set, eset_static.invoke.action);
+    try std.testing.expectEqualStrings("192.168.7.2/24,192.168.7.1", eset_static.invoke.static_spec.?);
+}
+
+test "parseCommand: network group usage errors and flag applicability" {
+    // Missing positional arguments.
+    try std.testing.expect(parseCommand(&.{ "wifi", "connect" }) == .usage_error);
+    try std.testing.expect(parseCommand(&.{ "wan", "set" }) == .usage_error);
+    try std.testing.expect(parseCommand(&.{ "ethernet", "get" }) == .usage_error);
+    try std.testing.expect(parseCommand(&.{ "ethernet", "set", "eth0" }) == .usage_error); // no mode picked
+    try std.testing.expect(parseCommand(&.{"wifi"}) == .usage_error);
+    try std.testing.expect(parseCommand(&.{"wan"}) == .usage_error);
+
+    // Mode flags: exactly one of --dhcp / --static=, and only on set.
+    try std.testing.expect(parseCommand(&.{ "ethernet", "set", "eth0", "--dhcp", "--static=10.0.0.2/24" }) == .usage_error);
+    try std.testing.expect(parseCommand(&.{ "ethernet", "get", "eth0", "--dhcp" }) == .usage_error);
+    try std.testing.expect(parseCommand(&.{ "ethernet", "set", "eth0", "--static=notanaddress" }) == .usage_error);
+
+    // Misplaced flags are usage errors, not silently ignored intent.
+    try std.testing.expect(parseCommand(&.{ "network", "--psk=x" }) == .usage_error);
+    try std.testing.expect(parseCommand(&.{ "wifi", "scan", "--timeout=5" }) == .usage_error);
+    try std.testing.expect(parseCommand(&.{ "wifi", "connect", "x", "--follow" }) == .usage_error);
+    try std.testing.expect(parseCommand(&.{ "wifi", "connect", "x", "--timeout=0" }) == .usage_error);
+    try std.testing.expect(parseCommand(&.{ "wifi", "connect", "x", "--psk=" }) == .usage_error);
+
+    try std.testing.expectEqual(@as(u8, 0), evaluate(&.{"network"}));
+    try std.testing.expectEqual(@as(u8, 0), evaluate(&.{ "wifi", "connect", "x", "--psk=secret12" }));
+    try std.testing.expectEqual(@as(u8, 2), evaluate(&.{ "wifi", "connect" }));
+}
+
+test "parseStaticSpec accepts ADDR/PREFIX[,GW] and rejects malformed specs" {
+    const full = try parseStaticSpec("192.168.7.2/24,192.168.7.1");
+    try std.testing.expectEqualStrings("192.168.7.2", full.address);
+    try std.testing.expectEqual(@as(u8, 24), full.prefix);
+    try std.testing.expectEqualStrings("192.168.7.1", full.gateway.?);
+
+    const no_gw = try parseStaticSpec("10.0.0.2/16");
+    try std.testing.expectEqualStrings("10.0.0.2", no_gw.address);
+    try std.testing.expectEqual(@as(u8, 16), no_gw.prefix);
+    try std.testing.expectEqual(@as(?[]const u8, null), no_gw.gateway);
+
+    try std.testing.expectError(error.BadSpec, parseStaticSpec("10.0.0.2"));
+    try std.testing.expectError(error.BadSpec, parseStaticSpec("10.0.0.2/33"));
+    try std.testing.expectError(error.BadSpec, parseStaticSpec("/24"));
+    try std.testing.expectError(error.BadSpec, parseStaticSpec("10.0.0.2/24,"));
+    try std.testing.expectError(error.BadSpec, parseStaticSpec("10.0.0.2/24,gw,extra"));
+}
+
+test "buildWanBody and buildEthernetBody produce spec-shaped JSON" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const wan = try buildWanBody(arena, "wifi, ethernet");
+    try std.testing.expectEqualStrings("{\"order\":[\"wifi\",\"ethernet\"]}", wan);
+    try std.testing.expectError(error.BadOrder, buildWanBody(arena, ""));
+    try std.testing.expectError(error.BadOrder, buildWanBody(arena, "wifi,,ethernet"));
+
+    const dhcp = try buildEthernetBody(arena, null, true);
+    try std.testing.expectEqualStrings("{\"ipv4\":{\"mode\":\"dhcp\"}}", dhcp);
+
+    const with_gw = try buildEthernetBody(arena, "192.168.7.2/24,192.168.7.1", false);
+    try std.testing.expectEqualStrings(
+        "{\"ipv4\":{\"mode\":\"static\",\"address\":\"192.168.7.2\",\"prefix\":24,\"gateway\":\"192.168.7.1\"}}",
+        with_gw,
+    );
+
+    const no_gw = try buildEthernetBody(arena, "10.0.0.2/16", false);
+    try std.testing.expectEqualStrings(
+        "{\"ipv4\":{\"mode\":\"static\",\"address\":\"10.0.0.2\",\"prefix\":16,\"gateway\":null}}",
+        no_gw,
+    );
+
+    try std.testing.expectError(error.BadSpec, buildEthernetBody(arena, null, false));
+}
+
+test "formatNetworkOverview renders the interface table and wan order" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const body =
+        \\{"interfaces":[
+        \\ {"name":"eth0","type":"ethernet","mac":"52:54:00:12:34:56","up":true,"carrier":true,"addresses":["10.0.2.15/24"],"rssi_dbm":null,"wan_role":"primary"},
+        \\ {"name":"wlan0","type":"wifi","mac":null,"up":true,"carrier":false,"addresses":[],"rssi_dbm":null,"wan_role":"backup"}],
+        \\ "wan":{"order":["ethernet","wifi"]}}
+    ;
+    const out = try formatNetworkOverview(arena, body);
+    const expected =
+        "IFACE  TYPE      UP   CARRIER  ADDRESSES\n" ++
+        "eth0   ethernet  yes  yes      10.0.2.15/24\n" ++
+        "wlan0  wifi      yes  no       -\n" ++
+        "\nwan order: ethernet, wifi\n";
+    try std.testing.expectEqualStrings(expected, out);
+
+    try std.testing.expectError(error.BadResponse, formatNetworkOverview(arena, "{}"));
+    try std.testing.expectError(error.BadResponse, formatNetworkOverview(arena, "[]"));
+}
+
+test "formatWifiNetworks renders the scan table and the empty case" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const body =
+        \\[{"ssid":"astro-test","signal_dbm":-42,"security":"psk","known":true,"connected":false},
+        \\ {"ssid":"cafe","signal_dbm":-70,"security":"open","known":false,"connected":false}]
+    ;
+    const out = try formatWifiNetworks(arena, body);
+    const expected =
+        "SSID        SIGNAL  SECURITY  KNOWN  CONNECTED\n" ++
+        "astro-test  -42     psk       yes    -\n" ++
+        "cafe        -70     open      -      -\n";
+    try std.testing.expectEqualStrings(expected, out);
+
+    const empty = try formatWifiNetworks(arena, "[]");
+    try std.testing.expectEqualStrings("no networks seen; run 'astroctl wifi scan'\n", empty);
+    try std.testing.expectError(error.BadResponse, formatWifiNetworks(arena, "{}"));
+}
+
+test "formatWanPolicy and formatEthernetConfig" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const wan = try formatWanPolicy(arena, "{\"order\":[\"ethernet\",\"wifi\"]}");
+    try std.testing.expectEqualStrings("order: ethernet, wifi\n", wan);
+    try std.testing.expectError(error.BadResponse, formatWanPolicy(arena, "{}"));
+
+    const static_cfg = try formatEthernetConfig(arena,
+        \\{"ipv4":{"mode":"static","address":"192.168.7.2","prefix":24,"gateway":null},"dns":["1.1.1.1","9.9.9.9"]}
+    );
+    const expected =
+        "mode      static\n" ++
+        "address   192.168.7.2\n" ++
+        "prefix    24\n" ++
+        "gateway   -\n" ++
+        "dns       1.1.1.1,9.9.9.9\n";
+    try std.testing.expectEqualStrings(expected, static_cfg);
+
+    const dhcp_cfg = try formatEthernetConfig(arena, "{\"ipv4\":{\"mode\":\"dhcp\",\"address\":null,\"prefix\":null,\"gateway\":null},\"dns\":[]}");
+    const expected_dhcp =
+        "mode      dhcp\n" ++
+        "address   -\n" ++
+        "prefix    -\n" ++
+        "gateway   -\n" ++
+        "dns       -\n";
+    try std.testing.expectEqualStrings(expected_dhcp, dhcp_cfg);
+}
+
+test "parseWifiStateView extracts state and connected ssid" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const connected = try parseWifiStateView(arena,
+        \\{"radio_present":true,"powered":true,"mode":"station","state":"connected","connected_ssid":"astro-test","rssi_dbm":-40}
+    );
+    try std.testing.expectEqualStrings("connected", connected.state);
+    try std.testing.expectEqualStrings("astro-test", connected.connected_ssid.?);
+
+    const idle = try parseWifiStateView(arena,
+        \\{"radio_present":true,"powered":true,"mode":"station","state":"disconnected","connected_ssid":null,"rssi_dbm":null}
+    );
+    try std.testing.expectEqualStrings("disconnected", idle.state);
+    try std.testing.expectEqual(@as(?[]const u8, null), idle.connected_ssid);
+
+    try std.testing.expectError(error.BadResponse, parseWifiStateView(arena, "{\"no_state\":1}"));
+    try std.testing.expectError(error.BadResponse, parseWifiStateView(arena, "[]"));
 }
 
 test "SseRenderer: frames across chunk boundaries, keepalives, overflow" {

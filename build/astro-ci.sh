@@ -155,9 +155,17 @@ for B in $BOARDS; do
 done
 
 ##############################################################################
-# 5+6. astrod API suite (M3), external-tree example (M4)
+# 5+6. astrod API suite (M3 phase 3, hwsim rig), external-tree example (M4)
 ##############################################################################
-skip "astrod-api"    "API suite (hwsim rig) lands at M3 phase 3"
+# The API suite boots ONE board's dev image: qemu-x86_64 (fastest TCG).
+# It needs that build to have run in this invocation (or --boards to have
+# included it) — otherwise it is skipped, not failed.
+API_BOARD="qemu-x86_64"
+if [ "${RESULT[build-${API_BOARD}-dev]:-}" = "PASS" ]; then
+    step "astrod-api" "${SCRIPT_DIR}/test-api.sh" "$API_BOARD"
+else
+    skip "astrod-api" "needs a passing ${API_BOARD} dev build in this run"
+fi
 skip "external-tree" "external-tree contract lands at M4"
 
 ##############################################################################

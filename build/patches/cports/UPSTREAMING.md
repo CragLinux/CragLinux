@@ -54,6 +54,29 @@ is an Astro-local port decision to keep the armv7 repo closable.
 
 ---
 
+# Upstreaming draft: `main/dinit-dbus` cross service-provider fix
+
+Status: **DRAFT** — carried as
+`0008-dinit-dbus-cross-makedepends-dbus-dinit.patch` (M3 phase 3,
+2026-07-20). The -dinit autopackage's service files depend-on
+`dbus-daemon`; the 001_runtime_deps hook needs the provider (dbus-dinit)
+installed at package time. Native builds get it by accident —
+`checkdepends = ["dbus"]` installs dbus and trips dbus-dinit's
+install_if — but cross builds skip checkdepends
+(`core/dependencies.py:134` gates them on `not pkg.profile().cross`), so
+cross-building dinit-dbus always dies with "usvc: dbus-daemon (unknown
+provider)". Fix is exactly what the hook's own hint says: add
+`dbus-dinit` to makedepends. Found cross-building main/iwd for the
+self-built armv7 repo. Proposed commit:
+`main/dinit-dbus: fix cross builds (dbus-daemon service provider)`.
+Same human-ownership process note as below. (Latent upstream bug seen on
+the way, not carried: 001_runtime_deps' `scan_svc` stores requirements
+in a dict keyed by service name, so a name required as BOTH svc and usvc
+— dbus-daemon here — records only the last-scanned prefix; the system
+svc dependency is silently dropped from svc_requires.)
+
+---
+
 # Upstreaming draft: `main/llvm` cross-build fixes for Chimera cports
 
 Status: **DRAFT — nothing has been submitted anywhere.** This is a

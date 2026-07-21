@@ -580,6 +580,53 @@ stamp_os_release() {
     log_info "os-release stamped: ASTRO_BOARD=${board} ASTRO_VARIANT=${variant} ASTRO_RELEASE=${ASTRO_VERSION:-0.0.0-dev}"
 }
 
+# Baked network defaults (docs/07 §2 rendering model; M3 phase 3).
+#
+# 1. /etc/astro/dhcpcd-fallback.conf — the config dhcpcd runs on BEFORE
+#    astrod has ever rendered one: tmpfiles pre-creates
+#    /run/astro/net/dhcpcd.conf as a symlink here (see the dhcpcd shadow
+#    service in the common overlay for the whole bootstrap story). It
+#    mirrors the pre-phase-3 behavior — plain DHCP on wired interfaces —
+#    minus the resolv.conf hook, which is astrod's job now.
+# 2. /etc/resolv.conf -> /run/astro/resolv.conf — astrod renders the
+#    target (ONE writer, docs/07 §2). This replaces whatever any package
+#    left at /etc/resolv.conf. TRAP (the os-release lesson, §15 of
+#    MIGRATION-NOTES): the resolvconf metapackage (dependency of dhcpcd
+#    AND iwd) ships tmpfiles `L+ /etc/resolv.conf -> ../run/resolvconf/
+#    resolv.conf` which force-recreates the symlink in the /etc overlay
+#    every boot — a baked symlink alone would silently vanish at runtime.
+#    The common overlay therefore ALSO ships /etc/tmpfiles.d/resolv.conf
+#    (same basename = full override per tmpfiles.d(5)) pointing at the
+#    Astro target; keep the two in sync.
+bake_network_defaults() {
+    local rootfs_dir="$1"
+
+    mkdir -p "${rootfs_dir}/etc/astro"
+    cat > "${rootfs_dir}/etc/astro/dhcpcd-fallback.conf" << 'EOF'
+# Astro dhcpcd FALLBACK config (baked at image build; read-only).
+#
+# Served through the /run/astro/net/dhcpcd.conf bootstrap symlink until
+# astrod's first render replaces it (docs/07 §2; see the dhcpcd dinit
+# service for the mechanism). Keep this minimal and board-agnostic:
+# plain DHCP on wired interfaces only — wifi association is iwd's job
+# and does not exist before astrod has rendered a profile anyway.
+allowinterfaces eth*
+# DNS is astrod's: the lease hook exports DHCP-learned resolvers to
+# /run/astro/net/leases/ and astrod alone writes /run/astro/resolv.conf.
+nohook resolv.conf
+# Group astrod may connect to /run/dhcpcd/sock so unprivileged astrod
+# can send the rebind command after its first render (dhcpcd-10.3.2
+# control.c chowns the socket to this group at startup). Must match the
+# rendered config or the first-boot socket stays root-only until a
+# dhcpcd restart.
+controlgroup astrod
+EOF
+    log_info "network defaults baked: /etc/astro/dhcpcd-fallback.conf"
+
+    ln -sfn /run/astro/resolv.conf "${rootfs_dir}/etc/resolv.conf"
+    log_info "network defaults baked: /etc/resolv.conf -> /run/astro/resolv.conf"
+}
+
 generate_astro_defaults() {
     local rootfs_dir="$1"
     local board_config_json="$2"

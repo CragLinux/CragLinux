@@ -32,6 +32,8 @@ const update = @import("update.zig");
 const events_mod = @import("events.zig");
 const ops = @import("ops.zig");
 const bus_mod = @import("bus.zig");
+const netconf = @import("netconf.zig");
+const wifi_mod = @import("wifi.zig");
 
 // Deviations from docs/06 (recorded in MIGRATION-NOTES): socket moved under
 // /run/astro/ so the tmpfiles.d-created parent can be astrod:astro-api, and
@@ -168,6 +170,38 @@ fn serve(gpa: std.mem.Allocator, opts: Options, st: *store.Store) !void {
         }
     } else |err| {
         std.log.warn("astrod: system D-Bus unavailable ({t}); update endpoints answer 503", .{err});
+    }
+
+    // Phase-3 network subsystem (docs/07 §2). netconf renders
+    // dhcpcd.conf + resolv.conf from the store, rebinds dhcpcd, and
+    // watches the lease-export dir; the wifi backend mirrors iwd's
+    // object tree over the spine. Both deinit before main's
+    // store.deinit (defers run before serve returns) — the store may
+    // reference wifi-owned connection strings.
+    var netconf_owned: ?*netconf.Manager = null;
+    defer if (netconf_owned) |m| {
+        netconf.global = null;
+        m.deinit();
+    };
+    {
+        const m = try netconf.Manager.init(gpa, st, &event_bus);
+        netconf_owned = m;
+        netconf.global = m;
+        m.start();
+    }
+
+    var wifi_owned: ?*wifi_mod.Wifi = null;
+    defer if (wifi_owned) |w| {
+        wifi_mod.global = null;
+        w.deinit();
+    };
+    if (bus_owned) |b| {
+        if (wifi_mod.Wifi.init(gpa, b, st, &registry, &event_bus)) |w| {
+            wifi_owned = w;
+            wifi_mod.global = w;
+        } else |err| {
+            std.log.warn("astrod: wifi backend unavailable ({t}); wifi endpoints degrade", .{err});
+        }
     }
 
     const unix_fd = try listenUnix(opts.socket_path);
@@ -506,6 +540,7 @@ fn statusText(status: u16) []const u8 {
     return switch (status) {
         200 => "OK",
         202 => "Accepted",
+        204 => "No Content",
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
@@ -539,6 +574,9 @@ test {
     _ = @import("sync.zig");
     _ = @import("rauc.zig");
     _ = @import("version.zig");
+    _ = @import("link.zig");
+    _ = @import("netconf.zig");
+    _ = @import("wifi.zig");
     _ = @import("conformance_test.zig");
 }
 

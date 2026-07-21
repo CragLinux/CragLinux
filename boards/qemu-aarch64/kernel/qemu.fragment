@@ -42,3 +42,10 @@ CONFIG_TMPFS=y
 # devtmpfs (auto-populate /dev)
 CONFIG_DEVTMPFS=y
 CONFIG_DEVTMPFS_MOUNT=y
+
+# mac80211_hwsim: virtual radios for the wifi API test rig (M3 phase 3
+# hwsim choreography: iwd AP mode on radio 1, astrod connects radio 0 via
+# the API — driven over SSH by the astrod-api CI step). Test-only boards:
+# real boards never carry hwsim. Default 2 radios (module default; no
+# radios= param needed on a built-in).
+CONFIG_MAC80211_HWSIM=y

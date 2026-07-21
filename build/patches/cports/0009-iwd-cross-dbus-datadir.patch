@@ -1,0 +1,36 @@
+main/iwd: pin the D-Bus data directory so cross builds are correct.
+
+iwd's configure resolves the dbus-1 datadir via
+`$PKG_CONFIG --variable=datadir dbus-1` (configure.ac:216) when
+--with-dbus-datadir is not given. Under cbuild's cross environment
+pkgconf answers with the SYSROOT-prefixed path, so the D-Bus policy and
+activation files are packaged under
+usr/<triplet>/usr/share/dbus-1/{system.d,system-services}/ instead of
+usr/share/dbus-1/. On the image dbus-daemon then has no policy allowing
+root to own net.connman.iwd, RequestName is denied, and iwd crash-loops
+with "Name request failed / D-Bus disconnected, quitting..." (observed
+live on the Astro qemu-armv7 image; the armv7 repo is self-built so
+main/iwd is cross-compiled — Chimera's native builders never hit this).
+Pass the real path explicitly; native builds get the identical result
+they already had. pkgrel bumped so the broken r0 armv7 apk is superseded.
+
+diff --git a/main/iwd/template.py b/main/iwd/template.py
+--- a/main/iwd/template.py
++++ b/main/iwd/template.py
+@@ -1,12 +1,15 @@
+ pkgname = "iwd"
+ pkgver = "3.12"
+-pkgrel = 0
++pkgrel = 1
+ build_style = "gnu_configure"
+ configure_args = [
+     # junk cflags that redefine FORTIFY
+     "--disable-optimization",
+     "--disable-systemd-service",
+     "--enable-dbus-policy",
++    # explicit: the default is `pkgconf --variable=datadir dbus-1`, which
++    # is sysroot-prefixed in cross builds and mispackages the policy files
++    "--with-dbus-datadir=/usr/share",
+     "--enable-wired",
+     "--enable-pie",
+ ]

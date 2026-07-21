@@ -14,3 +14,10 @@ util-linux-fdisk    # sfdisk: on-device GPT growth of the data partition (docs/0
 e2fsprogs           # e2fsck + resize2fs: fsck/grow the /data ext4 (same M1 item)
 dbus                # system bus (rauc service + astrod at M3; docs/02 §5.1 graph)
 rauc                # A/B updater (AD-010/AD-011; astro-cports template, docs/05)
+iwd                 # wifi daemon (AD-015: manages wifi ONLY — EnableNetworkConfiguration=false
+                    # via the common overlay's /etc/iwd/main.conf; dhcpcd owns addressing).
+                    # Platform capability on every image: [api].wifi=false boards simply
+                    # have no radios, the daemon idles (docs/07 §1).
+iwd-dinit           # dinit service file (auto-split subpackage, like dhcpcd-dinit);
+                    # SHADOWED by the common overlay's /etc/dinit.d/iwd (STATE_DIRECTORY
+                    # + dbus-daemon dependency fix — upstream names the bus service 'dbus')

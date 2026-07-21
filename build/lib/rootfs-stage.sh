@@ -58,6 +58,9 @@ generate_rauc_config "$ROOTFS_DIR" "$BOARD_CONFIG_JSON"
 # Baked astrod defaults for the firstboot oneshot — docs/06 §2, docs/07 §3
 generate_astro_defaults "$ROOTFS_DIR" "$BOARD_CONFIG_JSON"
 
+# dhcpcd fallback config + /etc/resolv.conf symlink — docs/07 §2, M3 phase 3
+bake_network_defaults "$ROOTFS_DIR"
+
 # Image identity for GET /system (system.zig prefers ASTRO_* keys)
 stamp_os_release "$ROOTFS_DIR" "$BOARD" "$VARIANT"
 

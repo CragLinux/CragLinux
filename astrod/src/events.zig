@@ -55,6 +55,10 @@ pub const types = struct {
     /// Reserved for phase 4 (provisioning); no publisher yet.
     pub const system_provisioned = "system.provisioned";
     pub const operation_state = "operation.state";
+
+    pub const network_wifi_state = "network.wifi.state";
+    pub const network_wifi_scan_done = "network.wifi.scan.done";
+    pub const network_ethernet_state = "network.ethernet.state";
 };
 
 /// Wire shape (SSE): `id: <id>\nevent: <event_type>\ndata: <payload>\n\n`.

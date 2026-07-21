@@ -25,13 +25,15 @@ pub const LoadError = error{
 };
 
 /// The persisted document. Unknown fields are tolerated on read (forward
-/// compat within a schema); the fields here are the v1 set this phase
-/// owns. TODO(fill): network/wifi/wan/update subtrees per docs/06 §5.
+/// compat within a schema); the fields here are the v1 set. The network
+/// subtree is the M3 phase-3 ADDITIVE extension — schema stays 1 because
+/// every field has a default (a phase-2 document parses unchanged).
 pub const Config = struct {
     schema: u32 = schema_version,
     hostname: []const u8 = "astro",
     system: System = .{},
     api: Api = .{},
+    network: Network = .{},
 
     pub const System = struct {
         /// Provisioning state machine (docs/07 §4):
@@ -47,6 +49,52 @@ pub const Config = struct {
         ap_provisioning: bool = true,
         mdns: bool = true,
         lan_exposure: bool = false, // AD-025: LAN exposure defaults off
+    };
+
+    /// Desired network state (docs/06 §5.2, docs/07 §2). Everything here
+    /// is RENDERED into daemon-native files by netconf.zig — regenerable
+    /// from this document at any time (factory-reset correctness).
+    pub const Network = struct {
+        /// Per-interface wired config, keyed by kernel interface name
+        /// ("eth0"); absent interface = DHCP defaults.
+        ethernet: std.json.ArrayHashMap(Ethernet) = .{},
+        wifi: Wifi = .{},
+        wan: Wan = .{},
+    };
+
+    pub const Ethernet = struct {
+        ipv4: Ipv4 = .{},
+        /// Static resolvers for this interface; win over DHCP-learned
+        /// DNS in the rendered resolv.conf.
+        dns: []const []const u8 = &.{},
+    };
+
+    pub const Ipv4 = struct {
+        /// "dhcp" | "static" (docs/06 §5.2 wire shape).
+        mode: []const u8 = "dhcp",
+        /// mode=static only.
+        address: ?[]const u8 = null,
+        prefix: ?u8 = null,
+        gateway: ?[]const u8 = null,
+    };
+
+    pub const Wifi = struct {
+        /// The single (v1) configured station profile; null = none.
+        /// Rendered as an iwd known-network PSK file (docs/07 §2).
+        connection: ?WifiConnection = null,
+    };
+
+    pub const WifiConnection = struct {
+        ssid: []const u8,
+        /// WPA2/WPA3-PSK passphrase (EAP fields reserved — docs/06 §5.2).
+        psk: []const u8,
+    };
+
+    pub const Wan = struct {
+        /// Ordered interface-class preference; expressed as per-interface
+        /// `metric` values in the rendered dhcpcd.conf (phase-3 decision:
+        /// no rtnetlink route surgery).
+        order: []const []const u8 = &.{ "ethernet", "wifi" },
     };
 };
 
@@ -128,6 +176,26 @@ pub const Store = struct {
         return self.config.api;
     }
 
+    pub fn getWanOrder(self: *Store) []const []const u8 {
+        self.mu.lockShared();
+        defer self.mu.unlockShared();
+        return self.config.network.wan.order;
+    }
+
+    pub fn getWifiConnection(self: *Store) ?Config.WifiConnection {
+        self.mu.lockShared();
+        defer self.mu.unlockShared();
+        return self.config.network.wifi.connection;
+    }
+
+    /// Per-interface wired config; null when the interface has no entry
+    /// (callers apply Ethernet defaults = plain DHCP).
+    pub fn getEthernet(self: *Store, iface: []const u8) ?Config.Ethernet {
+        self.mu.lockShared();
+        defer self.mu.unlockShared();
+        return self.config.network.ethernet.map.get(iface);
+    }
+
     /// Take the exclusive lock for a config mutation + persistLocked()
     /// sequence (PUT/PATCH handlers in stage 2+).
     pub fn beginMutate(self: *Store) void {
@@ -172,6 +240,48 @@ pub const Store = struct {
 /// config.schema so the next persist() writes the upgraded form.
 fn migrate(config: *Config) void {
     std.debug.assert(config.schema <= schema_version);
+}
+
+// ---- RFC 7396 JSON Merge Patch ---------------------------------------------
+
+/// Apply a JSON Merge Patch (RFC 7396) to `target`, returning the merged
+/// value. Semantics: a non-object patch replaces the target outright; an
+/// object patch is applied member-wise, where `null` DELETES the member
+/// and objects recurse (a member missing from the target merges against
+/// an empty object, so nulls inside are dropped, per the RFC).
+///
+/// Values in the result may alias BOTH inputs — allocate everything
+/// (target parse, patch parse, this call) from one per-request arena.
+/// This is the PATCH /network/ethernet/{iface} engine: the handler
+/// serializes the stored Ethernet object to a Value, merges the request
+/// body, re-parses into Config.Ethernet (rejecting unknown fields), and
+/// persists.
+pub fn mergePatch(
+    arena: std.mem.Allocator,
+    target: std.json.Value,
+    patch: std.json.Value,
+) error{OutOfMemory}!std.json.Value {
+    if (patch != .object) return patch;
+
+    var result: std.json.ObjectMap = .empty;
+    if (target == .object) {
+        var it = target.object.iterator();
+        while (it.next()) |entry| {
+            try result.put(arena, entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+
+    var pit = patch.object.iterator();
+    while (pit.next()) |entry| {
+        const key = entry.key_ptr.*;
+        if (entry.value_ptr.* == .null) {
+            _ = result.orderedRemove(key);
+            continue;
+        }
+        const base = result.get(key) orelse std.json.Value.null;
+        try result.put(arena, key, try mergePatch(arena, base, entry.value_ptr.*));
+    }
+    return .{ .object = result };
 }
 
 // ---- raw-syscall helpers (same pattern as fsutil, kept local because the
@@ -230,6 +340,61 @@ test "load returns defaults when the file is absent" {
     try std.testing.expect(s.getApi().wifi);
     try std.testing.expect(s.getApi().ap_provisioning);
     try std.testing.expect(s.getApi().mdns);
+    // Network defaults (phase 3, additive — schema stays 1).
+    const order = s.getWanOrder();
+    try std.testing.expectEqual(@as(usize, 2), order.len);
+    try std.testing.expectEqualStrings("ethernet", order[0]);
+    try std.testing.expectEqualStrings("wifi", order[1]);
+    try std.testing.expect(s.getWifiConnection() == null);
+    try std.testing.expect(s.getEthernet("eth0") == null);
+}
+
+test "network subtree: parse, defaults inside entries, persist round-trip" {
+    const allocator = std.testing.allocator;
+    var path_buf: [128]u8 = undefined;
+    const path = fsutil.testTmpPath(&path_buf, "astro-net.json");
+    defer fsutil.unlink(path) catch {};
+    try fsutil.writeFileSync(path,
+        \\{"schema": 1,
+        \\ "network": {
+        \\   "ethernet": {
+        \\     "eth0": {"ipv4": {"mode": "static", "address": "192.0.2.10",
+        \\              "prefix": 24, "gateway": "192.0.2.1"},
+        \\              "dns": ["192.0.2.53"]},
+        \\     "eth1": {}
+        \\   },
+        \\   "wifi": {"connection": {"ssid": "astro-test", "psk": "hunter22"}},
+        \\   "wan": {"order": ["wifi", "ethernet"]}
+        \\ }}
+    );
+
+    var s = try Store.load(allocator, path);
+    defer s.deinit();
+
+    const eth0 = s.getEthernet("eth0").?;
+    try std.testing.expectEqualStrings("static", eth0.ipv4.mode);
+    try std.testing.expectEqualStrings("192.0.2.10", eth0.ipv4.address.?);
+    try std.testing.expectEqual(@as(u8, 24), eth0.ipv4.prefix.?);
+    try std.testing.expectEqualStrings("192.0.2.1", eth0.ipv4.gateway.?);
+    try std.testing.expectEqual(@as(usize, 1), eth0.dns.len);
+    // Empty entry inherits the struct defaults (plain DHCP).
+    const eth1 = s.getEthernet("eth1").?;
+    try std.testing.expectEqualStrings("dhcp", eth1.ipv4.mode);
+    try std.testing.expect(eth1.ipv4.address == null);
+
+    const conn = s.getWifiConnection().?;
+    try std.testing.expectEqualStrings("astro-test", conn.ssid);
+    try std.testing.expectEqualStrings("hunter22", conn.psk);
+    try std.testing.expectEqualStrings("wifi", s.getWanOrder()[0]);
+
+    // Round-trip: persist and reload must preserve the whole subtree.
+    try s.persist();
+    var s2 = try Store.load(allocator, path);
+    defer s2.deinit();
+    try std.testing.expectEqualStrings("192.0.2.10", s2.getEthernet("eth0").?.ipv4.address.?);
+    try std.testing.expectEqualStrings("astro-test", s2.getWifiConnection().?.ssid);
+    try std.testing.expectEqualStrings("wifi", s2.getWanOrder()[0]);
+    try std.testing.expectEqual(schema_version, s2.getSchema());
 }
 
 test "persist writes atomically, fsyncs, and load round-trips all subtrees" {
@@ -287,6 +452,71 @@ test "load tolerates unknown fields from newer writers within the schema" {
     try std.testing.expectEqualStrings("h1", s.getHostname());
     try std.testing.expectEqualStrings("provisioning", s.getProvisioning());
     try std.testing.expect(s.getLanExposure());
+}
+
+// ---- mergePatch tests (RFC 7396 semantics) ----------------------------------
+
+fn parseValue(arena: std.mem.Allocator, json_text: []const u8) !std.json.Value {
+    return std.json.parseFromSliceLeaky(std.json.Value, arena, json_text, .{});
+}
+
+fn expectMerged(arena: std.mem.Allocator, target_json: []const u8, patch_json: []const u8, want_json: []const u8) !void {
+    const target = try parseValue(arena, target_json);
+    const patch = try parseValue(arena, patch_json);
+    const got = try mergePatch(arena, target, patch);
+    const got_text = try std.json.Stringify.valueAlloc(arena, got, .{});
+    const want = try parseValue(arena, want_json);
+    const want_text = try std.json.Stringify.valueAlloc(arena, want, .{});
+    try std.testing.expectEqualStrings(want_text, got_text);
+}
+
+test "mergePatch: RFC 7396 core semantics" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Replacement, addition, and null-deletes (RFC 7396 §1 example).
+    try expectMerged(arena,
+        \\{"a":"b","c":{"d":"e","f":"g"}}
+    ,
+        \\{"a":"z","c":{"f":null}}
+    ,
+        \\{"a":"z","c":{"d":"e"}}
+    );
+    // Non-object patch replaces outright.
+    try expectMerged(arena, "{\"a\":1}", "[1,2]", "[1,2]");
+    try expectMerged(arena, "{\"a\":1}", "null", "null");
+    // Patch object onto a non-object target: target discarded, nulls
+    // dropped (merge against empty object).
+    try expectMerged(arena, "[\"x\"]", "{\"a\":1,\"b\":null}", "{\"a\":1}");
+    // Deleting a key that does not exist is a no-op.
+    try expectMerged(arena, "{\"a\":1}", "{\"b\":null}", "{\"a\":1}");
+    // Arrays replace wholesale (no element-wise merge).
+    try expectMerged(arena, "{\"dns\":[\"1.1.1.1\",\"9.9.9.9\"]}", "{\"dns\":[\"8.8.8.8\"]}", "{\"dns\":[\"8.8.8.8\"]}");
+    // Nested object creation through a missing member.
+    try expectMerged(arena, "{}", "{\"a\":{\"bb\":{\"ccc\":null}}}", "{\"a\":{\"bb\":{}}}");
+}
+
+test "mergePatch: the PATCH /network/ethernet/{iface} shape" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // dhcp → static without resending dns; then null resets a field.
+    try expectMerged(arena,
+        \\{"ipv4":{"mode":"dhcp","address":null,"prefix":null,"gateway":null},"dns":["192.0.2.53"]}
+    ,
+        \\{"ipv4":{"mode":"static","address":"192.0.2.10","prefix":24,"gateway":"192.0.2.1"}}
+    ,
+        \\{"ipv4":{"mode":"static","address":"192.0.2.10","prefix":24,"gateway":"192.0.2.1"},"dns":["192.0.2.53"]}
+    );
+    try expectMerged(arena,
+        \\{"ipv4":{"mode":"static","address":"192.0.2.10","prefix":24,"gateway":"192.0.2.1"},"dns":["192.0.2.53"]}
+    ,
+        \\{"ipv4":{"mode":"dhcp","address":null,"prefix":null,"gateway":null},"dns":null}
+    ,
+        \\{"ipv4":{"mode":"dhcp"}}
+    );
 }
 
 test "load falls back to defaults on a corrupt document" {

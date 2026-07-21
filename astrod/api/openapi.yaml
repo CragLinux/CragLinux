@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "astrod Device Configuration API",
-    "description": "Local HTTP API for Astro devices (docs/06, AD-013). Documented surface: system summary, reboot/poweroff actions, this document, and the update/events/operations group (docs/06 §5.3 + §4, docs/05 §5.1): RAUC-backed A/B updates modeled as operations, with an SSE event stream. Degradation: the update endpoints answer 503 urn:astro:problem:rauc-unavailable while the daemon has no D-Bus connection; a route whose subsystem is entirely absent from the build answers 501 (NotImplemented response component). Authored in JSON syntax (valid YAML) so the file is served verbatim at GET /api/v1/openapi.json and parsed by std.json in the route conformance test.",
+    "description": "Local HTTP API for Astro devices (docs/06, AD-013). Documented surface: system summary, reboot/poweroff actions, this document, the update/events/operations group (docs/06 §5.3 + §4, docs/05 §5.1): RAUC-backed A/B updates modeled as operations, with an SSE event stream, and the network group (docs/06 §5.2, docs/07 AD-015: iwd manages wifi only, dhcpcd owns addressing, astrod is the single policy brain) — the network endpoints answer 501 until the M3 phase-3 fill stage, except cellular which is 501 by contract (reserved). Degradation: the update endpoints answer 503 urn:astro:problem:rauc-unavailable while the daemon has no D-Bus connection; a route whose subsystem is entirely absent from the build answers 501 (NotImplemented response component). Authored in JSON syntax (valid YAML) so the file is served verbatim at GET /api/v1/openapi.json and parsed by std.json in the route conformance test.",
     "version": "1.0.0"
   },
   "servers": [
@@ -287,6 +287,162 @@
           "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
+    },
+    "/api/v1/network": {
+      "get": {
+        "operationId": "getNetwork",
+        "summary": "All interfaces: type, MAC, carrier/rssi, addresses, WAN role (docs/06 §5.2)",
+        "description": "M3 phase-3 group. Observed state comes from read-only rtnetlink (links/addresses/carrier) plus iwd for wifi; desired state from the store. Answers 501 not-implemented until the phase-3 fill stage wires the backends.",
+        "responses": {
+          "200": {
+            "description": "Interface list with WAN roles.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NetworkStatus" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      }
+    },
+    "/api/v1/network/ethernet/{iface}": {
+      "parameters": [
+        { "name": "iface", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Kernel interface name, e.g. eth0" }
+      ],
+      "get": {
+        "operationId": "getEthernet",
+        "summary": "Desired wired config for one interface (DHCP defaults when never configured)",
+        "responses": {
+          "200": { "description": "Ethernet config.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EthernetConfig" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      },
+      "put": {
+        "operationId": "putEthernet",
+        "summary": "Replace the wired config; persists to the store, re-renders dhcpcd.conf, reloads dhcpcd",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EthernetConfig" } } } },
+        "responses": {
+          "200": { "description": "Applied config.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EthernetConfig" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      },
+      "patch": {
+        "operationId": "patchEthernet",
+        "summary": "JSON Merge Patch (RFC 7396) of the wired config: null deletes/resets a member, objects merge recursively, arrays replace wholesale",
+        "requestBody": { "required": true, "content": { "application/merge-patch+json": { "schema": { "type": "object", "description": "RFC 7396 merge patch against EthernetConfig" } } } },
+        "responses": {
+          "200": { "description": "Merged config.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EthernetConfig" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      }
+    },
+    "/api/v1/network/wifi": {
+      "get": {
+        "operationId": "getWifi",
+        "summary": "Radio state, current connection (ssid, rssi, freq), station/ap mode",
+        "responses": {
+          "200": { "description": "Wifi state.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WifiState" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      }
+    },
+    "/api/v1/network/wifi/scan": {
+      "post": {
+        "operationId": "scanWifi",
+        "summary": "Trigger an iwd station scan; 202 + operation (kind wifi_scan), results at GET /api/v1/network/wifi/networks",
+        "responses": {
+          "202": { "description": "Scan started.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OperationRef" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      }
+    },
+    "/api/v1/network/wifi/networks": {
+      "get": {
+        "operationId": "listWifiNetworks",
+        "summary": "Latest scan results (ssid, signal, security); cached pre-AP results while in AP mode",
+        "responses": {
+          "200": { "description": "Visible networks.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/WifiNetwork" } } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      }
+    },
+    "/api/v1/network/wifi/connection": {
+      "get": {
+        "operationId": "getWifiConnection",
+        "summary": "The single (v1) configured station profile; psk is write-only and redacted in responses",
+        "responses": {
+          "200": { "description": "Configured profile, or JSON null when none is configured.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WifiConnectionState" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      },
+      "put": {
+        "operationId": "putWifiConnection",
+        "summary": "Persist {ssid, psk} (rendered as an iwd known-network PSK file) and connect; a valid-but-unsatisfiable config is NOT an error (docs/06 §7)",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WifiConnectionRequest" } } } },
+        "responses": {
+          "202": { "description": "Persisted; connection attempt underway (watch network.wifi.state events, or poll GET /api/v1/network/wifi).", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WifiConnectAccepted" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteWifiConnection",
+        "summary": "Forget the profile: iwd KnownNetwork.Forget, PSK file removed, store field nulled",
+        "responses": {
+          "204": { "description": "Profile forgotten." },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      }
+    },
+    "/api/v1/network/wan": {
+      "get": {
+        "operationId": "getWan",
+        "summary": "WAN policy: ordered interface preference (default [\"ethernet\", \"wifi\"])",
+        "responses": {
+          "200": { "description": "WAN policy.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WanPolicy" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      },
+      "put": {
+        "operationId": "putWan",
+        "summary": "Replace the WAN order; applied as per-interface metric values in the rendered dhcpcd.conf (no route surgery)",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WanPolicy" } } } },
+        "responses": {
+          "200": { "description": "Applied policy.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WanPolicy" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      }
+    },
+    "/api/v1/network/cellular": {
+      "get": {
+        "operationId": "getCellular",
+        "summary": "RESERVED (501 by contract): cellular lands as ModemManager beside iwd (docs/07 §1)",
+        "description": "Reserved namespace per docs/06 §5.2. Always answers 501 urn:astro:problem:not-implemented with the roadmap in the detail; the path is pinned so future activation is not a breaking change. /network/wifi/ap is likewise deferred (phase 4) but NOT yet pinned.",
+        "responses": {
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      },
+      "put": {
+        "operationId": "putCellular",
+        "summary": "RESERVED (501 by contract)",
+        "responses": {
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      }
     }
   },
   "components": {
@@ -521,6 +677,111 @@
           "payload": { "type": "string", "description": "One self-contained JSON document; update.* payloads carry the operation id when applicable" }
         },
         "required": ["id", "event_type", "payload"]
+      },
+      "NetworkStatus": {
+        "type": "object",
+        "description": "Response of GET /api/v1/network (docs/06 §5.2): the network overview — one NetworkInterface per observed link (read-only rtnetlink dump: name/MAC/up/carrier/addresses; iwd contributes rssi for wifi) plus the effective WAN policy from the store (network.wan.order).",
+        "properties": {
+          "interfaces": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/NetworkInterface" },
+            "description": "Every kernel network interface except loopback, in ifindex order."
+          },
+          "wan": { "$ref": "#/components/schemas/WanPolicy" }
+        },
+        "required": ["interfaces", "wan"]
+      },
+      "NetworkInterface": {
+        "type": "object",
+        "description": "One observed interface in the GET /api/v1/network overview. Observed state only (rtnetlink + iwd) — desired config lives at /network/ethernet/{iface} and /network/wifi/connection.",
+        "properties": {
+          "name": { "type": "string", "description": "Kernel interface name, e.g. \"eth0\", \"wlan0\"" },
+          "type": { "type": "string", "enum": ["ethernet", "wifi"], "description": "Interface class as used by the WAN order (wl* names classify as wifi)" },
+          "mac": { "type": ["string", "null"], "description": "Colon-hex hardware address; null when the link reports none" },
+          "up": { "type": "boolean", "description": "Administrative state (IFF_UP)" },
+          "carrier": { "type": "boolean", "description": "Physical link/carrier state (IFF_LOWER_UP); for wifi, association implies carrier" },
+          "addresses": { "type": "array", "items": { "type": "string" }, "description": "Assigned addresses in \"address/prefix\" notation, IPv4 and IPv6, in kernel order; empty when unconfigured" },
+          "rssi_dbm": { "type": ["integer", "null"], "description": "Wifi only: current signal strength from iwd; null for ethernet or while disconnected" },
+          "wan_role": { "type": ["string", "null"], "description": "This interface class's position in network.wan.order (\"primary\", \"backup\"); null when the class is not in the order" }
+        },
+        "required": ["name", "type", "up", "carrier", "addresses"]
+      },
+      "EthernetConfig": {
+        "type": "object",
+        "description": "Desired wired config (docs/06 §5.2); mirrors the store's network.ethernet.<iface> object (schema 1, all fields defaulted — an interface never configured GETs as all-defaults DHCP). PUT is a full replace: omitted members reset to their defaults. Also the JSON Merge Patch target of PATCH (RFC 7396: null deletes/resets a member, arrays replace wholesale). Unknown members are rejected 400 (AD-013). ipv6 fields are reserved for a later phase.",
+        "properties": {
+          "ipv4": {
+            "type": "object",
+            "properties": {
+              "mode": { "type": "string", "enum": ["dhcp", "static"], "default": "dhcp" },
+              "address": { "type": ["string", "null"], "description": "Dotted-quad local address; required (non-null) when mode=static, null otherwise" },
+              "prefix": { "type": ["integer", "null"], "minimum": 0, "maximum": 32, "description": "CIDR prefix length for address; mode=static only" },
+              "gateway": { "type": ["string", "null"], "description": "Default router; optional even for mode=static (a gateway-less static subnet is valid)" }
+            },
+            "additionalProperties": false
+          },
+          "dns": { "type": "array", "items": { "type": "string" }, "description": "Static resolvers; win over DHCP-learned DNS in the rendered resolv.conf (default: empty)" }
+        },
+        "additionalProperties": false
+      },
+      "WifiState": {
+        "type": "object",
+        "description": "Response of GET /api/v1/network/wifi: radio presence/power, station|ap|off mode, current connection — assembled live from iwd's ObjectManager tree (wifi.State in the daemon). A board without a radio (or with iwd down) answers radio_present=false, state \"unavailable\" — not an HTTP error. Frequency is not exposed in v1 (iwd's Station interface does not carry it; recorded deviation from docs/06 §5.2's \"freq\", additive later via diagnostics).",
+        "properties": {
+          "radio_present": { "type": "boolean", "description": "An iwd Device object exists on the bus" },
+          "powered": { "type": "boolean", "description": "Radio powered (iwd Device.Powered)" },
+          "mode": { "type": "string", "enum": ["station", "ap", "off"], "description": "iwd Device.Mode" },
+          "state": { "type": "string", "description": "iwd Station.State (\"connected\", \"connecting\", \"disconnected\", \"roaming\", ...); \"unavailable\" without a radio/station" },
+          "connected_ssid": { "type": ["string", "null"], "description": "SSID of the connected network; null while not connected" },
+          "rssi_dbm": { "type": ["integer", "null"], "description": "Current signal strength; null while not connected" }
+        },
+        "required": ["radio_present", "powered", "mode", "state", "connected_ssid", "rssi_dbm"]
+      },
+      "WifiNetwork": {
+        "type": "object",
+        "description": "One scan result of GET /api/v1/network/wifi/networks (iwd GetOrderedNetworks, strongest first; iwd's 0.01-dBm units already converted to whole dBm).",
+        "properties": {
+          "ssid": { "type": "string" },
+          "signal_dbm": { "type": "integer", "description": "Signal strength in dBm (negative; closer to 0 is stronger)" },
+          "security": { "type": "string", "enum": ["open", "psk", "8021x"], "description": "psk covers WPA2/WPA3-PSK; 8021x networks are visible but not connectable in v1 (EAP reserved)" },
+          "known": { "type": "boolean", "description": "A stored profile exists for this SSID" },
+          "connected": { "type": "boolean", "description": "This is the currently connected network" }
+        },
+        "required": ["ssid", "signal_dbm", "security", "known", "connected"]
+      },
+      "WifiConnectionRequest": {
+        "type": "object",
+        "description": "PUT /api/v1/network/wifi/connection body: the single (v1) station profile {ssid, psk}. Persisted to the store, rendered as an iwd known-network <ssid>.psk file, then connected. WPA2/WPA3-PSK only in v1; EAP fields reserved (docs/06 §5.2). Unknown members are rejected 400 (AD-013).",
+        "properties": {
+          "ssid": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "psk": { "type": "string", "minLength": 8, "maxLength": 63, "description": "WPA-PSK passphrase (8..63 chars); WRITE-ONLY — accepted here, never returned by any endpoint" }
+        },
+        "required": ["ssid", "psk"],
+        "additionalProperties": false
+      },
+      "WifiConnectionState": {
+        "type": ["object", "null"],
+        "description": "GET /api/v1/network/wifi/connection response: the configured station profile, or JSON null when none is configured. The psk is redacted (write-only, see WifiConnectionRequest) — restoring it is the store's job, not a client round-trip's.",
+        "properties": {
+          "ssid": { "type": "string" }
+        }
+      },
+      "WifiConnectAccepted": {
+        "type": "object",
+        "description": "202 body of PUT /api/v1/network/wifi/connection: the profile is persisted and the connection attempt is underway. Progress is narrated by network.wifi.state events and observable at GET /api/v1/network/wifi; when the daemon additionally tracks the attempt as an operation its resource path is given, else null. A valid-but-unsatisfiable profile (SSID out of range) is NOT an error (docs/06 §7): the 202 stands and the state shows degraded.",
+        "properties": {
+          "operation": { "type": ["string", "null"], "description": "Operation resource path when the connect is operation-tracked; null when events/state polling is the only progress surface" }
+        },
+        "required": ["operation"]
+      },
+      "WanPolicy": {
+        "type": "object",
+        "description": "WAN policy (docs/06 §5.2): ordered interface-class preference, applied as per-interface metric values in the rendered dhcpcd.conf (never rtnetlink route surgery). Also the PUT body — a full replace; unknown members rejected 400 (AD-013).",
+        "properties": {
+          "order": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Interface classes, most preferred first; \"ethernet\" and \"wifi\" today (\"cellular\" joins when the reserved namespace activates). Default [\"ethernet\", \"wifi\"]; first class with connectivity wins the default route" }
+        },
+        "required": ["order"],
+        "additionalProperties": false
       },
       "Problem": {
         "type": "object",

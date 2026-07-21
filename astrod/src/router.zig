@@ -10,6 +10,7 @@ const store_mod = @import("store.zig");
 const update = @import("update.zig");
 const events = @import("events.zig");
 const ops = @import("ops.zig");
+const netconf = @import("netconf.zig");
 
 /// Only the verbs the API uses (docs/06 §4); parse returns null for others
 /// so dispatch can answer 405 rather than crash on e.g. CONNECT.
@@ -107,6 +108,27 @@ pub const routes: []const Route = &.{
     .{ .method = .GET, .path = "/api/v1/events", .handler = getEvents },
     .{ .method = .GET, .path = "/api/v1/operations", .handler = getOperations },
     .{ .method = .GET, .path = "/api/v1/operations/{id}", .handler = getOperation },
+    // Phase-3 network group (docs/06 §5.2): handlers live in netconf.zig
+    // (wifi mechanism in wifi.zig). Without the wired backends
+    // (netconf.global / wifi.global null — unit builds) every route
+    // answers 501 not-implemented, keeping the group test meaningful.
+    // cellular is 501 by CONTRACT (reserved namespace), not by
+    // implementation state. /network/wifi/ap deliberately absent: AP
+    // mode is phase 4.
+    .{ .method = .GET, .path = "/api/v1/network", .handler = netconf.getNetwork },
+    .{ .method = .GET, .path = "/api/v1/network/ethernet/{iface}", .handler = netconf.getEthernetIface },
+    .{ .method = .PUT, .path = "/api/v1/network/ethernet/{iface}", .handler = netconf.putEthernetIface },
+    .{ .method = .PATCH, .path = "/api/v1/network/ethernet/{iface}", .handler = netconf.patchEthernetIface },
+    .{ .method = .GET, .path = "/api/v1/network/wifi", .handler = netconf.getWifi },
+    .{ .method = .POST, .path = "/api/v1/network/wifi/scan", .handler = netconf.postWifiScan },
+    .{ .method = .GET, .path = "/api/v1/network/wifi/networks", .handler = netconf.getWifiNetworks },
+    .{ .method = .GET, .path = "/api/v1/network/wifi/connection", .handler = netconf.getWifiConnection },
+    .{ .method = .PUT, .path = "/api/v1/network/wifi/connection", .handler = netconf.putWifiConnection },
+    .{ .method = .DELETE, .path = "/api/v1/network/wifi/connection", .handler = netconf.deleteWifiConnection },
+    .{ .method = .GET, .path = "/api/v1/network/wan", .handler = netconf.getWan },
+    .{ .method = .PUT, .path = "/api/v1/network/wan", .handler = netconf.putWan },
+    .{ .method = .GET, .path = "/api/v1/network/cellular", .handler = cellularReserved },
+    .{ .method = .PUT, .path = "/api/v1/network/cellular", .handler = cellularReserved },
 };
 
 /// Match a route path against a request path. Exact match, or — when the
@@ -237,6 +259,18 @@ fn notImplemented(ctx: *Context) anyerror!Response {
         .title = "Not Implemented",
         .status = 501,
         .detail = detail,
+    });
+}
+
+/// GET,PUT /api/v1/network/cellular — 501 BY CONTRACT (docs/06 §5.2
+/// reserved namespace): the problem detail documents the roadmap so
+/// clients can distinguish "reserved" from "not wired yet".
+fn cellularReserved(ctx: *Context) anyerror!Response {
+    return problemResponse(ctx, .{
+        .type = "urn:astro:problem:not-implemented",
+        .title = "Not Implemented",
+        .status = 501,
+        .detail = "cellular is a reserved namespace (docs/06 §5.2): planned as ModemManager beside iwd with astrod orchestrating (docs/07 §1); the endpoint shape is pinned by the OpenAPI contract and will activate in a future release",
     });
 }
 
@@ -413,6 +447,54 @@ test "operations routes serve the registry when wired" {
     const missing = dispatch(&missing_ctx);
     try std.testing.expectEqual(@as(u16, 404), missing.status);
     try std.testing.expect(std.mem.indexOf(u8, missing.body, "urn:astro:problem:not-found") != null);
+}
+
+test "network group: every phase-3 route answers 501 problem+json" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var st = try testStore();
+    defer st.deinit();
+
+    const cases = [_]struct { m: Method, p: []const u8 }{
+        .{ .m = .GET, .p = "/api/v1/network" },
+        .{ .m = .GET, .p = "/api/v1/network/ethernet/eth0" },
+        .{ .m = .PUT, .p = "/api/v1/network/ethernet/eth0" },
+        .{ .m = .PATCH, .p = "/api/v1/network/ethernet/eth0" },
+        .{ .m = .GET, .p = "/api/v1/network/wifi" },
+        .{ .m = .POST, .p = "/api/v1/network/wifi/scan" },
+        .{ .m = .GET, .p = "/api/v1/network/wifi/networks" },
+        .{ .m = .GET, .p = "/api/v1/network/wifi/connection" },
+        .{ .m = .PUT, .p = "/api/v1/network/wifi/connection" },
+        .{ .m = .DELETE, .p = "/api/v1/network/wifi/connection" },
+        .{ .m = .GET, .p = "/api/v1/network/wan" },
+        .{ .m = .PUT, .p = "/api/v1/network/wan" },
+        .{ .m = .GET, .p = "/api/v1/network/cellular" },
+        .{ .m = .PUT, .p = "/api/v1/network/cellular" },
+    };
+    for (cases) |case| {
+        var ctx = testCtx(arena.allocator(), &st, case.m, case.p);
+        const resp = dispatch(&ctx);
+        try std.testing.expectEqual(@as(u16, 501), resp.status);
+        try std.testing.expectEqualStrings(problem.content_type, resp.content_type);
+        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:astro:problem:not-implemented") != null);
+    }
+
+    // The {iface} param binds; ethernet without an iface is 404 (matchPath
+    // rejects empty/deeper segments); wrong verbs on known paths are 405.
+    var pctx = testCtx(arena.allocator(), &st, .GET, "/api/v1/network/ethernet/eth0");
+    _ = dispatch(&pctx);
+    try std.testing.expectEqualStrings("eth0", pctx.param.?);
+    var noiface = testCtx(arena.allocator(), &st, .GET, "/api/v1/network/ethernet/");
+    try std.testing.expectEqual(@as(u16, 404), dispatch(&noiface).status);
+    var wrong = testCtx(arena.allocator(), &st, .DELETE, "/api/v1/network/wan");
+    try std.testing.expectEqual(@as(u16, 405), dispatch(&wrong).status);
+    var wrong2 = testCtx(arena.allocator(), &st, .POST, "/api/v1/network/cellular");
+    try std.testing.expectEqual(@as(u16, 405), dispatch(&wrong2).status);
+
+    // The reserved namespace documents its roadmap in the problem detail.
+    var cell = testCtx(arena.allocator(), &st, .GET, "/api/v1/network/cellular");
+    const cell_resp = dispatch(&cell);
+    try std.testing.expect(std.mem.indexOf(u8, cell_resp.body, "reserved namespace") != null);
 }
 
 test "power actions answer 503 problem+json when dinit is unreachable" {

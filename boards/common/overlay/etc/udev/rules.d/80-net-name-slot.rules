@@ -1,0 +1,14 @@
+# Astro MASK of udev's predictable-net-naming rule (empty file shadows
+# /usr/lib/udev/rules.d/80-net-name-slot.rules, udev(7) precedence —
+# same mechanism as the resolv.conf tmpfiles override).
+#
+# Interfaces keep their KERNEL names (eth0, wlan0). The docs/07 network
+# model is written in kernel names: the dhcpcd fallback config allowlists
+# eth*, the store's ethernet map and the WAN policy speak eth0, and the
+# API surfaces those names to operators. Predictable slot names exist to
+# disambiguate multi-NIC servers across reboots; on fixed embedded
+# hardware they only break the model — found live on qemu-x86_64 (M3
+# phase 3): the PCI virtio NIC was renamed to enp0s2, no dhcpcd config
+# matched it, the board booted with no addresses and the astrod-api CI
+# gate could never reach SSH. arm -M virt boards were immune by accident
+# (mmio virtio has no slot identity, ID_NET_NAME_SLOT stays unset).

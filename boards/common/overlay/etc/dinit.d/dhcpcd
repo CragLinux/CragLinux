@@ -1,0 +1,32 @@
+# Astro SHADOW of the packaged dhcpcd service (/etc/dinit.d wins over
+# /usr/lib/dinit.d — same mechanism as the rauc/iwd shadows). Diff vs the
+# dhcpcd-dinit file (cports/main/dhcpcd/files/dhcpcd): -f points dhcpcd
+# at the astrod-rendered config. Re-diff on dhcpcd template bumps.
+#
+# CONFIG BOOTSTRAP (docs/07 §2 rendering model — read before touching):
+# /run/astro/net/dhcpcd.conf is pre-created by tmpfiles.d/astrod.conf as
+# a SYMLINK to the baked /etc/astro/dhcpcd-fallback.conf, so dhcpcd has a
+# valid config on every boot BEFORE astrod has ever run. When astrod
+# starts (and again on every network config change) it atomically
+# replaces the symlink with the real rendered file (tmp+rename) and pokes
+# the running daemon to rebind (dhcpcd -n). Ordering is already safe:
+# pre-network.target depends on local.target which depends on
+# early-tmpfiles, so the symlink exists before this service starts.
+#
+# dhcpcd deliberately does NOT depend on astrod: dhcpcd is data plane,
+# astrod is control plane (phase-3 decision). A dead astrod must never
+# take DHCP down with it — worst case the fallback config (DHCP on eth*,
+# no wifi, no static leases) serves until astrod recovers.
+#
+# The rendered config carries the WAN policy as per-interface 'metric'
+# values (dhcpcd.conf(5)) — route preference is expressed HERE, never by
+# rtnetlink surgery from astrod. DNS: both configs say 'nohook
+# resolv.conf'; DHCP-learned DNS reaches astrod via the lease-export hook
+# (/usr/lib/astro/dhcpcd-hook.sh) and astrod alone writes
+# /run/astro/resolv.conf (docs/07 §2: one writer).
+
+type = process
+command = /usr/bin/dhcpcd -B -M -f /run/astro/net/dhcpcd.conf -j /var/log/dhcpcd-service.log
+logfile = /var/log/dhcpcd.log
+before: network.target
+depends-on: pre-network.target

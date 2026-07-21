@@ -22,6 +22,14 @@
 #   rauc          waits-for, not depends-on: astrod degrades cleanly
 #                 (503 rauc-unavailable + restart re-attach probe) if
 #                 rauc is down, and must not be pulled down with it
+#   iwd, dhcpcd   waits-for (soft — docs/02 §5.1): the phase-3 network
+#                 group wants both up before astrod snapshots the iwd
+#                 tree and first-renders /run/astro/net/dhcpcd.conf, but
+#                 astrod is control plane: it must neither pull the data
+#                 plane down with it nor refuse to start when a radio-less
+#                 board has iwd sitting idle or dhcpcd failed. Also the
+#                 reverse dependency is forbidden: dhcpcd/iwd never wait
+#                 for astrod (see the dhcpcd shadow's bootstrap notes).
 
 type = process
 command = /usr/bin/astrod --ready-fd=4
@@ -34,3 +42,5 @@ depends-on: firstboot
 depends-on: local.target
 depends-on: dbus-daemon
 waits-for: rauc
+waits-for: iwd
+waits-for: dhcpcd

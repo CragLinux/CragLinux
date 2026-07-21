@@ -1146,3 +1146,191 @@ qemu-armv7 and by the AD-020 gate.
   idle.
 - The SSE subscriber a client abandons is reclaimed by the failing
   keepalive write (≤ 15 s); no idle-session timeout beyond that.
+
+## 18. M3 phase 3 complete: the network group is live (2026-07-20)
+
+The docs/07 network group is implemented, unit-verified and — the work
+of this section — validated at image level on qemu-armv7 and
+qemu-x86_64, including the first full wifi end-to-end (iwd AP on a
+mac80211_hwsim radio, astrod station flow through the API).
+
+### What landed (phase-3 code, summarized)
+
+- **src/link.zig** — read-only rtnetlink: pure parsers over
+  RTM_GETLINK/GETADDR dumps + a live Monitor thread
+  (RTMGRP_LINK|IPV4_IFADDR|IPV6_IFADDR) feeding GET /network and
+  carrier/address events. Netlink is OBSERVATION ONLY; route policy is
+  expressed as `metric` values in the rendered dhcpcd.conf, never by
+  rtnetlink surgery.
+- **src/netconf.zig** — desired state → daemon-native files:
+  /run/astro/net/dhcpcd.conf (interface allowlist, static blocks,
+  per-interface metrics implementing the WAN order) and
+  /run/astro/resolv.conf (one writer; static DNS beats DHCP-learned,
+  WAN-preferred interface first), tmp+rename installs, `dhcpcd -n`
+  rebind over the control socket, an inotify LeaseWatcher on
+  /run/astro/net/leases/, and the docs/06 §4 generation counters.
+- **src/wifi.zig** — iwd backend: a signal-fed mirror of iwd's
+  ObjectManager tree, scan as a tracked operation completed by the
+  Station.Scanning true→false edge, GetOrderedNetworks (model
+  fallback), connect = persist to store + render `<ssid>.psk` into
+  /data/net/iwd (iwd's dir watch picks it up; autoconnect is the
+  degraded path) + best-effort Network.Connect, forget, and
+  network.wifi.state events.
+- **Graph/overlay**: iwd + dhcpcd dinit shadows (iwd gets
+  STATE_DIRECTORY=/data/net/iwd via env-file and depends-on
+  dbus-daemon; dhcpcd runs -f /run/astro/net/dhcpcd.conf with a
+  tmpfiles-symlinked fallback config so DHCP works before/without
+  astrod), the root-run dhcpcd lease-export hook
+  (usr/lib/astro/dhcpcd-hook.sh → leases/<iface>.json), AD-015
+  /etc/iwd/main.conf (EnableNetworkConfiguration=false), the
+  resolv.conf tmpfiles override, and boards/common/kernel/
+  astro-net.fragment (CFG80211/MAC80211/CRYPTO_USER_API_* =y) +
+  MAC80211_HWSIM=y on the qemu test boards.
+- **build/test-api.sh** — the docs/10 §4 "astrod-api" suite: boot,
+  AD-014 auth matrix, rtnetlink eth0 observation, rendered resolv.conf,
+  update-status regression, the hwsim wifi e2e (iwctl AP with iwd's
+  built-in DHCP on radio 1 via a test-scoped /etc/iwd bind-mount
+  override, then scan/connect/lease/forget THROUGH THE API on radio 0),
+  and the docs/06 §3 RSS budget.
+
+### The build blocker: two cross-only cports bugs (carried patches)
+
+Cross-building main/iwd for the self-built armv7 repo hit two latent
+bugs Chimera's native builders can never see:
+
+- **dinit-dbus: "usvc: dbus-daemon (unknown provider)"**
+  (0008-dinit-dbus-cross-makedepends-dbus-dinit.patch). The -dinit
+  subpackage's service files depend-on dbus-daemon; the provider
+  (dbus-dinit) reaches a NATIVE build sysroot by accident —
+  checkdepends=["dbus"] installs dbus, and dbus+dinit-chimera trip
+  dbus-dinit's install_if. Cross builds skip checkdepends entirely
+  (cbuild core/dependencies.py:134 gates them on
+  `not pkg.profile().cross`), so no package provides
+  svc:/usvc:dbus-daemon and the 001_runtime_deps hook errors out. Fix
+  is the hook's own hint: dbus-dinit added to makedepends. (The
+  armv7 dbus-dinit apk itself was fine — `apk adbdump` showed the
+  auto-generated usvc:dbus-daemon provides; the diagnosis that
+  is_installed/get_provider disagreed was wrong: the log's `hint:` line
+  is printed only by the final "not installed at all" branch. Latent
+  upstream oddity seen on the way: scan_svc keys requirements by
+  service name, so a name required as both svc and usvc records only
+  the last-scanned prefix.)
+- **iwd: D-Bus policy packaged under the sysroot prefix**
+  (0009-iwd-cross-dbus-datadir.patch, pkgrel 0→1). iwd's configure
+  resolves the dbus-1 datadir via `$PKG_CONFIG --variable=datadir
+  dbus-1` (configure.ac:216); cbuild's cross pkgconf answers
+  sysroot-prefixed, so iwd-dbus.conf landed in
+  usr/armv7-…/usr/share/dbus-1/system.d/ inside the apk. On the image
+  dbus-daemon then had no policy allowing root to own net.connman.iwd
+  → RequestName denied → iwd crash-looped ("Name request failed /
+  D-Bus disconnected, quitting…", 3 starts then dinit gave up).
+  Fixed by passing --with-dbus-datadir=/usr/share explicitly.
+
+Both are UPSTREAMING.md drafts now.
+
+### Bugs found during image-level validation (root causes)
+
+- **arm32 has no 64-bit atomics** — netconf.zig's generation counters
+  were `std.atomic.Value(u64)`; Zig rejects atomics wider than the
+  target word ("expected 32-bit integer type or smaller") so armv7
+  astrod would not compile. Counters are usize now (monotonic
+  comparison only; JSON marshaling widens to u64).
+- **`std.mem.trimRight` no longer exists in Zig 0.16** →
+  astroctl.zig's passphrase-prompt path used it; first caught by the
+  armv7 cross compile because `zig build test` doesn't compile the
+  astroctl entry path. `trimEnd` now.
+- **astrod had no D-Bus grant for iwd — and three of four call sites
+  masked it.** The phase-2 policy file deliberately deferred the
+  net.connman.iwd grant to phase 3, and phase 3 forgot it. iwd's own
+  policy default-denies non-root senders, so every astrod→iwd method
+  call died with org.freedesktop.DBus.Error.AccessDenied — but
+  GET /network/wifi/networks fell back to the mirrored model,
+  connect() fell back to iwd autoconnect from the rendered profile
+  (both by design), and the startup GetManagedObjects failure was an
+  expected-looking info line. Only POST /network/wifi/scan surfaced
+  the truth as 502 iwd-error. usr/share/dbus-1/system.d/astrod.conf
+  now grants exactly the interfaces wifi.zig calls (ObjectManager,
+  Station, StationDiagnostic, Network, KnownNetwork + Properties/
+  Introspectable/Peer). Verified live by SIGHUPing dbus-daemon in a
+  guest: scan → op-2 → succeeded → networks lists astro-hwsim at
+  -30 dBm. Lesson recorded: degraded-not-error paths hide permission
+  bugs — when a subsystem "works" but one call 502s, read the failed
+  operation's `error` field (the op registry kept the D-Bus error
+  name; /var/log/astrod.log had nothing).
+- **Scan raced iwd's own scan → 502.** Right after an iwd (re)start,
+  its autoconnect/periodic scan owns the radio and Station.Scan
+  answers net.connman.iwd.InProgress (dbus_error_busy,
+  station.c:4537). That is not a contract failure: wifi.zig now rides
+  the in-flight scan to its Scanning-edge completion when the model
+  shows scanning, else completes the operation against current
+  results.
+- **qemu-x86_64 had no network at all under the suite: udev's
+  predictable naming.** 80-net-name-slot.rules renamed the PCI
+  virtio NIC to enp0s2; the dhcpcd fallback allowlists eth*, the store
+  model speaks eth0 — so nothing DHCP'd the interface, and the
+  astrod-api CI board could never reach SSH (TCP connect via slirp
+  accepted, banner exchange timed out — slirp's accept says nothing
+  about the guest). The arm -M virt boards were immune BY ACCIDENT:
+  mmio virtio has no slot identity, ID_NET_NAME_SLOT stays unset, the
+  name stays eth0. Deliberate policy fix, not a workaround: the common
+  overlay masks the rule (empty /etc/udev/rules.d/80-net-name-slot
+  .rules) — Astro's docs/07 model is written in kernel names, and slot
+  names buy nothing on fixed embedded hardware. Diagnosed by direct
+  kernel boot of the rootfs with init=/bin/sh over piped serial
+  (ls /sys/class/net → eth0 present with the slirp MAC, so the kernel
+  and virtio-net were fine; the rename happens only once udevd runs).
+- **Harness bugs (the suite must only depend on what the image
+  ships):** the wlan1-AP-address assertion shelled out to `ip` and the
+  RSS probe to `pidof` — neither exists on the image (silently fatal:
+  the poll loops just timed out). Both now go through what is actually
+  there: GET /network for the address (it is the surface under test
+  anyway) and a /proc/<pid>/comm walk for the RSS read.
+  test-update-rollback.sh additionally could hang forever on its
+  `ssh … reboot` when QEMU's user-net left the forwarded TCP
+  connection half-open after guest teardown (observed once: the
+  harness sat 10 min while the rollback had long completed on serial);
+  the harness SSH now runs ServerAliveInterval=5/CountMax=2.
+
+### Verified (evidence: build/state/logs/, test-results/)
+
+- Container `zig build test`: 152 pass / 4 skip; `zig fmt --check`
+  clean; astrod cross ReleaseSafe static: armv7hf 6,350,124 B ·
+  x86_64 7,353,200 B (≤ 8 MiB budget).
+- Built kernel .configs (armv7 + x86_64) carry MAC80211_HWSIM,
+  CFG80211, MAC80211, CRYPTO_USER_API_HASH, CRYPTO_USER_API_SKCIPHER
+  all =y.
+- boot-smoke qemu-armv7 dev: PASS, zero FAILED, 32–33 s to verdict
+  (68 s once on a loaded host) — iwd/dhcpcd/astrod all [ OK ] in the
+  new graph. Re-run green on the final image (udev mask included).
+- **astrod-api qemu-armv7: PASS 7/7 in 62 s** (63 s on the final
+  image; api-qemu-armv7.log):
+  AP up on wlan1 192.168.80.1 with iwd's DHCP pool, scan operation
+  succeeded on attempt 1 with astro-hwsim visible, station →
+  connected, wlan0 leased 192.168.80.2 from the AP pool via dhcpcd,
+  forget → disconnected; astrod VmRSS after the suite 1460 kB.
+- **astrod-api qemu-x86_64: PASS 7/7 in 46 s** (api-qemu-x86_64.log);
+  VmRSS 1516 kB. No arch-specific netlink parsing issues surfaced —
+  the x86 failure above was policy, not structs.
+- **AD-020 regression `./build/test-update-rollback.sh qemu-armv7`:
+  PASS in 528 s** with the new service graph — API install + apply
+  flip A→B verified at 119 s; poisoned slot rolled back to B after 3
+  watchdog reboots (ad020-qemu-armv7.log).
+
+### Deviations / notes
+
+- Predictable interface naming is now masked device-wide (see above) —
+  an Astro policy decision recorded here; revisit only if a board ever
+  ships multiple same-class NICs.
+- The iwd apks for armv7 are r1; the broken r0 files remain in
+  cports/packages/main/armv7 but the index prefers r1 (no mkndx trap:
+  pkgrel moved, unlike the §16 basu case).
+- iwd's AP DHCP rig behavior confirmed as the suite header documents:
+  profile [IPv4] + global EnableNetworkConfiguration=true are BOTH
+  required; the suite's bind-mount override + `dinitctl restart iwd`
+  choreography works, and the shipped AD-015 posture stays off.
+- The anticipated wifi.zig staleness across the suite's mid-test iwd
+  restart did NOT materialize: hwsim device paths are stable across
+  restarts, dbus-daemon matches on the well-known name keep firing for
+  the new owner, and InterfacesAdded re-fills the mirror. No
+  NameOwnerChanged re-sync was needed; if a future board hot-swaps
+  radios, revisit.

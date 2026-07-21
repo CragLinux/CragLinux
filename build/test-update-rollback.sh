@@ -77,9 +77,16 @@ FAILURES=()
 [ -f "$SSH_KEY" ] || { echo "ERROR: dev SSH key missing — run ./build/astro-keys.sh init-dev"; exit 1; }
 [ -f "$BUNDLE" ] || { echo "ERROR: bundle not found: ${BUNDLE} — run ./build/astro-build.sh ${BOARD} ${VARIANT} --step=bundle"; exit 1; }
 
+# ServerAlive*: the `reboot` invocations kill the guest under an open
+# session; QEMU's user-net forward can leave that TCP connection
+# half-open and the client then blocks forever waiting for a close that
+# never comes (observed live: the phase-3 `ssh reboot` hung ~10 min
+# after the rollback had already completed on serial). Keepalives bound
+# the hang to ~10 s.
 SSH=(ssh -i "$SSH_KEY" -p "$SSH_PORT" -o StrictHostKeyChecking=no
      -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
-     -o ConnectTimeout=5 root@127.0.0.1)
+     -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2
+     root@127.0.0.1)
 
 fail() { FAILURES+=("$1"); echo "[FAIL-POINT] $1"; }
 
