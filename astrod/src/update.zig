@@ -47,6 +47,7 @@ const sync = @import("sync.zig");
 const dinit = @import("dinit.zig");
 const fsutil = @import("fsutil.zig");
 const store_mod = @import("store.zig");
+const timekeep = @import("timekeep.zig");
 
 /// docs/05 §5.1: uploads are staged here (on /data, which both slots
 /// share) before RAUC gets the local path.
@@ -727,6 +728,20 @@ pub fn postUpdate(ctx: *router.Context) anyerror!router.Response {
         if (!is_path and !std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://"))
             return badRequest(ctx, "\"url\" must be an http(s) URL or an absolute local path");
         const force = req.force or query_force;
+
+        // docs/07 §6 item 3: astrod gates its OWN TLS-dependent work.
+        // A battery-less board still in 1970 would fail RAUC's https
+        // certificate validation with an opaque error; refuse up front
+        // with a retryable 503 until NTP syncs or the clock passes the
+        // build-time floor. http:// and local paths are unaffected.
+        if (std.mem.startsWith(u8, url, "https://") and !timekeep.httpsAllowed()) {
+            return router.problemResponse(ctx, .{
+                .type = "urn:astro:problem:clock-not-set",
+                .title = "Service Unavailable",
+                .status = 503,
+                .detail = "the system clock is not NTP-synced and is behind the build-time floor (docs/07 \u{a7}6): https certificate validation would fail spuriously; retry after time syncs, or use an http URL / staged upload",
+            });
+        }
 
         const mgr = managerOr503(ctx) orelse return unavailable(ctx, "update subsystem is not connected to D-Bus");
         const url_z = try ctx.allocator.dupeZ(u8, url);

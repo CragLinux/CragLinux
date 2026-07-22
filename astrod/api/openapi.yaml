@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "astrod Device Configuration API",
-    "description": "Local HTTP API for Astro devices (docs/06, AD-013). Documented surface: system summary, reboot/poweroff actions, this document, the update/events/operations group (docs/06 §5.3 + §4, docs/05 §5.1): RAUC-backed A/B updates modeled as operations, with an SSE event stream, and the network group (docs/06 §5.2, docs/07 AD-015: iwd manages wifi only, dhcpcd owns addressing, astrod is the single policy brain) — the network endpoints answer 501 until the M3 phase-3 fill stage, except cellular which is 501 by contract (reserved). Degradation: the update endpoints answer 503 urn:astro:problem:rauc-unavailable while the daemon has no D-Bus connection; a route whose subsystem is entirely absent from the build answers 501 (NotImplemented response component). Authored in JSON syntax (valid YAML) so the file is served verbatim at GET /api/v1/openapi.json and parsed by std.json in the route conformance test.",
+    "description": "Local HTTP API for Astro devices (docs/06, AD-013). Documented surface: system summary, reboot/poweroff actions, this document, the update/events/operations group (docs/06 §5.3 + §4, docs/05 §5.1): RAUC-backed A/B updates modeled as operations, with an SSE event stream, the network group (docs/06 §5.2, docs/07 AD-015: iwd manages wifi only, dhcpcd owns addressing, astrod is the single policy brain), and the phase-4 provisioning group (/network/wifi/ap manual AP control, /system/factory-reset; cellular stays 501 by contract, reserved). Degradation: the update endpoints answer 503 urn:astro:problem:rauc-unavailable while the daemon has no D-Bus connection; a route whose subsystem is entirely absent from the build answers 501 (NotImplemented response component). SURFACES (AD-014): unix socket (group-gated), 127.0.0.1 (bearer token), opt-in LAN (bearer token, AD-025 default off), and — while unprovisioned in AP mode only — the AP provisioning surface, which serves an unauthenticated SUBSET: GET /api/v1/system (REDACTED — machine_id omitted), POST /api/v1/network/wifi/scan, GET /api/v1/network/wifi/networks, PUT /api/v1/network/wifi/connection; every other operation answers 403 urn:astro:problem:forbidden there (Forbidden response component). The AP surface additionally serves captive-portal furniture OUTSIDE this contract — GET / (the embedded provisioning page) and the OS probe paths /generate_204, /hotspot-detect.html, /connecttest.txt, /ncsi.txt (302 to /) — deliberately undocumented here: their shapes are dictated by phone OSes, they exist on no authenticated surface, and the router keeps them in a separate table (router.portal_routes) outside the spec↔route conformance gate, which asserts they never enter the /api/ namespace. Authored in JSON syntax (valid YAML) so the file is served verbatim at GET /api/v1/openapi.json and parsed by std.json in the route conformance test.",
     "version": "1.0.0"
   },
   "servers": [
@@ -20,7 +20,8 @@
     "/api/v1/system": {
       "get": {
         "operationId": "getSystem",
-        "summary": "System summary: board, variant, release, booted slot, uptime, provisioning state, health",
+        "summary": "System summary: board, variant, release, booted slot, uptime, provisioning state, health, time sync",
+        "description": "On the AP provisioning surface this response is REDACTED: machine_id is omitted (it seeds the AP PSK derivation and is the factory-reset confirm token); all other SystemInfo fields are served unchanged.",
         "responses": {
           "200": {
             "description": "System information",
@@ -82,6 +83,36 @@
             }
           },
           "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/DinitUnavailable" }
+        }
+      }
+    },
+    "/api/v1/system/factory-reset": {
+      "post": {
+        "operationId": "factoryResetSystem",
+        "summary": "Wipe /data and reboot (docs/07 §5); requires {\"confirm\": \"<machine-id>\"}",
+        "description": "Confirm-with-serial (docs/06 §5.1): the body's confirm field must equal this device's machine_id or the request is rejected 400. On acceptance astrod dispatches the astro-factory-reset root oneshot (docs/02 §7 residual-root-ops): it flags /data/.astro/factory-reset-request, syncs, and reboots; the data-mount executor wipes /data on the way back up (fast rm -rf path; blkdiscard secure erase is a deferred per-product option), firstboot reruns, state returns to factory. Slots are untouched — the device keeps its firmware version. Authenticated surfaces only: the AP subset excludes this operation (403 there), and the redacted AP-surface GET /system withholds the confirm token by construction.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/FactoryResetRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Reset accepted; the reboot is issued after this response is on the wire (deferred-shutdown discipline).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PowerActionResult" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "501": { "$ref": "#/components/responses/NotImplemented" },
           "503": { "$ref": "#/components/responses/DinitUnavailable" }
         }
       }
@@ -403,6 +434,32 @@
         }
       }
     },
+    "/api/v1/network/wifi/ap": {
+      "get": {
+        "operationId": "getWifiAp",
+        "summary": "AP/provisioning mode state: enabled, ssid, subnet",
+        "description": "Normally driven by the provisioning state machine (docs/07 §4): SSID astro-<last 6 hex of machine-id>, WPA2 PSK derived per-device (printed on the label), subnet 192.168.223.0/24 served by iwd's built-in DHCP from the rendered AP profile.",
+        "responses": {
+          "200": { "description": "AP state.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WifiApState" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      },
+      "put": {
+        "operationId": "putWifiAp",
+        "summary": "Manual AP enable/disable for on-demand-AP products",
+        "description": "Persists system.ap.enabled_override in the store: true forces the AP up, false forces it down even while unprovisioned, absent/null returns control to the provisioning state machine. AUTHENTICATED SURFACES ONLY — the AP unauthenticated subset excludes this operation (403): a portal client must never be able to hold the AP open or kill the surface it stands on.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WifiApConfig" } } } },
+        "responses": {
+          "200": { "description": "Applied AP config.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WifiApState" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "501": { "$ref": "#/components/responses/NotImplemented" }
+        }
+      }
+    },
     "/api/v1/network/wan": {
       "get": {
         "operationId": "getWan",
@@ -429,7 +486,7 @@
       "get": {
         "operationId": "getCellular",
         "summary": "RESERVED (501 by contract): cellular lands as ModemManager beside iwd (docs/07 §1)",
-        "description": "Reserved namespace per docs/06 §5.2. Always answers 501 urn:astro:problem:not-implemented with the roadmap in the detail; the path is pinned so future activation is not a breaking change. /network/wifi/ap is likewise deferred (phase 4) but NOT yet pinned.",
+        "description": "Reserved namespace per docs/06 §5.2. Always answers 501 urn:astro:problem:not-implemented with the roadmap in the detail; the path is pinned so future activation is not a breaking change.",
         "responses": {
           "401": { "$ref": "#/components/responses/Unauthorized" },
           "501": { "$ref": "#/components/responses/NotImplemented" }
@@ -456,6 +513,14 @@
     "responses": {
       "Unauthorized": {
         "description": "Missing or invalid bearer token. Enforced on the TCP surface only; unix-socket peers are authorized by group membership.",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The surface refuses this operation (problem type urn:astro:problem:forbidden). Today this is the AP provisioning surface, which serves only the unauthenticated subset (AD-014, docs/06 §6) — every other operation, known or unknown, answers 403 there. Distinct from 401: credentials would not help.",
         "content": {
           "application/problem+json": {
             "schema": { "$ref": "#/components/schemas/Problem" }
@@ -562,10 +627,12 @@
           "booted_slot": { "type": ["string", "null"], "description": "RAUC slot currently booted, from rauc.slot= on the kernel cmdline; null on a direct kernel boot (dev QEMU) with no RAUC-managed slot" },
           "machine_id": { "type": "string", "description": "Stable per-device identity from /etc/machine-id" },
           "uptime_s": { "type": "integer", "minimum": 0, "description": "Whole seconds since boot (/proc/uptime, CLOCK_BOOTTIME-derived so suspended time counts)" },
-          "provisioning": { "type": "string", "description": "Provisioning state machine summary (docs/07 §4)" },
-          "health": { "type": "string", "description": "Reconciler health summary" }
+          "provisioning": { "type": "string", "description": "Provisioning state machine summary (docs/07 §4): factory | provisioning | provisioned" },
+          "health": { "type": "string", "description": "Reconciler health summary" },
+          "time_synced": { "type": "boolean", "description": "Kernel NTP discipline state (docs/07 §6): adjtimex STA_UNSYNC is clear — chronyd has stepped/slewed the clock. Product apps should gate their own TLS-dependent operations on this; astrod gates its https update installs on it (or the clock being past the build-time floor). Deliberately FLAT rather than docs/07 §6's time{synced, floor} object sketch (recorded deviation): SystemInfo mirrors the daemon struct field-for-field under the conformance parity gate, and the floor context (build-epoch, applied by root firstboot and re-checked — capless, gate-only — at every astrod startup) is an on-device operator concern served by `astroctl time` (synced/floor/now/floor_ok) instead of a remote API field" },
+          "last_error": { "type": ["string", "null"], "description": "Last provisioning-AP failure (docs/07 §4 item 5): 'ap-start-failed' | 'ap-stop-failed', null when the last AP cycle was clean. Kept in the REDACTED AP-surface view too — the embedded portal page displays it and re-offers the credentials form (the survivable wrong-password loop)" }
         },
-        "required": ["board", "variant", "release", "booted_slot", "machine_id", "uptime_s", "provisioning", "health"]
+        "required": ["board", "variant", "release", "booted_slot", "machine_id", "uptime_s", "provisioning", "health", "time_synced", "last_error"]
       },
       "PowerActionRequest": {
         "type": "object",
@@ -773,6 +840,34 @@
           "operation": { "type": ["string", "null"], "description": "Operation resource path when the connect is operation-tracked; null when events/state polling is the only progress surface" }
         },
         "required": ["operation"]
+      },
+      "WifiApState": {
+        "type": "object",
+        "description": "GET /api/v1/network/wifi/ap response (docs/06 §5.2, docs/07 §4): the provisioning AP's state. The PSK is never returned by any HTTP endpoint — the label-printing story goes through a socket-surface-only astroctl flow (phase-4 fill).",
+        "properties": {
+          "enabled": { "type": "boolean", "description": "AP mode is currently up" },
+          "ssid": { "type": "string", "description": "astro-<last 6 hex of machine-id> (identical to the mDNS instance label)" },
+          "subnet": { "type": "string", "description": "The AP provisioning subnet, 192.168.223.0/24 (astrod at .1; iwd's built-in DHCP serves the pool)" }
+        },
+        "required": ["enabled", "ssid", "subnet"]
+      },
+      "WifiApConfig": {
+        "type": "object",
+        "description": "PUT /api/v1/network/wifi/ap body: manual AP control for on-demand-AP products. Persisted as system.ap.enabled_override; null returns control to the provisioning state machine. Unknown members rejected 400 (AD-013).",
+        "properties": {
+          "enabled": { "type": ["boolean", "null"], "description": "true = force AP up, false = force AP down, null = provisioning state machine decides (the default)" }
+        },
+        "required": ["enabled"],
+        "additionalProperties": false
+      },
+      "FactoryResetRequest": {
+        "type": "object",
+        "description": "POST /api/v1/system/factory-reset body (docs/06 §5.1 confirm-with-serial).",
+        "properties": {
+          "confirm": { "type": "string", "description": "Must equal this device's machine_id (GET /api/v1/system on an authenticated surface) or the request is rejected 400" }
+        },
+        "required": ["confirm"],
+        "additionalProperties": false
       },
       "WanPolicy": {
         "type": "object",

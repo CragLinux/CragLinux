@@ -1,6 +1,11 @@
-//! Authentication for the two default surfaces (AD-014):
+//! Authentication for the AD-014 surfaces:
 //!  - unix socket: filesystem-gated by group astro-api; peer is trusted.
-//!  - 127.0.0.1 TCP: Bearer token from /data/config/api-token.
+//!  - 127.0.0.1 TCP (localhost) and opt-in LAN: Bearer token from
+//!    /data/config/api-token.
+//!  - AP provisioning listener: no bearer token — the router serves ONLY
+//!    the unauthenticated subset there (docs/06 §6; router.apAllowed)
+//!    and answers 403 for everything else. Transport-level auth is the
+//!    AP's WPA2 PSK (printed on the device label).
 
 const std = @import("std");
 const posix = std.posix;
@@ -9,6 +14,29 @@ const fsutil = @import("fsutil.zig");
 const sync = @import("sync.zig");
 
 pub const default_token_path = "/data/config/api-token";
+
+/// Listener surfaces (AD-014 table, docs/06 §6). Every listener fd is
+/// tagged at bind time; the tag rides the Context into the router so
+/// auth AND route policy can differ per surface:
+///   unix      /run/astro/astrod.sock — group-gated, no token
+///   localhost 127.0.0.1:8080         — bearer token
+///   lan       0.0.0.0 (opt-in, AD-025 default off; phase-4 spine only
+///             carries the tag — the LAN listener itself is future fill)
+///   ap        192.168.223.1:8080 while AP mode is up — unauthenticated
+///             SUBSET only (router.apAllowed), everything else 403
+pub const Surface = enum { unix, localhost, lan, ap };
+
+/// Per-surface admission (AD-014). AP returns true here because the AP
+/// surface's restriction is a ROUTE whitelist, not a credential — the
+/// router enforces it (403), keeping "who may connect" and "what this
+/// surface serves" separately testable.
+pub fn authorize(surface: Surface, token_file_path: []const u8, header_value: ?[]const u8) bool {
+    return switch (surface) {
+        .unix => allowUnixPeer(),
+        .localhost, .lan => checkBearer(token_file_path, header_value),
+        .ap => true,
+    };
+}
 
 // Token file is firstboot-generated ASCII; anything longer than this is
 // not ours and safely rejected.
@@ -170,4 +198,23 @@ test "constantTimeEql basics" {
     try std.testing.expect(constantTimeEql("abc", "abc"));
     try std.testing.expect(!constantTimeEql("abc", "abd"));
     try std.testing.expect(!constantTimeEql("abc", "ab"));
+}
+
+test "authorize: per-surface policy (AD-014)" {
+    var path_buf: [128]u8 = undefined;
+    const token_path = fsutil.testTmpPath(&path_buf, "surface-token");
+    defer fsutil.unlink(token_path) catch {};
+    try fsutil.writeFileSync(token_path, "tok-1\n");
+
+    // unix: group-gated at connect, header irrelevant.
+    try std.testing.expect(authorize(.unix, token_path, null));
+    // localhost/lan: bearer token required.
+    try std.testing.expect(authorize(.localhost, token_path, "Bearer tok-1"));
+    try std.testing.expect(!authorize(.localhost, token_path, null));
+    try std.testing.expect(!authorize(.localhost, token_path, "Bearer nope"));
+    try std.testing.expect(authorize(.lan, token_path, "Bearer tok-1"));
+    try std.testing.expect(!authorize(.lan, token_path, null));
+    // ap: admission always passes; the ROUTER enforces the subset (403).
+    try std.testing.expect(authorize(.ap, token_path, null));
+    try std.testing.expect(authorize(.ap, "/nonexistent/token", null));
 }

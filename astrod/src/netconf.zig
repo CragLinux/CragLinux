@@ -12,7 +12,7 @@
 //!             reloadDhcpcd() rebinds the running daemon. dhcpcd NEVER
 //!             depends on astrod (control plane, not data plane) — it
 //!             starts fine on the fallback.
-//!   resolv  ← /run/astro/resolv.conf (the /etc/resolv.conf symlink target;
+//!   resolv  ← /run/astro-resolv/resolv.conf (the /etc/resolv.conf target;
 //!             one writer). Inputs: static DNS from the store (wins) +
 //!             DHCP-learned DNS from the lease files the dhcpcd hook
 //!             writes, WAN-preferred interface first.
@@ -58,12 +58,18 @@ const link = @import("link.zig");
 const wifi_mod = @import("wifi.zig");
 const dinit = @import("dinit.zig");
 const router = @import("router.zig");
+const provision = @import("provision.zig");
 
 /// Rendered-config paths (tmpfiles-owned parents; see the overlay's
 /// usr/lib/tmpfiles.d/astrod.conf for the ownership map).
 pub const dhcpcd_conf_path = "/run/astro/net/dhcpcd.conf";
 pub const dhcpcd_fallback_path = "/etc/astro/dhcpcd-fallback.conf";
-pub const resolv_conf_path = "/run/astro/resolv.conf";
+// DELIBERATELY OUTSIDE the 0750 /run/astro gate: /etc/resolv.conf must
+// be readable by EVERY user (musl getaddrinfo in any daemon — found
+// live: chronyd, dropped to _chrony, could never resolve the NTP pool
+// through the astro-api-gated dir, so time.synced stayed false forever).
+// /run/astro-resolv is a world-readable astrod-owned tmpfiles dir.
+pub const resolv_conf_path = "/run/astro-resolv/resolv.conf";
 pub const lease_dir = "/run/astro/net/leases";
 
 /// dhcpcd's privileged control socket: RUNDIR "/sock" with the port's
@@ -222,7 +228,7 @@ pub fn renderDhcpcdConf(allocator: std.mem.Allocator, st: *store_mod.Store) Erro
         \\# dhcpcd.conf — RENDERED BY ASTROD, DO NOT EDIT (docs/07 §2).
         \\# Desired state lives in /data/config/astro.json (network.*); this
         \\# file is regenerated on astrod startup and on every config change.
-        \\# One resolv.conf writer: astrod renders /run/astro/resolv.conf from
+        \\# One resolv.conf writer: astrod renders /run/astro-resolv/resolv.conf
         \\# store DNS + the lease exports (hook 60-astro-lease), so dhcpcd's
         \\# own resolv.conf hook stays off in BOTH this and the fallback conf.
         \\nohook resolv.conf
@@ -1253,6 +1259,24 @@ pub fn putWifiConnection(ctx: *router.Context) anyerror!router.Response {
             .{err},
         )),
     };
+    // AP-surface portal submit while the AP is up: persist only (durable
+    // BEFORE the 202), then hand the single-radio AP→station flip to the
+    // deferred action — the flip tears down the very listener this
+    // response leaves on, so it must not run before the write
+    // (docs/07 §4 items 4–5; main.zig DeferredAction.wifi_flip).
+    const ap_flip = ctx.surface == .ap and
+        (if (provision.global) |p| p.apActive() else false);
+    if (ap_flip) {
+        w.persistOnly(body.ssid, body.psk) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidArgument => return badRequest(ctx, "ssid must be 1..32 bytes; psk must be a 8..63-char passphrase, 64 hex digits, or empty (open network)"),
+            error.StoreFailed => return persistFailure(ctx),
+            else => return iwdError(ctx),
+        };
+        ctx.deferred = .{ .wifi_flip = .{ .ssid = body.ssid, .psk = body.psk } };
+        return .{ .status = 202, .body = "{\"operation\":null}" };
+    }
+
     w.connect(body.ssid, body.psk) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidArgument => return badRequest(ctx, "ssid must be 1..32 bytes; psk must be a 8..63-char passphrase, 64 hex digits, or empty (open network)"),
@@ -1260,6 +1284,9 @@ pub fn putWifiConnection(ctx: *router.Context) anyerror!router.Response {
         error.BusUnavailable => return iwdUnavailable(ctx),
         else => return iwdError(ctx),
     };
+    // Arm the provisioning machine's connect-attempt window (docs/07 §4):
+    // iwd's own connecting/connected/disconnected events settle it.
+    if (provision.global) |p| p.notifyWifiConnectStarted();
     return .{ .status = 202, .body = "{\"operation\":null}" };
 }
 
@@ -1327,7 +1354,7 @@ test "renderDhcpcdConf: golden static + dhcp + metric assignment" {
         \\# dhcpcd.conf — RENDERED BY ASTROD, DO NOT EDIT (docs/07 §2).
         \\# Desired state lives in /data/config/astro.json (network.*); this
         \\# file is regenerated on astrod startup and on every config change.
-        \\# One resolv.conf writer: astrod renders /run/astro/resolv.conf from
+        \\# One resolv.conf writer: astrod renders /run/astro-resolv/resolv.conf
         \\# store DNS + the lease exports (hook 60-astro-lease), so dhcpcd's
         \\# own resolv.conf hook stays off in BOTH this and the fallback conf.
         \\nohook resolv.conf

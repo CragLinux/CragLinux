@@ -20,7 +20,14 @@ defconfig = "defconfig"
 config_fragments = ["qemu.fragment"]
 # No root= here: the image stage owns root=PARTLABEL=... per A/B slot
 # (docs/03 §6); build/run-qemu.sh injects root= itself for direct boots.
-cmdline = "console=ttyS0,115200 rootwait"
+# mac80211_hwsim.radios=3 (M3 phase 4): the AP-portal e2e needs THREE
+# virtual radios - device-under-test station + AP flip on radio 0, the
+# test AP on radio 1, and a "phone" client joining the provisioning AP
+# on radio 2. MAC80211_HWSIM is =y (qemu.fragment), so the module
+# parameter must ride the kernel cmdline (modprobe.d never applies to
+# built-ins); cmdline flows board.toml -> config.py -> build-inner.sh
+# KERNEL_CMDLINE -> image.sh boot.scr/grub.cfg (@CMDLINE@).
+cmdline = "console=ttyS0,115200 rootwait mac80211_hwsim.radios=3"
 lto = "thin"
 
 [bootloader]

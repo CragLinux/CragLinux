@@ -1,0 +1,20 @@
+# Astro: AP captive-portal redirect UP (docs/07 §4, M3 phase 4).
+# Root-run nft rules: AP-interface :80 -> :8080 and :53 -> :5354 (see
+# usr/lib/astro/portal-redirect-up.sh for the ruleset + rationale).
+#
+# NOT ENABLED IN boot.d — DISPATCHED ON DEMAND: astrod starts this
+# oneshot through its dinit-control-socket client when the provisioning
+# AP comes up, and starts astro-portal-redirect-stop when it goes down
+# (docs/02 §7 residual-root-ops; the capless daemon cannot touch
+# netfilter or ports <1024 itself).
+#
+# Re-trigger note for the phase-4 fill: dinit marks a scripted service
+# STARTED after a successful run, so a second start is a no-op until it
+# is stopped — the fill's AP cycle must stop this service (dinit client
+# STOPSERVICE, a small addition to dinit.zig) before restarting it, or
+# simply rely on the script's own idempotence via the -stop/-start pair.
+# Both scripts are safe to run in any order and any number of times.
+
+type = scripted
+command = /usr/lib/astro/portal-redirect-up.sh
+restart = false

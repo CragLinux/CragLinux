@@ -34,6 +34,11 @@ const ops = @import("ops.zig");
 const bus_mod = @import("bus.zig");
 const netconf = @import("netconf.zig");
 const wifi_mod = @import("wifi.zig");
+const timekeep = @import("timekeep.zig");
+const mdns = @import("mdns.zig");
+const provision = @import("provision.zig");
+const portal = @import("portal.zig");
+const fsutil = @import("fsutil.zig");
 
 // Deviations from docs/06 (recorded in MIGRATION-NOTES): socket moved under
 // /run/astro/ so the tmpfiles.d-created parent can be astrod:astro-api, and
@@ -41,6 +46,13 @@ const wifi_mod = @import("wifi.zig");
 pub const Options = struct {
     socket_path: []const u8 = "/run/astro/astrod.sock",
     listen: []const u8 = "127.0.0.1:8080",
+    /// TEST-ONLY (container smoke / test-api.sh): bind an extra TCP
+    /// listener tagged as the AP surface, so the AD-014 unauthenticated-
+    /// subset enforcement is exercisable without a real AP flip. On the
+    /// image the AP listener is bound by the provisioning machine on
+    /// 192.168.223.1:8080 while AP mode is up (phase-4 fill); this flag
+    /// merely reuses that surface tag on an arbitrary address.
+    ap_listen: ?[]const u8 = null,
     store_path: []const u8 = store.default_path,
     token_path: []const u8 = auth.default_token_path,
     /// dinit readiness: one newline byte on this fd once both listeners
@@ -64,7 +76,7 @@ pub fn main(init: std.process.Init) !u8 {
         return astroctl.run(gpa, args.items[2..]);
 
     const opts = parseArgs(args.items[1..]) catch |err| {
-        std.debug.print("astrod: bad arguments ({t})\nusage: astrod [--socket=PATH] [--listen=ADDR:PORT] [--store=PATH] [--token=PATH] [--ready-fd=N]\n", .{err});
+        std.debug.print("astrod: bad arguments ({t})\nusage: astrod [--socket=PATH] [--listen=ADDR:PORT] [--ap-listen=ADDR:PORT] [--store=PATH] [--token=PATH] [--ready-fd=N]\n", .{err});
         return 2;
     };
 
@@ -92,6 +104,8 @@ pub fn parseArgs(args: []const []const u8) !Options {
             opts.socket_path = arg["--socket=".len..];
         } else if (std.mem.startsWith(u8, arg, "--listen=")) {
             opts.listen = arg["--listen=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--ap-listen=")) {
+            opts.ap_listen = arg["--ap-listen=".len..];
         } else if (std.mem.startsWith(u8, arg, "--store=")) {
             opts.store_path = arg["--store=".len..];
         } else if (std.mem.startsWith(u8, arg, "--token=")) {
@@ -105,13 +119,18 @@ pub fn parseArgs(args: []const []const u8) !Options {
     return opts;
 }
 
-const Surface = enum { unix, tcp };
+/// AD-014 listener surfaces live in auth.zig (phase 4: unix | localhost
+/// | lan | ap); the old two-value local enum is gone — the tag now rides
+/// Context.surface into the router for subset/redaction policy.
+const Surface = auth.Surface;
 
 /// Connection-thread cap (docs/06 §7 backpressure family). Strictly above
-/// the SSE subscriber budget (events.max_subscribers = 16) so a full set
-/// of long-lived streams can never starve interactive requests, yet small
-/// enough to bound RSS on the 16 MiB budget (idle connection threads cost
-/// pages actually touched, not stack reservations).
+/// the SSE subscriber budget (events.max_subscribers = 16 — of which the
+/// provision.Manager's internal subscription consumes one, leaving 15
+/// for SSE clients) so a full set of long-lived streams can never starve
+/// interactive requests, yet small enough to bound RSS on the 16 MiB
+/// budget (idle connection threads cost pages actually touched, not
+/// stack reservations).
 pub const max_connections = 32;
 
 /// Precomputed over-cap response: the accept loop must not allocate or
@@ -131,6 +150,59 @@ const Server = struct {
     st: *store.Store,
     events: *events_mod.EventBus,
     active: std.atomic.Value(u32) = .init(0),
+};
+
+/// The dynamically bound AP-surface listener (192.168.223.1:8080 while
+/// the provisioning AP is up — docs/07 §4 item 2). The ApController's
+/// listenerUp/Down hooks (which run in the provisioning reconciliation
+/// context) only flip `want` and kick the accept loop's eventfd; ONLY
+/// the accept loop binds/closes the socket, so the fd has exactly one
+/// owner and can never race an in-flight poll set.
+const ApDynListener = struct {
+    want: std.atomic.Value(bool) = .init(false),
+    wake_fd: posix.fd_t = -1,
+    fd: ?posix.fd_t = null,
+
+    /// portal.http_port on the AP address (portal.ap_addr): nft
+    /// redirects :80 here on the AP interface.
+    pub const spec = "192.168.223.1:8080";
+
+    fn kick(self: *ApDynListener) void {
+        if (self.wake_fd < 0) return;
+        const one: u64 = 1;
+        _ = linux.write(self.wake_fd, @ptrCast(&one), 8);
+    }
+
+    fn up(ctx: ?*anyopaque) void {
+        const self: *ApDynListener = @ptrCast(@alignCast(ctx.?));
+        self.want.store(true, .release);
+        self.kick();
+    }
+
+    fn down(ctx: ?*anyopaque) void {
+        const self: *ApDynListener = @ptrCast(@alignCast(ctx.?));
+        self.want.store(false, .release);
+        self.kick();
+    }
+
+    /// Accept-loop side: reconcile fd existence with `want`. FREEBIND
+    /// because the AP address lands asynchronously (iwd netconfig
+    /// assigns 192.168.223.1 after StartProfile settles) — binding must
+    /// not depend on winning that race.
+    fn reconcile(self: *ApDynListener) void {
+        const want = self.want.load(.acquire);
+        if (want and self.fd == null) {
+            self.fd = listenTcp(spec, true) catch |err| blk: {
+                std.log.warn("astrod: AP listener bind failed ({t}); portal HTTP degraded", .{err});
+                break :blk null;
+            };
+        } else if (!want) {
+            if (self.fd) |fd| {
+                _ = linux.close(fd);
+                self.fd = null;
+            }
+        }
+    }
 };
 
 fn serve(gpa: std.mem.Allocator, opts: Options, st: *store.Store) !void {
@@ -204,26 +276,138 @@ fn serve(gpa: std.mem.Allocator, opts: Options, st: *store.Store) !void {
         }
     }
 
+    // ---- phase-4 provisioning trio (docs/07 §4–§5): mDNS responder,
+    // AP portal controller, provisioning state machine. Construction
+    // order matters for the LIFO defers: the Manager (last) deinits
+    // FIRST — it holds the responder, the wifi backend and the
+    // ApController through its effect pointers.
+    var machine_id_buf: [128]u8 = undefined;
+    const machine_id: []const u8 = blk: {
+        const text = fsutil.readFileBounded("/etc/machine-id", &machine_id_buf) catch break :blk "";
+        break :blk std.mem.trim(u8, text, " \t\r\n");
+    };
+
+    var responder_owned: ?*mdns.Responder = null;
+    defer if (responder_owned) |r| {
+        r.goodbye() catch {}; // TTL-0 records (RFC 6762 §10.1)
+        r.deinit();
+    };
+    if (st.getApi().mdns and machine_id.len > 0) {
+        var startup_arena = std.heap.ArenaAllocator.init(gpa);
+        defer startup_arena.deinit();
+        const info = try system.collect(startup_arena.allocator());
+        const initial = provision.State.parse(st.getProvisioning()) orelse .factory;
+        const r = try mdns.Responder.init(gpa, machine_id, info.release, initial.jsonName());
+        responder_owned = r;
+        // Keep the Responder on start failure: provisioning-state TXT
+        // updates still land for a later announce.
+        r.start() catch |err| std.log.warn("astrod: mDNS responder unavailable ({t})", .{err});
+    }
+
+    // AP-surface listener control: the accept loop owns the socket, the
+    // ApController hooks only request it (see ApDynListener).
+    var ap_dyn: ApDynListener = .{};
+    const wake_rc = linux.eventfd(0, linux.EFD.CLOEXEC | linux.EFD.NONBLOCK);
+    const wake_fd: posix.fd_t = if (linux.errno(wake_rc) == .SUCCESS) @intCast(wake_rc) else -1;
+    defer if (wake_fd >= 0) {
+        _ = linux.close(wake_fd);
+    };
+    ap_dyn.wake_fd = wake_fd;
+
+    var ap_ctl = portal.ApController.init(gpa, machine_id);
+    ap_ctl.hooks = .{ .ctx = &ap_dyn, .listenerUp = ApDynListener.up, .listenerDown = ApDynListener.down };
+    portal.global = &ap_ctl;
+    defer portal.global = null;
+    defer ap_ctl.deinit();
+    // GET /system last_error rides this hook (system.zig keeps no
+    // portal import; the source returns static strings only).
+    system.last_error_source = portal.lastErrorSource;
+    defer system.last_error_source = null;
+
+    var prov_owned: ?*provision.Manager = null;
+    defer if (prov_owned) |p| {
+        provision.global = null;
+        p.deinit();
+    };
+    {
+        const p = try provision.Manager.init(gpa, st, .{
+            .event_bus = &event_bus,
+            .responder = responder_owned,
+            .wifi = wifi_owned,
+            .machine_id = machine_id,
+        });
+        // The portal ApController owns the full enter/leave chain (wifi
+        // AP + nft redirect oneshots + DNS catch-all + AP listener).
+        p.ap_enter = portal.ApController.effectEnterAp;
+        p.ap_leave = portal.ApController.effectLeaveAp;
+        p.ap_is_active = portal.ApController.effectApActive;
+        p.ap_ctx = &ap_ctl;
+        prov_owned = p;
+        provision.global = p;
+        p.start();
+    }
+
+    // Time floor + last-known-time persistence (docs/07 §6; timekeep.zig
+    // carries the recorded EPERM deviation for the unprivileged daemon).
+    {
+        const fr = timekeep.applyFloor(timekeep.build_epoch_path, timekeep.last_known_path);
+        if (fr.applied) {
+            std.log.info("astrod: clock stepped to the time floor ({d})", .{fr.floor});
+        } else if (fr.denied) {
+            std.log.warn("astrod: clock is behind the floor ({d}) but clock_settime was denied (unprivileged; firstboot owns the boot-time floor)", .{fr.floor});
+        }
+    }
+    var keeper: timekeep.Keeper = .{ .path = timekeep.last_known_path };
+    if (keeper.start()) {} else |err| {
+        std.log.warn("astrod: last-known-time keeper thread failed to start ({t})", .{err});
+    }
+    defer keeper.stop();
+
     const unix_fd = try listenUnix(opts.socket_path);
     defer _ = linux.close(unix_fd);
-    const tcp_fd = try listenTcp(opts.listen);
+    const tcp_fd = try listenTcp(opts.listen, false);
     defer _ = linux.close(tcp_fd);
+    // Test-only AP-surface listener (see Options.ap_listen).
+    const ap_fd: ?posix.fd_t = if (opts.ap_listen) |spec| try listenTcp(spec, false) else null;
+    defer if (ap_fd) |fd| {
+        _ = linux.close(fd);
+    };
+    defer if (ap_dyn.fd) |fd| {
+        _ = linux.close(fd);
+    };
 
     if (opts.ready_fd) |fd| try writeAllFd(fd, "\n");
 
     var server: Server = .{ .gpa = gpa, .token_path = opts.token_path, .st = st, .events = &event_bus };
 
-    var pollfds = [_]posix.pollfd{
-        .{ .fd = unix_fd, .events = posix.POLL.IN, .revents = 0 },
-        .{ .fd = tcp_fd, .events = posix.POLL.IN, .revents = 0 },
-    };
     while (true) {
+        // Apply pending AP-listener changes (requested via the eventfd
+        // by the ApController hooks) before building this round's set.
+        ap_dyn.reconcile();
+        // Slot 2 is the wake eventfd, everything else accepts; negative
+        // fds are ignored by poll(2) — absent listeners cost nothing.
+        var pollfds = [_]posix.pollfd{
+            .{ .fd = unix_fd, .events = posix.POLL.IN, .revents = 0 },
+            .{ .fd = tcp_fd, .events = posix.POLL.IN, .revents = 0 },
+            .{ .fd = wake_fd, .events = posix.POLL.IN, .revents = 0 },
+            .{ .fd = ap_fd orelse -1, .events = posix.POLL.IN, .revents = 0 },
+            .{ .fd = ap_dyn.fd orelse -1, .events = posix.POLL.IN, .revents = 0 },
+        };
         // posix.poll retries EINTR internally.
         _ = try posix.poll(&pollfds, -1);
-        for (&pollfds) |*pfd| {
+        if (pollfds[2].revents & posix.POLL.IN != 0) {
+            var drain: [8]u8 = undefined;
+            _ = linux.read(wake_fd, &drain, 8);
+        }
+        for (&pollfds, 0..) |*pfd, slot| {
+            if (slot == 2 or pfd.fd < 0) continue;
             if (pfd.revents & posix.POLL.IN == 0) continue;
             const conn: posix.fd_t = @intCast(sys(linux.accept4(pfd.fd, null, null, posix.SOCK.CLOEXEC)) catch continue);
-            const surface: Surface = if (pfd.fd == unix_fd) .unix else .tcp;
+            const surface: Surface = switch (slot) {
+                0 => .unix,
+                1 => .localhost,
+                else => .ap, // the test listener and the live AP listener
+            };
 
             // Claim a slot before spawning; over cap → immediate 503 and
             // close, without allocating (see overloaded_response).
@@ -275,7 +459,12 @@ fn listenUnix(path: []const u8) !posix.fd_t {
     return fd;
 }
 
-fn listenTcp(spec: []const u8) !posix.fd_t {
+/// IP_FREEBIND (ip(7), value 15 — stable kernel ABI): `freebind` lets
+/// the AP listener bind 192.168.223.1 before iwd's netconfig actually
+/// assigns it (the address lands asynchronously after StartProfile).
+const IP_FREEBIND: u32 = 15;
+
+fn listenTcp(spec: []const u8, freebind: bool) !posix.fd_t {
     const parsed = try parseHostPort(spec);
     var addr: posix.sockaddr.in = .{
         .family = posix.AF.INET,
@@ -285,6 +474,7 @@ fn listenTcp(spec: []const u8) !posix.fd_t {
     const fd: posix.fd_t = @intCast(try sys(linux.socket(posix.AF.INET, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0)));
     errdefer _ = linux.close(fd);
     try posix.setsockopt(fd, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+    if (freebind) posix.setsockopt(fd, 0, IP_FREEBIND, &std.mem.toBytes(@as(c_int, 1))) catch {};
     _ = try sys(linux.bind(fd, @ptrCast(&addr), @sizeOf(posix.sockaddr.in)));
     _ = try sys(linux.listen(fd, 16));
     return fd;
@@ -405,14 +595,12 @@ fn handleConnection(server: *Server, fd: posix.fd_t, surface: Surface) !void {
         return writeProblem(fd, arena, st, 405, "Method Not Allowed");
 
     // AD-014: unix peers passed the astro-api group gate at connect();
-    // the TCP surface requires the firstboot bearer token. Fail-closed —
-    // no token file yet means no TCP access.
-    const authorized = switch (surface) {
-        .unix => auth.allowUnixPeer(),
-        .tcp => auth.checkBearer(server.token_path, req.authorization),
-    };
+    // localhost/lan require the firstboot bearer token (fail-closed — no
+    // token file yet means no TCP access); the AP surface admits
+    // unauthenticated but the router serves only the subset (403 else).
+    const authorized = auth.authorize(surface, server.token_path, req.authorization);
 
-    var ctx: router.Context = .{ .allocator = arena, .store = st, .event_bus = server.events, .request = .{
+    var ctx: router.Context = .{ .allocator = arena, .store = st, .surface = surface, .event_bus = server.events, .request = .{
         .method = method,
         .path = req.path,
         .query = req.query,
@@ -486,7 +674,31 @@ fn handleConnection(server: *Server, fd: posix.fd_t, surface: Surface) !void {
     // SHUTDOWN makes dinit kill astrod immediately, which raced (and
     // truncated) the 202 when issued from inside the handler.
     if (ctx.deferred) |action| switch (action) {
-        .shutdown => |t| dinit.requestShutdown(dinit.default_socket_path, t) catch {},
+        .shutdown => |t| {
+            // "on clean shutdown" half of the docs/07 §6 last-known-time
+            // contract: this is the one shutdown astrod can see coming
+            // (dinit's SIGTERM offers no reliable async window).
+            timekeep.persistLastKnown(timekeep.last_known_path) catch {};
+            dinit.requestShutdown(dinit.default_socket_path, t) catch {};
+        },
+        .factory_reset => {
+            // No last-known-time persist: /data (its home) is about to
+            // be wiped anyway. State machine first so the API narrates
+            // 'factory' until the oneshot's reboot lands.
+            if (provision.global) |p| p.notifyFactoryReset();
+            dinit.startServiceByName(dinit.default_socket_path, router.factory_reset_service) catch |err| {
+                std.log.warn("astrod: factory-reset dispatch failed ({t})", .{err});
+            };
+        },
+        .wifi_flip => |f| {
+            // The synchronous AP→station flip (docs/07 §4 items 4–5),
+            // with the 202 already delivered to the portal client.
+            if (provision.global) |p| {
+                p.flipConnect(f.ssid, f.psk);
+            } else if (wifi_mod.global) |w| {
+                _ = w.connectAttempt(f.ssid, f.psk) catch {};
+            }
+        },
     };
 }
 
@@ -524,7 +736,10 @@ fn writeProblem(fd: posix.fd_t, arena: std.mem.Allocator, st: *store.Store, stat
 }
 
 fn writeResponse(fd: posix.fd_t, arena: std.mem.Allocator, resp: router.Response) !void {
-    const head = try std.fmt.allocPrint(arena, "HTTP/1.1 {d} {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ resp.status, statusText(resp.status), resp.content_type, resp.body.len });
+    const head = if (resp.location) |loc|
+        try std.fmt.allocPrint(arena, "HTTP/1.1 {d} {s}\r\nContent-Type: {s}\r\nLocation: {s}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ resp.status, statusText(resp.status), resp.content_type, loc, resp.body.len })
+    else
+        try std.fmt.allocPrint(arena, "HTTP/1.1 {d} {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ resp.status, statusText(resp.status), resp.content_type, resp.body.len });
     try writeAllFd(fd, head);
     try writeAllFd(fd, resp.body);
 }
@@ -541,8 +756,10 @@ fn statusText(status: u16) []const u8 {
         200 => "OK",
         202 => "Accepted",
         204 => "No Content",
+        302 => "Found",
         400 => "Bad Request",
         401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
         409 => "Conflict",
@@ -577,6 +794,10 @@ test {
     _ = @import("link.zig");
     _ = @import("netconf.zig");
     _ = @import("wifi.zig");
+    _ = @import("provision.zig");
+    _ = @import("timekeep.zig");
+    _ = @import("mdns.zig");
+    _ = @import("portal.zig");
     _ = @import("conformance_test.zig");
 }
 
@@ -584,17 +805,20 @@ test "parseArgs handles all flags and rejects unknowns" {
     const opts = try parseArgs(&.{
         "--socket=/tmp/t.sock",
         "--listen=127.0.0.1:8899",
+        "--ap-listen=127.0.0.1:8899",
         "--store=/tmp/astro.json",
         "--ready-fd=3",
     });
     try std.testing.expectEqualStrings("/tmp/t.sock", opts.socket_path);
     try std.testing.expectEqualStrings("127.0.0.1:8899", opts.listen);
+    try std.testing.expectEqualStrings("127.0.0.1:8899", opts.ap_listen.?);
     try std.testing.expectEqualStrings("/tmp/astro.json", opts.store_path);
     try std.testing.expectEqual(@as(posix.fd_t, 3), opts.ready_fd.?);
 
     const defaults = try parseArgs(&.{});
     try std.testing.expectEqualStrings("/run/astro/astrod.sock", defaults.socket_path);
     try std.testing.expectEqual(@as(?posix.fd_t, null), defaults.ready_fd);
+    try std.testing.expect(defaults.ap_listen == null);
 
     try std.testing.expectError(error.UnknownArgument, parseArgs(&.{"--bogus"}));
 }

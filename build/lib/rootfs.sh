@@ -588,7 +588,8 @@ stamp_os_release() {
 #    service in the common overlay for the whole bootstrap story). It
 #    mirrors the pre-phase-3 behavior — plain DHCP on wired interfaces —
 #    minus the resolv.conf hook, which is astrod's job now.
-# 2. /etc/resolv.conf -> /run/astro/resolv.conf — astrod renders the
+# 2. /etc/resolv.conf -> /run/astro-resolv/resolv.conf — astrod renders
+#    the
 #    target (ONE writer, docs/07 §2). This replaces whatever any package
 #    left at /etc/resolv.conf. TRAP (the os-release lesson, §15 of
 #    MIGRATION-NOTES): the resolvconf metapackage (dependency of dhcpcd
@@ -612,7 +613,8 @@ bake_network_defaults() {
 # and does not exist before astrod has rendered a profile anyway.
 allowinterfaces eth*
 # DNS is astrod's: the lease hook exports DHCP-learned resolvers to
-# /run/astro/net/leases/ and astrod alone writes /run/astro/resolv.conf.
+# /run/astro/net/leases/ and astrod alone writes the resolv target
+# (/run/astro-resolv/resolv.conf).
 nohook resolv.conf
 # Group astrod may connect to /run/dhcpcd/sock so unprivileged astrod
 # can send the rebind command after its first render (dhcpcd-10.3.2
@@ -623,8 +625,57 @@ controlgroup astrod
 EOF
     log_info "network defaults baked: /etc/astro/dhcpcd-fallback.conf"
 
-    ln -sfn /run/astro/resolv.conf "${rootfs_dir}/etc/resolv.conf"
-    log_info "network defaults baked: /etc/resolv.conf -> /run/astro/resolv.conf"
+    # /run/astro-resolv, NOT /run/astro: the API-socket dir is 0750
+    # astrod:astro-api and every user's libc resolver must read this
+    # file (chronyd as _chrony found it unreadable live — M3 phase 4).
+    ln -sfn /run/astro-resolv/resolv.conf "${rootfs_dir}/etc/resolv.conf"
+    log_info "network defaults baked: /etc/resolv.conf -> /run/astro-resolv/resolv.conf"
+}
+
+# Time defaults (docs/07 §6, M3 phase 4).
+#
+# 1. /etc/astro/build-epoch — the image's build timestamp as decimal
+#    unix seconds: SOURCE_DATE_EPOCH when the build pins one (the same
+#    variable the squashfs stage clamps timestamps with), else the
+#    assembly wall clock. This is the TLS chicken-and-egg floor for
+#    battery-less boards booting in 1970: firstboot (root) steps the
+#    clock up to max(build-epoch, /data/.astro/last-known-time), and
+#    astrod re-checks at every startup + gates its own https installs
+#    on synced-or-past-floor (astrod/src/timekeep.zig).
+# 2. /etc/astro/chrony.conf — the minimal config the chronyd dinit
+#    shadow runs with (-f): pool + makestep + rtcsync. No driftfile
+#    (/var/lib is on the RO rootfs; drift tracking gets a /data home
+#    only if a product asks). rtcsync IS required despite most boards
+#    lacking a battery RTC: chronyd only clears the kernel's STA_UNSYNC
+#    flag (sys_linux.c SYS_Linux_SetSync, guarded by the rtcsync
+#    directive) when it is set — without it astrod's adjtimex-based
+#    time.synced can never become true even with a selected NTP source
+#    (found live: chronyc tracking synced, GET /system stuck false).
+#    The side effect (kernel copies system time to the RTC every 11
+#    min) is a no-op without an RTC driver.
+bake_time_defaults() {
+    local rootfs_dir="$1"
+    local epoch="${SOURCE_DATE_EPOCH:-$(date +%s)}"
+
+    mkdir -p "${rootfs_dir}/etc/astro"
+    printf '%s\n' "$epoch" > "${rootfs_dir}/etc/astro/build-epoch"
+
+    cat > "${rootfs_dir}/etc/astro/chrony.conf" << 'EOF'
+# Astro minimal chrony config (baked at image build; docs/07 §6).
+# Read by the /etc/dinit.d/chronyd shadow via -f. Products layer their
+# own servers through the /etc overlay if the default pool is wrong for
+# their deployment.
+pool pool.ntp.org iburst
+# Always step, never slew, when the clock is off by >1 s — appliances
+# care about being right now, not about monotonic wall-clock aesthetics
+# (the -1 means "on any correction", not just the first).
+makestep 1.0 -1
+# Clear the kernel STA_UNSYNC flag once synced — this is what feeds
+# astrod's time.synced (adjtimex, docs/07 §6); chronyd only touches the
+# flag when rtcsync is enabled. Harmless without an RTC driver.
+rtcsync
+EOF
+    log_info "time defaults baked: /etc/astro/build-epoch=${epoch} + /etc/astro/chrony.conf"
 }
 
 generate_astro_defaults() {

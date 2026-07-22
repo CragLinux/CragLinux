@@ -215,7 +215,12 @@ pub const Subscription = struct {
 
         // Deadline on CLOCK_REALTIME (musl condvar default). Clamped so
         // the isize casts below cannot overflow; nobody waits > 1 day.
-        const wait_ms = @min(timeout_ms, std.time.ms_per_day);
+        // The u64 annotation is LOAD-BEARING: @min against the comptime
+        // bound narrows the result type to u27 (fits ms_per_day), and
+        // (wait_ms % 1000) * ns_per_ms then overflows u27 for any
+        // timeout with a sub-second remainder ≥ 135 ms — crashed live
+        // with next(500) from provision.Manager's subscriber thread.
+        const wait_ms: u64 = @min(timeout_ms, std.time.ms_per_day);
         var deadline: std.c.timespec = .{ .sec = 0, .nsec = 0 };
         _ = std.c.clock_gettime(.REALTIME, &deadline);
         const total_ns = @as(u64, @intCast(deadline.nsec)) + (wait_ms % 1000) * std.time.ns_per_ms;
@@ -428,6 +433,23 @@ test "live subscriber lapped by the ring: overflow marker then continue from hea
     const ev = (try sub.next(0)).?;
     try std.testing.expectEqual(@as(u64, 9), ev.id);
     try std.testing.expectEqual(@as(u64, 10), (try sub.next(0)).?.id);
+}
+
+test "next with a sub-second timeout remainder does not overflow the deadline math" {
+    // Regression: @min type-narrowing made wait_ms a u27, so
+    // (wait_ms % 1000) * ns_per_ms overflowed for remainders ≥ 135 ms
+    // — every next(500) (provision.Manager's subscriber cadence)
+    // crashed. An already-published event keeps this instant.
+    var bus = EventBus.init(std.testing.allocator);
+    defer bus.deinit();
+    const sub = try bus.subscribe(null);
+    defer sub.cancel();
+    _ = try bus.publish("t.e", "{}");
+    const ev = (try sub.next(500)).?; // deadline math runs before delivery
+    try std.testing.expectEqualStrings("t.e", ev.event_type);
+    _ = try bus.publish("t.e", "{}");
+    const ev2 = (try sub.next(86_399_999)).?; // max sub-day remainder
+    try std.testing.expectEqualStrings("t.e", ev2.event_type);
 }
 
 test "subscriber cap: 17th subscribe fails, freed slot is reusable" {

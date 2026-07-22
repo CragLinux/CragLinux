@@ -1,0 +1,211 @@
+<!doctype html>
+<!-- Astro provisioning portal (docs/07 §4, docs/06 §2). Fully
+     self-contained: inline CSS/JS, no external assets (the AP subnet has
+     no internet). Speaks ONLY the AD-014 unauthenticated subset:
+       GET  /api/v1/system                 (redacted)
+       POST /api/v1/network/wifi/scan
+       GET  /api/v1/network/wifi/networks
+       PUT  /api/v1/network/wifi/connection
+     Flow (docs/07 §4 items 4-5): pick or type a network, submit, expect
+     THIS hotspot to drop during the single-radio flip; on failure the
+     hotspot returns and the error is re-offered with the form. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Astro device setup</title>
+<style>
+  :root { --bg:#f4f5f7; --fg:#1a1d21; --card:#fff; --line:#e6e9ed; --mut:#5a6472;
+          --acc:#2463eb; --accdim:#9db4e8; --err:#b3261e; --ok:#1a7f37; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --fg:#e8eaed; --card:#1e2127; --line:#2c313a; --mut:#98a2b0;
+            --acc:#5b8bf5; --accdim:#3a4d75; --err:#ef7b72; --ok:#4cc26b; }
+  }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--fg); }
+  main { max-width: 26rem; margin: 0 auto; padding: 1.25rem 1rem 2rem; }
+  h1 { font-size: 1.2rem; margin: .4rem 0 1rem; }
+  .card { background: var(--card); border-radius: 10px; padding: 1rem; margin: 0 0 1rem;
+          box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+  .cardhead { display: flex; justify-content: space-between; align-items: baseline; }
+  .cardhead strong { font-size: .95rem; }
+  .mut { color: var(--mut); font-size: .85rem; }
+  .err { color: var(--err); font-size: .9rem; }
+  .ok { color: var(--ok); }
+  ul#networks { list-style: none; padding: 0; margin: .5rem 0 0; }
+  ul#networks li { padding: .55rem .25rem; border-bottom: 1px solid var(--line); cursor: pointer;
+                   display: flex; align-items: center; gap: .6rem; }
+  ul#networks li:last-child { border-bottom: 0; }
+  ul#networks li:hover { background: rgba(91,139,245,.08); }
+  .ssid { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sec { font-size: .75rem; color: var(--mut); }
+  /* Signal bars: 4 steps from signal_dbm. */
+  .sigbars { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; flex: none; }
+  .sigbars i { width: 4px; background: var(--line); border-radius: 1px; }
+  .sigbars i:nth-child(1) { height: 5px; } .sigbars i:nth-child(2) { height: 8px; }
+  .sigbars i:nth-child(3) { height: 11px; } .sigbars i:nth-child(4) { height: 14px; }
+  .sigbars i.on { background: var(--acc); }
+  label { display: block; margin: .7rem 0 .25rem; font-size: .85rem; }
+  input { width: 100%; padding: .55rem; font-size: 1rem; color: var(--fg);
+          background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+  button { padding: .6rem 1rem; font-size: 1rem; border: 0; border-radius: 6px;
+           background: var(--acc); color: #fff; cursor: pointer; }
+  button.line { background: none; border: 1px solid var(--line); color: var(--acc);
+                font-size: .85rem; padding: .3rem .7rem; }
+  button:disabled { background: var(--accdim); cursor: default; }
+  #submit { margin-top: 1rem; width: 100%; }
+  #status { font-size: .9rem; min-height: 1.2em; }
+  .spin { display: inline-block; width: .8em; height: .8em; border: 2px solid var(--accdim);
+          border-top-color: var(--acc); border-radius: 50%; vertical-align: -.1em;
+          animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Set up this Astro device</h1>
+
+  <div class="card">
+    <div id="device" class="mut">Loading device info&hellip;</div>
+    <div id="lasterr" class="err" hidden></div>
+  </div>
+
+  <div class="card">
+    <div class="cardhead">
+      <strong>Choose a Wi&#8209;Fi network</strong>
+      <button id="rescan" class="line" type="button">Rescan</button>
+    </div>
+    <ul id="networks"><li class="mut">Scanning&hellip;</li></ul>
+  </div>
+
+  <div class="card">
+    <form id="join">
+      <label for="ssid">Network name (SSID)</label>
+      <input id="ssid" name="ssid" required maxlength="32" autocomplete="off"
+             autocapitalize="none" spellcheck="false">
+      <label for="psk">Passphrase <span class="mut">(leave empty for open networks)</span></label>
+      <input id="psk" name="psk" type="password" maxlength="63" autocomplete="off">
+      <button id="submit" type="submit">Connect device</button>
+    </form>
+    <p id="status" class="mut"></p>
+  </div>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let submitting = false;
+
+function bars(dbm) {
+  // 4-step quality ladder; typical indoor range -30..-90 dBm.
+  const lvl = dbm >= -55 ? 4 : dbm >= -66 ? 3 : dbm >= -77 ? 2 : 1;
+  const el = document.createElement("span");
+  el.className = "sigbars";
+  el.title = dbm + " dBm";
+  for (let i = 1; i <= 4; i++) {
+    const b = document.createElement("i");
+    if (i <= lvl) b.className = "on";
+    el.appendChild(b);
+  }
+  return el;
+}
+
+async function refreshDevice() {
+  try {
+    const r = await fetch("/api/v1/system");
+    const s = await r.json();
+    $("device").textContent = "Device " + (s.board || "astro") +
+      " · release " + (s.release || "?") +
+      " · state " + (s.provisioning || "?");
+    const le = $("lasterr");
+    if (s.last_error) {
+      le.textContent = "Last attempt failed: " + s.last_error +
+        " — pick the network again and re-enter the passphrase.";
+      le.hidden = false;
+      if (submitting) { submitting = false; $("submit").disabled = false; }
+    } else { le.hidden = true; }
+  } catch (e) { $("device").textContent = "Device info unavailable."; }
+}
+
+async function refreshNetworks(rescan) {
+  try {
+    if (rescan) await fetch("/api/v1/network/wifi/scan", { method: "POST" }).catch(() => {});
+    const r = await fetch("/api/v1/network/wifi/networks");
+    const nets = await r.json();
+    const ul = $("networks");
+    if (!Array.isArray(nets) || nets.length === 0) {
+      ul.innerHTML = '<li class="mut">No networks found yet &mdash; retrying&hellip;</li>';
+      return;
+    }
+    ul.innerHTML = "";
+    for (const n of nets) {
+      const li = document.createElement("li");
+      li.appendChild(bars(n.signal_dbm));
+      const name = document.createElement("span");
+      name.className = "ssid";
+      name.textContent = n.ssid;
+      li.appendChild(name);
+      const sec = document.createElement("span");
+      sec.className = "sec";
+      sec.textContent = n.security === "open" ? "open" :
+        (n.connected ? "connected" : "secured");
+      li.appendChild(sec);
+      li.onclick = () => {
+        $("ssid").value = n.ssid;
+        $("psk").value = "";
+        if (n.security === "open") $("submit").focus(); else $("psk").focus();
+      };
+      ul.appendChild(li);
+    }
+  } catch (e) { /* AP flip in progress; the poll loop retries */ }
+}
+
+$("rescan").addEventListener("click", () => {
+  $("networks").innerHTML = '<li class="mut">Scanning&hellip;</li>';
+  refreshNetworks(true);
+});
+
+$("join").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  $("submit").disabled = true;
+  submitting = true;
+  // Expectation-setting per docs/07 §4 item 5: the single-radio
+  // AP -> station flip means THIS network will drop while the device
+  // tries to join yours. If it fails, this hotspot returns; rejoin it
+  // and the error is shown above (the wrong-password loop is
+  // survivable by design).
+  $("status").className = "mut";
+  $("status").innerHTML = '<span class="spin"></span> Connecting&hellip; this setup ' +
+    "network will drop while the device joins your Wi‑Fi. " +
+    "If the light does not settle, reconnect to this hotspot to see the error and try again.";
+  try {
+    const r = await fetch("/api/v1/network/wifi/connection", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ssid: $("ssid").value, psk: $("psk").value }),
+    });
+    if (!r.ok) {
+      const p = await r.json().catch(() => ({}));
+      $("status").className = "err";
+      $("status").textContent = "Rejected: " + (p.detail || p.title || r.status);
+      $("submit").disabled = false;
+      submitting = false;
+    }
+    // On success the flip begins; nothing more this page can observe
+    // until the AP either disappears for good (device provisioned) or
+    // comes back (failure — refreshDevice surfaces last_error and
+    // re-enables the form).
+  } catch (e) {
+    $("status").className = "err";
+    $("status").textContent = "Request failed (the flip may already be underway).";
+    $("submit").disabled = false;
+    submitting = false;
+  }
+});
+
+refreshDevice();
+refreshNetworks(true);
+setInterval(refreshDevice, 5000);
+setInterval(() => { if (!submitting) refreshNetworks(false); }, 10000);
+</script>
+</body>
+</html>

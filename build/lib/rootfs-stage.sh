@@ -61,6 +61,9 @@ generate_astro_defaults "$ROOTFS_DIR" "$BOARD_CONFIG_JSON"
 # dhcpcd fallback config + /etc/resolv.conf symlink — docs/07 §2, M3 phase 3
 bake_network_defaults "$ROOTFS_DIR"
 
+# build-epoch time floor + minimal chrony.conf — docs/07 §6, M3 phase 4
+bake_time_defaults "$ROOTFS_DIR"
+
 # Image identity for GET /system (system.zig prefers ASTRO_* keys)
 stamp_os_release "$ROOTFS_DIR" "$BOARD" "$VARIANT"
 

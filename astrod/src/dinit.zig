@@ -51,6 +51,7 @@ const cmd = struct {
     const findservice: u8 = 1;
     const loadservice: u8 = 2;
     const startservice: u8 = 3;
+    const stopservice: u8 = 4;
     const shutdown: u8 = 10; // followed by 1-byte shutdown type
 };
 
@@ -63,10 +64,15 @@ const rply = struct {
     const servicerecord: u8 = 59;
     const noservice: u8 = 60;
     const alreadyss: u8 = 61;
+    const dependents: u8 = 65;
     const pinnedstopped: u8 = 67;
+    const pinnedstarted: u8 = 68;
     const shuttingdown: u8 = 69;
     const service_desc_err: u8 = 71;
     const service_load_err: u8 = 72;
+    /// Pre-acknowledgement, issued before the main reply when the request
+    /// set flag bit 7 (control.cc:342 — only the restart path asks).
+    const preack: u8 = 79;
 };
 
 // Packet types >= 100 are asynchronous info (service/env events), framed as
@@ -96,8 +102,15 @@ pub const ClientError = error{
     NoService,
     ServiceLoadError,
     StartFailed,
+    /// STOPSERVICE refused: NAK, or a gentle stop hit dependents.
+    StopFailed,
+    /// Restart NAK: the service is not currently started (control.cc
+    /// service->restart() returning false) — callers that want
+    /// restart-or-start semantics fall back to a plain start.
+    NotStarted,
     ShuttingDown,
     PinnedStopped,
+    PinnedStarted,
     NameTooLong,
 };
 
@@ -123,6 +136,20 @@ pub fn encodeStartService(buf: *[6]u8, handle: u32) []const u8 {
     std.mem.writeInt(u32, buf[2..6], handle, .little);
     return buf[0..6];
 }
+
+/// [STOPSERVICE][flags][u32 handle LE] — control.cc process_start_stop.
+/// Flags (control.cc:322-326): bit0 pin, bit1 gentle (check dependents,
+/// what dinitctl sends without --force), bit2 restart-after-stop,
+/// bit7 pre-ack. A plain gentle stop is 2; a restart is 2|4|128.
+pub fn encodeStopService(buf: *[6]u8, handle: u32, flags: u8) []const u8 {
+    buf[0] = cmd.stopservice;
+    buf[1] = flags;
+    std.mem.writeInt(u32, buf[2..6], handle, .little);
+    return buf[0..6];
+}
+
+pub const stop_flags_gentle: u8 = 2;
+pub const restart_flags: u8 = 2 | 4 | 128; // gentle | restart | pre-ack
 
 /// [SHUTDOWN][shutdown_type] — shutdown.cc.
 pub fn encodeShutdown(t: ShutdownType) [2]u8 {
@@ -193,6 +220,44 @@ pub const Client = struct {
             rply.ack, rply.alreadyss => {},
             rply.nak => return error.StartFailed,
             rply.pinnedstopped => return error.PinnedStopped,
+            rply.shuttingdown => return error.ShuttingDown,
+            else => return error.ProtocolError,
+        }
+    }
+
+    /// Issue a GENTLE stop for a loaded handle (control.cc STOPSERVICE):
+    /// ACK = stop initiated (async — dinit resolves it), ALREADYSS =
+    /// already stopped; both are success. DEPENDENTS means a gentle stop
+    /// would take dependents down — surfaced as StopFailed rather than
+    /// escalating to force (astrod stops only leaf oneshots/services).
+    pub fn stopService(self: *Client, handle: u32) ClientError!void {
+        var buf: [6]u8 = undefined;
+        try self.writeAll(encodeStopService(&buf, handle, stop_flags_gentle));
+        switch (try self.readReplyByte()) {
+            rply.ack, rply.alreadyss => {},
+            rply.nak, rply.dependents => return error.StopFailed,
+            rply.pinnedstarted => return error.PinnedStarted,
+            rply.shuttingdown => return error.ShuttingDown,
+            else => return error.ProtocolError,
+        }
+    }
+
+    /// Restart a loaded handle the way dinitctl does (STOPSERVICE with
+    /// the restart|pre-ack flags): PREACK arrives first (bit7), then the
+    /// real reply — ACK/ALREADYSS success, NAK = service not started
+    /// (NotStarted; callers wanting restart-or-start fall back to
+    /// startService). The ACK means the restart was INITIATED; settling
+    /// is asynchronous (callers observe the service's own readiness).
+    pub fn restartService(self: *Client, handle: u32) ClientError!void {
+        var buf: [6]u8 = undefined;
+        try self.writeAll(encodeStopService(&buf, handle, restart_flags));
+        var reply = try self.readReplyByte();
+        if (reply == rply.preack) reply = try self.readReplyByte();
+        switch (reply) {
+            rply.ack, rply.alreadyss => {},
+            rply.nak => return error.NotStarted,
+            rply.dependents => return error.StopFailed,
+            rply.pinnedstarted => return error.PinnedStarted,
             rply.shuttingdown => return error.ShuttingDown,
             else => return error.ProtocolError,
         }
@@ -269,6 +334,31 @@ pub fn startServiceByName(socket_path: []const u8, name: []const u8) ClientError
     try client.startService(handle);
 }
 
+/// One-shot connect + load + gentle stop. Re-arms scripted oneshots
+/// (dinit keeps them STARTED after a successful run — the phase-4
+/// portal-redirect pair cycles via stop-then-start) and is half of the
+/// restart fallback below.
+pub fn stopServiceByName(socket_path: []const u8, name: []const u8) ClientError!void {
+    var client = try Client.connect(socket_path);
+    defer client.deinit();
+    const handle = try client.loadService(name);
+    try client.stopService(handle);
+}
+
+/// One-shot connect + load + restart-or-start: dinit's own restart
+/// semantics (STOPSERVICE restart flag) when the service runs, plain
+/// start when it does not. The phase-4 iwd netconfig-window swap uses
+/// this so iwd re-reads main.conf along CONFIGURATION_DIRECTORY.
+pub fn restartServiceByName(socket_path: []const u8, name: []const u8) ClientError!void {
+    var client = try Client.connect(socket_path);
+    defer client.deinit();
+    const handle = try client.loadService(name);
+    client.restartService(handle) catch |err| switch (err) {
+        error.NotStarted => try client.startService(handle),
+        else => return err,
+    };
+}
+
 /// One-shot connect + SHUTDOWN — what /usr/bin/reboot and /usr/bin/poweroff
 /// do on the image, minus the exec.
 pub fn requestShutdown(socket_path: []const u8, t: ShutdownType) ClientError!void {
@@ -293,6 +383,40 @@ test "STARTSERVICE frame matches hand-computed bytes" {
     var buf: [6]u8 = undefined;
     const frame = encodeStartService(&buf, 0x01020304);
     try std.testing.expectEqualSlices(u8, &.{ 3, 0, 0x04, 0x03, 0x02, 0x01 }, frame);
+}
+
+test "STOPSERVICE frames: gentle stop and dinitctl-style restart flags" {
+    var buf: [6]u8 = undefined;
+    // Gentle stop: flags bit1 only (control.cc:322 "not forced").
+    try std.testing.expectEqualSlices(u8, &.{ 4, 2, 0x04, 0x03, 0x02, 0x01 }, encodeStopService(&buf, 0x01020304, stop_flags_gentle));
+    // Restart: gentle | restart | pre-ack — what dinitctl restart sends.
+    try std.testing.expectEqualSlices(u8, &.{ 4, 0x86, 0x78, 0x56, 0x34, 0x12 }, encodeStopService(&buf, 0x12345678, restart_flags));
+}
+
+test "stop/restart against scripted replies (ack, alreadyss, preack, nak)" {
+    var server: posix.fd_t = undefined;
+    var client = try testClientPair(&server);
+    defer client.deinit();
+    defer _ = linux.close(server);
+
+    try feed(server, &.{50}); // ACK: stop initiated
+    try client.stopService(1);
+    try feed(server, &.{61}); // ALREADYSS: already stopped — success
+    try client.stopService(1);
+    try feed(server, &.{65}); // DEPENDENTS: gentle stop refused
+    try std.testing.expectError(error.StopFailed, client.stopService(1));
+    try feed(server, &.{68}); // PINNEDSTARTED
+    try std.testing.expectError(error.PinnedStarted, client.stopService(1));
+
+    // Restart: PREACK precedes the real reply (bit7 requested)…
+    try feed(server, &.{ 79, 61 });
+    try client.restartService(2);
+    // …and an interleaved info packet before the PREACK is skipped too.
+    try feed(server, &.{ 100, 7, 0xaa, 0xbb, 0xcc, 0xdd, 0, 79, 50 });
+    try client.restartService(2);
+    // NAK = not started, the restart-or-start fallback cue.
+    try feed(server, &.{ 79, 51 });
+    try std.testing.expectError(error.NotStarted, client.restartService(2));
 }
 
 test "SHUTDOWN frames match shutdown_type_t values" {

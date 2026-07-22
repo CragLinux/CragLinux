@@ -47,12 +47,44 @@ CONFIG_PKCS8_PRIVATE_KEY_PARSER=y
 # TUN/TAP: VPN-shaped workloads and test harnesses (docs/02 §6).
 CONFIG_TUN=y
 
-# Netfilter basics: groundwork for the phase-4 AP provisioning portal
-# (NAT/redirect on the AP subnet) and general firewalling. nftables only
-# (no legacy xtables) — dinit-chimera carries no iptables userspace.
+# Netfilter for the phase-4 AP captive portal (docs/07 §4) and general
+# firewalling. nftables only (no legacy xtables) — dinit-chimera carries
+# no iptables userspace. The exact ruleset these serve is
+# usr/lib/astro/portal-redirect-up.sh in the common overlay:
+#
+#   table ip astro_portal {
+#     chain prerouting {
+#       type nat hook prerouting priority dstnat;
+#       iifname "wlan0" tcp dport 80 redirect to :8080
+#       iifname "wlan0" udp dport 53 redirect to :5354
+#     }
+#   }
+#
+# Symbol-by-symbol against that ruleset:
+#   NETFILTER/NF_TABLES  the nft table/chain/rule machinery itself
+#   NF_TABLES_IPV4       "table ip" family support (net/ipv4/netfilter/
+#                        Kconfig:28). TRAP, found by auditing the built
+#                        .config: this bool was never set, so kconfig
+#                        SILENTLY dropped the old fragment's NFT_NAT=y
+#                        (depends on NF_TABLES_IPV4 || NF_TABLES_IPV6,
+#                        net/netfilter/Kconfig:565) — the "netfilter
+#                        basics" this fragment claimed since phase 3
+#                        were half missing.
+#   NFT_NAT              "type nat" chain support (the nat expression)
+#   NFT_REDIR            the "redirect" statement — the one this pair
+#                        actually executes (depends on NF_CONNTRACK +
+#                        NF_NAT, selects NF_NAT_REDIRECT — Kconfig:556)
+#   NF_NAT               the NAT core nft_redir/nft_nat translate through
+#   NF_CONNTRACK         redirect is DNAT, and all NAT rides conntrack
+# (tcp/udp dport and iifname matches are core nf_tables payload/meta
+# expressions — no extra symbols.)
 CONFIG_NETFILTER=y
 CONFIG_NF_CONNTRACK=y
 CONFIG_NF_TABLES=y
+CONFIG_NF_TABLES_IPV4=y
 CONFIG_NF_NAT=y
 CONFIG_NFT_NAT=y
+CONFIG_NFT_REDIR=y
+# Not needed by the portal pair; kept for product firewalls (masquerade
+# is the next thing every gateway-shaped product asks for).
 CONFIG_NFT_MASQ=y

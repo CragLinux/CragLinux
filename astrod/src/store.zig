@@ -39,6 +39,18 @@ pub const Config = struct {
         /// Provisioning state machine (docs/07 §4):
         /// factory → provisioning → provisioned.
         provisioning: []const u8 = "factory",
+        /// AP-mode control (docs/06 §5.2 GET,PUT /network/wifi/ap; M3
+        /// phase 4, additive — schema stays 1).
+        ap: Ap = .{},
+    };
+
+    pub const Ap = struct {
+        /// Manual override for products that want on-demand AP: null =
+        /// the provisioning state machine decides (the default), true =
+        /// force the AP up, false = force it down even while
+        /// unprovisioned. Written only by PUT /network/wifi/ap on
+        /// authenticated surfaces — NEVER by the AP subset.
+        enabled_override: ?bool = null,
     };
 
     /// Feature flags baked into the image defaults (docs/03 §6 `[api]`);
@@ -49,6 +61,11 @@ pub const Config = struct {
         ap_provisioning: bool = true,
         mdns: bool = true,
         lan_exposure: bool = false, // AD-025: LAN exposure defaults off
+        /// Product policy "wired-is-provisioned" (docs/07 §4 wired path;
+        /// M3 phase 4, additive): an ethernet lease + verified
+        /// connectivity alone promotes to provisioned. Default false —
+        /// the wired path then only surfaces availability.
+        wired_provisions: bool = false,
     };
 
     /// Desired network state (docs/06 §5.2, docs/07 §2). Everything here
@@ -186,6 +203,38 @@ pub const Store = struct {
         self.mu.lockShared();
         defer self.mu.unlockShared();
         return self.config.network.wifi.connection;
+    }
+
+    pub fn getWiredProvisions(self: *Store) bool {
+        self.mu.lockShared();
+        defer self.mu.unlockShared();
+        return self.config.api.wired_provisions;
+    }
+
+    pub fn getApEnabledOverride(self: *Store) ?bool {
+        self.mu.lockShared();
+        defer self.mu.unlockShared();
+        return self.config.system.ap.enabled_override;
+    }
+
+    /// Persist the manual AP override (PUT /network/wifi/ap, docs/06
+    /// §5.2 WifiApConfig): true forces the AP up, false forces it down,
+    /// null returns control to the provisioning state machine.
+    pub fn setApEnabledOverride(self: *Store, value: ?bool) !void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.config.system.ap.enabled_override = value;
+        try self.persistLocked();
+    }
+
+    /// Persist a provisioning-state transition (the provision.Machine's
+    /// persistState effect). `state` must be a static string
+    /// (provision.State.jsonName) — the store never copies it.
+    pub fn setProvisioning(self: *Store, state: []const u8) !void {
+        self.mu.lock();
+        defer self.mu.unlock();
+        self.config.system.provisioning = state;
+        try self.persistLocked();
     }
 
     /// Per-interface wired config; null when the interface has no entry
@@ -517,6 +566,41 @@ test "mergePatch: the PATCH /network/ethernet/{iface} shape" {
     ,
         \\{"ipv4":{"mode":"dhcp"}}
     );
+}
+
+test "phase-4 additive fields: defaults, parse, persist round-trip (schema stays 1)" {
+    const allocator = std.testing.allocator;
+    var path_buf: [128]u8 = undefined;
+    const path = fsutil.testTmpPath(&path_buf, "astro-p4.json");
+    defer fsutil.unlink(path) catch {};
+
+    // Defaults on a document that predates phase 4.
+    var d = try Store.load(allocator, "/nonexistent/astro.json");
+    defer d.deinit();
+    try std.testing.expect(!d.getWiredProvisions());
+    try std.testing.expect(d.getApEnabledOverride() == null);
+
+    // Parse both fields; unrelated fields keep their defaults.
+    try fsutil.writeFileSync(path,
+        \\{"schema": 1,
+        \\ "api": {"wired_provisions": true},
+        \\ "system": {"provisioning": "provisioning",
+        \\            "ap": {"enabled_override": false}}}
+    );
+    var s = try Store.load(allocator, path);
+    defer s.deinit();
+    try std.testing.expect(s.getWiredProvisions());
+    try std.testing.expectEqual(@as(?bool, false), s.getApEnabledOverride());
+    try std.testing.expect(s.getApi().mdns);
+
+    // setProvisioning persists atomically and round-trips.
+    try s.setProvisioning("provisioned");
+    var s2 = try Store.load(allocator, path);
+    defer s2.deinit();
+    try std.testing.expectEqualStrings("provisioned", s2.getProvisioning());
+    try std.testing.expect(s2.getWiredProvisions());
+    try std.testing.expectEqual(@as(?bool, false), s2.getApEnabledOverride());
+    try std.testing.expectEqual(schema_version, s2.getSchema());
 }
 
 test "load falls back to defaults on a corrupt document" {

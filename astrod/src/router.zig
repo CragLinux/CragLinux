@@ -11,6 +11,11 @@ const update = @import("update.zig");
 const events = @import("events.zig");
 const ops = @import("ops.zig");
 const netconf = @import("netconf.zig");
+const auth = @import("auth.zig");
+const portal = @import("portal.zig");
+const wifi_mod = @import("wifi.zig");
+const provision = @import("provision.zig");
+const fsutil = @import("fsutil.zig");
 
 /// Only the verbs the API uses (docs/06 §4); parse returns null for others
 /// so dispatch can answer 405 rather than crash on e.g. CONNECT.
@@ -49,12 +54,20 @@ pub const Response = struct {
     /// Either static or allocated from ctx.allocator (an arena per request
     /// in main.zig, so ownership never needs tracking here).
     body: []const u8,
+    /// Location header for 3xx answers (the captive-probe redirects on
+    /// the AP surface are the only writers today).
+    location: ?[]const u8 = null,
 };
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
     request: Request,
     store: *store_mod.Store,
+    /// Which listener this request arrived on (AD-014). Defaults to the
+    /// most-privileged surface so every pre-phase-4 unit test (and the
+    /// unix socket path) keeps its exact prior behavior; main.zig tags
+    /// it per connection.
+    surface: auth.Surface = .unix,
     /// Bound value of a trailing {param} route segment (e.g. the "op-3"
     /// of GET /api/v1/operations/op-3); set by dispatch, slices into
     /// request.path. Null on exact-match routes.
@@ -78,6 +91,16 @@ pub const Context = struct {
 
 pub const DeferredAction = union(enum) {
     shutdown: dinit.ShutdownType,
+    /// POST /system/factory-reset accepted: dispatch the
+    /// astro-factory-reset root oneshot (flag + sync + reboot) with the
+    /// 202 already on the wire — same discipline as shutdown.
+    factory_reset,
+    /// PUT wifi/connection on the AP surface with the AP up: run the
+    /// synchronous AP→station flip (provision.Manager.flipConnect)
+    /// AFTER the 202 is written — the flip tears the very listener/
+    /// address this response leaves on down. Slices are arena-owned
+    /// (valid until the connection thread finishes the action).
+    wifi_flip: struct { ssid: []const u8, psk: []const u8 },
 };
 
 pub const Handler = *const fn (ctx: *Context) anyerror!Response;
@@ -129,6 +152,52 @@ pub const routes: []const Route = &.{
     .{ .method = .PUT, .path = "/api/v1/network/wan", .handler = netconf.putWan },
     .{ .method = .GET, .path = "/api/v1/network/cellular", .handler = cellularReserved },
     .{ .method = .PUT, .path = "/api/v1/network/cellular", .handler = cellularReserved },
+    // Phase-4 provisioning group (docs/06 §5.1/§5.2, docs/07 §4–§5).
+    // Without their backends (wifi.global / provision.global null —
+    // unit builds) these answer 501 like the network group. PUT
+    // /network/wifi/ap and POST /system/factory-reset are deliberately
+    // absent from the AP subset (ap_allowed below), so on the AP
+    // surface they answer 403.
+    .{ .method = .GET, .path = "/api/v1/network/wifi/ap", .handler = getWifiAp },
+    .{ .method = .PUT, .path = "/api/v1/network/wifi/ap", .handler = putWifiAp },
+    .{ .method = .POST, .path = "/api/v1/system/factory-reset", .handler = postFactoryReset },
+};
+
+/// The AD-014 unauthenticated SUBSET served on the AP provisioning
+/// surface (docs/06 §6 table, docs/07 §4 item 2): exactly what the
+/// captive portal needs — a redacted system summary and the wifi
+/// scan/join flow. EVERYTHING else on that surface answers 403 (see
+/// dispatch). Keep this list in lockstep with the portal page
+/// (src/portal.html) and the spec's AP-surface notes.
+pub const ap_allowed_routes = [_]struct { method: Method, path: []const u8 }{
+    .{ .method = .GET, .path = "/api/v1/system" }, // redacted — see getSystem
+    .{ .method = .POST, .path = "/api/v1/network/wifi/scan" },
+    .{ .method = .GET, .path = "/api/v1/network/wifi/networks" },
+    .{ .method = .PUT, .path = "/api/v1/network/wifi/connection" },
+};
+
+pub fn apAllowed(method: Method, path: []const u8) bool {
+    for (ap_allowed_routes) |r| {
+        if (r.method == method and std.mem.eql(u8, r.path, path)) return true;
+    }
+    return false;
+}
+
+/// Portal-only routes, served EXCLUSIVELY on the AP surface: the
+/// provisioning page and the OS captive-probe paths (docs/07 §4 items
+/// 2–3). CONFORMANCE HANDLING (AD-013, explicit decision): these paths
+/// are NOT part of the /api/v1 contract — they are captive-portal
+/// furniture whose shapes are dictated by phone OSes, not by us — so
+/// they live in this separate table, outside `routes`, and outside the
+/// spec↔route gate. A conformance test pins the invariant that keeps
+/// this sound: no portal route may ever start with /api/ (it could
+/// otherwise shadow a documented operation on the AP surface).
+pub const portal_routes: []const Route = &.{
+    .{ .method = .GET, .path = "/", .handler = portal.getPortalPage },
+    .{ .method = .GET, .path = "/generate_204", .handler = portal.probeRedirect },
+    .{ .method = .GET, .path = "/hotspot-detect.html", .handler = portal.probeRedirect },
+    .{ .method = .GET, .path = "/connecttest.txt", .handler = portal.probeRedirect },
+    .{ .method = .GET, .path = "/ncsi.txt", .handler = portal.probeRedirect },
 };
 
 /// Match a route path against a request path. Exact match, or — when the
@@ -152,7 +221,33 @@ fn matchPath(route_path: []const u8, req_path: []const u8) ?(?[]const u8) {
 
 /// Never returns an error: handler failures become 500 problem+json so the
 /// connection layer always has something well-formed to write.
+///
+/// Surface gating (AD-014): on the AP surface, portal_routes are tried
+/// first (page + captive probes), then only the ap_allowed subset of the
+/// API — anything else is 403 (not 404: the paths exist, this surface
+/// refuses them, and hiding that would only confuse portal debugging).
+/// On every other surface portal_routes do not exist at all, so
+/// pre-phase-4 behavior is bit-identical there.
 pub fn dispatch(ctx: *Context) Response {
+    if (ctx.surface == .ap) {
+        for (portal_routes) |route| {
+            if (route.method == ctx.request.method and std.mem.eql(u8, route.path, ctx.request.path)) {
+                return route.handler(ctx) catch problemResponse(ctx, .{
+                    .type = "urn:astro:problem:internal",
+                    .title = "Internal Server Error",
+                    .status = 500,
+                });
+            }
+        }
+        if (!apAllowed(ctx.request.method, ctx.request.path)) {
+            return problemResponse(ctx, .{
+                .type = "urn:astro:problem:forbidden",
+                .title = "Forbidden",
+                .status = 403,
+                .detail = "the AP provisioning surface serves only the unauthenticated subset (docs/06 \u{a7}6): GET /api/v1/system, POST /api/v1/network/wifi/scan, GET /api/v1/network/wifi/networks, PUT /api/v1/network/wifi/connection, and the portal page",
+            });
+        }
+    }
     var path_known = false;
     for (routes) |route| {
         if (matchPath(route.path, ctx.request.path)) |param| {
@@ -199,7 +294,138 @@ fn getSystem(ctx: *Context) anyerror!Response {
     // Per-request arena allocation (thread-safe by construction; the old
     // module-static buffers raced once the server went threaded).
     const info = try system.collectWith(ctx.allocator, ctx.store.getProvisioning());
+    // Redaction hook (AD-014): the AP provisioning surface never sees
+    // machine_id (it seeds the AP PSK and confirms factory reset).
+    if (ctx.surface == .ap) {
+        return .{ .status = 200, .body = try std.json.Stringify.valueAlloc(ctx.allocator, system.redact(info), .{}) };
+    }
     return .{ .status = 200, .body = try std.json.Stringify.valueAlloc(ctx.allocator, info, .{}) };
+}
+
+const machine_id_path = "/etc/machine-id";
+
+/// The docs/02 §7 residual-root-ops oneshot POST /system/factory-reset
+/// dispatches (boards/common/overlay/etc/dinit.d/astro-factory-reset).
+pub const factory_reset_service = "astro-factory-reset";
+
+/// WifiApState assembly (docs/06 §5.2): enabled from the live
+/// AccessPoint.Started mirror, ssid from the same machine-id derivation
+/// the radio beacons, subnet from the baked pool. The PSK is NEVER
+/// served over HTTP — `astroctl wifi ap show` derives it locally on the
+/// socket-only surface (the label story).
+fn wifiApStateResponse(ctx: *Context) anyerror!Response {
+    const w = wifi_mod.global.?;
+    var mid_buf: [128]u8 = undefined;
+    var ssid_buf: [32]u8 = undefined;
+    var ssid: []const u8 = "";
+    if (fsutil.readFileBounded(machine_id_path, &mid_buf)) |text| {
+        const trimmed = std.mem.trim(u8, text, " \t\r\n");
+        if (trimmed.len > 0) ssid = wifi_mod.deriveApSsid(&ssid_buf, trimmed);
+    } else |_| {}
+    const View = struct { enabled: bool, ssid: []const u8, subnet: []const u8 };
+    return .{ .status = 200, .body = try std.json.Stringify.valueAlloc(ctx.allocator, View{
+        .enabled = w.apActive(),
+        .ssid = ssid,
+        .subnet = portal.ap_subnet,
+    }, .{}) };
+}
+
+/// GET /api/v1/network/wifi/ap — AP state {enabled, ssid, subnet}.
+/// 501 while the wifi backend is absent (unit builds, radio-less
+/// boards), matching the network-group degradation contract.
+fn getWifiAp(ctx: *Context) anyerror!Response {
+    if (wifi_mod.global == null) return notImplemented(ctx);
+    return wifiApStateResponse(ctx);
+}
+
+/// PUT /api/v1/network/wifi/ap — the manual tri-state override
+/// (docs/06 §5.2 WifiApConfig): true forces the AP up (even with
+/// ethernet carrier), false forces it down, null returns control to the
+/// provisioning machine. Persisted as system.ap.enabled_override; the
+/// machine applies it on its next observation (poked here).
+/// Authenticated surfaces only — the AP subset excludes this route.
+fn putWifiAp(ctx: *Context) anyerror!Response {
+    if (wifi_mod.global == null or provision.global == null) return notImplemented(ctx);
+    // Strict body (AD-013): exactly {"enabled": true|false|null}.
+    const invalid_detail = "body must be {\"enabled\": true|false|null} (docs/06 \u{a7}5.2 WifiApConfig); unknown members are rejected";
+    var parsed = std.json.parseFromSlice(std.json.Value, ctx.allocator, ctx.request.body, .{}) catch
+        return badRequestProblem(ctx, invalid_detail);
+    defer parsed.deinit();
+    if (parsed.value != .object or parsed.value.object.count() != 1)
+        return badRequestProblem(ctx, invalid_detail);
+    const enabled_v = parsed.value.object.get("enabled") orelse
+        return badRequestProblem(ctx, invalid_detail);
+    const override: ?bool = switch (enabled_v) {
+        .bool => |b| b,
+        .null => null,
+        else => return badRequestProblem(ctx, invalid_detail),
+    };
+    ctx.store.setApEnabledOverride(override) catch return problemResponse(ctx, .{
+        .type = "urn:astro:problem:store-failed",
+        .title = "Internal Server Error",
+        .status = 500,
+        .detail = "persisting system.ap.enabled_override failed",
+    });
+    provision.global.?.pokeObserve();
+    return wifiApStateResponse(ctx);
+}
+
+fn badRequestProblem(ctx: *Context, detail: []const u8) Response {
+    return problemResponse(ctx, .{
+        .type = "urn:astro:problem:bad-request",
+        .title = "Bad Request",
+        .status = 400,
+        .detail = detail,
+    });
+}
+
+/// POST /api/v1/system/factory-reset — confirm-with-serial (docs/06
+/// §5.1): {"confirm": "<machine-id>"} must match this device, then the
+/// astro-factory-reset root oneshot (flag + sync + reboot; data-mount
+/// wipes /data on the way back up — docs/07 §5) is dispatched AFTER the
+/// 202 is on the wire (deferred discipline). dinit and the service are
+/// probed before answering so failures still surface as HTTP errors.
+fn postFactoryReset(ctx: *Context) anyerror!Response {
+    if (provision.global == null) return notImplemented(ctx);
+    const Body = struct { confirm: []const u8 };
+    const body = std.json.parseFromSliceLeaky(Body, ctx.allocator, ctx.request.body, .{
+        .ignore_unknown_fields = false,
+        .allocate = .alloc_always,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return badRequestProblem(ctx, "body must be {\"confirm\": \"<machine-id>\"} (docs/06 \u{a7}5.1 confirm-with-serial); unknown members are rejected"),
+    };
+    var mid_buf: [128]u8 = undefined;
+    const mid: []const u8 = blk: {
+        const text = fsutil.readFileBounded(machine_id_path, &mid_buf) catch "";
+        break :blk std.mem.trim(u8, text, " \t\r\n");
+    };
+    if (mid.len == 0) return problemResponse(ctx, .{
+        .type = "urn:astro:problem:internal",
+        .title = "Internal Server Error",
+        .status = 500,
+        .detail = "machine-id unavailable; the confirm token cannot be verified",
+    });
+    if (!std.mem.eql(u8, mid, body.confirm)) {
+        return badRequestProblem(ctx, "confirm does not match this device's machine_id (GET /api/v1/system on an authenticated surface)");
+    }
+    // Probe: dinit reachable AND the oneshot loadable — after the 202
+    // there is no error channel left (same TOCTOU stance as powerAction).
+    var probe = dinit.Client.connect(dinit.default_socket_path) catch return problemResponse(ctx, .{
+        .type = "urn:astro:problem:dinit-unavailable",
+        .title = "Service Unavailable",
+        .status = 503,
+        .detail = "cannot reach the dinit control socket",
+    });
+    defer probe.deinit();
+    _ = probe.loadService(factory_reset_service) catch return problemResponse(ctx, .{
+        .type = "urn:astro:problem:internal",
+        .title = "Internal Server Error",
+        .status = 500,
+        .detail = "the astro-factory-reset service is not loadable",
+    });
+    ctx.deferred = .factory_reset;
+    return .{ .status = 202, .body = "{\"operation\":null}" };
 }
 
 fn postReboot(ctx: *Context) anyerror!Response {
@@ -495,6 +721,147 @@ test "network group: every phase-3 route answers 501 problem+json" {
     var cell = testCtx(arena.allocator(), &st, .GET, "/api/v1/network/cellular");
     const cell_resp = dispatch(&cell);
     try std.testing.expect(std.mem.indexOf(u8, cell_resp.body, "reserved namespace") != null);
+}
+
+test "phase-4 routes answer 501 problem+json on default surfaces" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var st = try testStore();
+    defer st.deinit();
+
+    const cases = [_]struct { m: Method, p: []const u8 }{
+        .{ .m = .GET, .p = "/api/v1/network/wifi/ap" },
+        .{ .m = .PUT, .p = "/api/v1/network/wifi/ap" },
+        .{ .m = .POST, .p = "/api/v1/system/factory-reset" },
+    };
+    for (cases) |case| {
+        var ctx = testCtx(arena.allocator(), &st, case.m, case.p);
+        const resp = dispatch(&ctx);
+        try std.testing.expectEqual(@as(u16, 501), resp.status);
+        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:astro:problem:not-implemented") != null);
+    }
+    // Wrong verbs are 405 (the paths are known).
+    var wrong = testCtx(arena.allocator(), &st, .DELETE, "/api/v1/network/wifi/ap");
+    try std.testing.expectEqual(@as(u16, 405), dispatch(&wrong).status);
+    var wrong2 = testCtx(arena.allocator(), &st, .GET, "/api/v1/system/factory-reset");
+    try std.testing.expectEqual(@as(u16, 405), dispatch(&wrong2).status);
+}
+
+fn apCtx(allocator: std.mem.Allocator, st: *store_mod.Store, method: Method, path: []const u8) Context {
+    var ctx = testCtx(allocator, st, method, path);
+    ctx.surface = .ap;
+    return ctx;
+}
+
+test "AP surface serves exactly the unauthenticated subset, 403 otherwise" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var st = try testStore();
+    defer st.deinit();
+
+    // Subset members reach their handlers (unit build: network handlers
+    // answer 501 not-wired, which proves dispatch let them through; the
+    // 403 gate would have preempted them).
+    const allowed = [_]struct { m: Method, p: []const u8, want: u16 }{
+        .{ .m = .GET, .p = "/api/v1/system", .want = 200 },
+        .{ .m = .POST, .p = "/api/v1/network/wifi/scan", .want = 501 },
+        .{ .m = .GET, .p = "/api/v1/network/wifi/networks", .want = 501 },
+        .{ .m = .PUT, .p = "/api/v1/network/wifi/connection", .want = 501 },
+    };
+    for (allowed) |case| {
+        var ctx = apCtx(arena.allocator(), &st, case.m, case.p);
+        try std.testing.expectEqual(case.want, dispatch(&ctx).status);
+    }
+
+    // Everything else on the AP surface is 403 — including the
+    // authenticated-only phase-4 endpoints, sensitive reads, and
+    // methods that are fine on other surfaces.
+    const forbidden = [_]struct { m: Method, p: []const u8 }{
+        .{ .m = .PUT, .p = "/api/v1/network/wifi/ap" },
+        .{ .m = .GET, .p = "/api/v1/network/wifi/ap" },
+        .{ .m = .POST, .p = "/api/v1/system/factory-reset" },
+        .{ .m = .POST, .p = "/api/v1/system/reboot" },
+        .{ .m = .POST, .p = "/api/v1/update" },
+        .{ .m = .GET, .p = "/api/v1/update/status" },
+        .{ .m = .GET, .p = "/api/v1/network/wifi/connection" }, // GET is not in the subset
+        .{ .m = .DELETE, .p = "/api/v1/network/wifi/connection" },
+        .{ .m = .GET, .p = "/api/v1/events" },
+        .{ .m = .GET, .p = "/api/v1/openapi.json" },
+        .{ .m = .GET, .p = "/api/v1/totally/unknown" }, // even unknown paths: 403, not 404
+    };
+    for (forbidden) |case| {
+        var ctx = apCtx(arena.allocator(), &st, case.m, case.p);
+        const resp = dispatch(&ctx);
+        try std.testing.expectEqual(@as(u16, 403), resp.status);
+        try std.testing.expectEqualStrings(problem.content_type, resp.content_type);
+        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:astro:problem:forbidden") != null);
+    }
+}
+
+test "AP surface: portal page, captive probes, and the redaction hook" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var st = try testStore();
+    defer st.deinit();
+
+    // GET / serves the embedded portal page on the AP surface…
+    var page_ctx = apCtx(arena.allocator(), &st, .GET, "/");
+    const page_resp = dispatch(&page_ctx);
+    try std.testing.expectEqual(@as(u16, 200), page_resp.status);
+    try std.testing.expect(std.mem.startsWith(u8, page_resp.content_type, "text/html"));
+
+    // …and every OS probe path 302s to it (Location header).
+    for (portal.probe_paths) |p| {
+        var ctx = apCtx(arena.allocator(), &st, .GET, p);
+        const resp = dispatch(&ctx);
+        try std.testing.expectEqual(@as(u16, 302), resp.status);
+        try std.testing.expectEqualStrings("/", resp.location.?);
+    }
+
+    // GET /system on the AP surface is REDACTED: no machine_id, but
+    // provisioning/release survive (the portal shows them).
+    var sys_ctx = apCtx(arena.allocator(), &st, .GET, "/api/v1/system");
+    const sys_resp = dispatch(&sys_ctx);
+    try std.testing.expectEqual(@as(u16, 200), sys_resp.status);
+    try std.testing.expect(std.mem.indexOf(u8, sys_resp.body, "machine_id") == null);
+    try std.testing.expect(std.mem.indexOf(u8, sys_resp.body, "\"provisioning\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sys_resp.body, "\"time_synced\"") != null);
+}
+
+test "existing surfaces are unchanged: no portal routes, no redaction, no 403s" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var st = try testStore();
+    defer st.deinit();
+
+    // GET / stays 404 on the unix surface (portal routes are AP-only).
+    var root_ctx = testCtx(arena.allocator(), &st, .GET, "/");
+    try std.testing.expectEqual(@as(u16, 404), dispatch(&root_ctx).status);
+    var probe_ctx = testCtx(arena.allocator(), &st, .GET, "/generate_204");
+    try std.testing.expectEqual(@as(u16, 404), dispatch(&probe_ctx).status);
+
+    // GET /system keeps machine_id on unix and localhost surfaces.
+    var unix_ctx = testCtx(arena.allocator(), &st, .GET, "/api/v1/system");
+    try std.testing.expect(std.mem.indexOf(u8, dispatch(&unix_ctx).body, "machine_id") != null);
+    var local_ctx = testCtx(arena.allocator(), &st, .GET, "/api/v1/system");
+    local_ctx.surface = .localhost;
+    try std.testing.expect(std.mem.indexOf(u8, dispatch(&local_ctx).body, "machine_id") != null);
+}
+
+test "portal routes never shadow the API namespace (conformance invariant)" {
+    // The AD-013 gate covers `routes` only; this pins the invariant that
+    // keeps the exemption sound — a portal route under /api/ could
+    // shadow a documented operation on the AP surface.
+    for (portal_routes) |route| {
+        try std.testing.expect(!std.mem.startsWith(u8, route.path, "/api/"));
+    }
+    // And the AP whitelist only names documented routes.
+    for (ap_allowed_routes) |allowed| {
+        const known = for (routes) |route| {
+            if (route.method == allowed.method and std.mem.eql(u8, route.path, allowed.path)) break true;
+        } else false;
+        try std.testing.expect(known);
+    }
 }
 
 test "power actions answer 503 problem+json when dinit is unreachable" {

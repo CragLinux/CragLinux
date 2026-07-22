@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const fsutil = @import("fsutil.zig");
+const timekeep = @import("timekeep.zig");
 
 pub const SystemInfo = struct {
     board: []const u8,
@@ -18,7 +19,54 @@ pub const SystemInfo = struct {
     uptime_s: u64,
     provisioning: []const u8,
     health: []const u8,
+    /// Kernel NTP discipline state (docs/07 §6 item 3): adjtimex
+    /// STA_UNSYNC clear — chronyd sets it once it steps/slews the clock.
+    /// Product apps gate their own TLS-dependent work on this.
+    time_synced: bool,
+    /// Last provisioning-AP failure ("ap-start-failed"/"ap-stop-failed",
+    /// static strings from portal.ApController via last_error_source);
+    /// null when the last AP cycle was clean. Kept in the REDACTED view
+    /// too — the portal page displays it and re-offers the form (the
+    /// survivable wrong-password loop, docs/07 §4 item 5).
+    last_error: ?[]const u8,
 };
+
+/// GET /system on the AP provisioning surface (AD-014, docs/06 §6):
+/// the unauthenticated subset serves a REDACTED system summary —
+/// machine_id is omitted (it seeds the AP PSK derivation and is the
+/// factory-reset confirm token; provisioning/version stay, the portal
+/// needs them). Field subset of SystemInfo, enforced by a test below.
+pub const RedactedSystemInfo = struct {
+    board: []const u8,
+    variant: []const u8,
+    release: []const u8,
+    booted_slot: ?[]const u8,
+    uptime_s: u64,
+    provisioning: []const u8,
+    health: []const u8,
+    time_synced: bool,
+    last_error: ?[]const u8,
+};
+
+pub fn redact(info: SystemInfo) RedactedSystemInfo {
+    return .{
+        .board = info.board,
+        .variant = info.variant,
+        .release = info.release,
+        .booted_slot = info.booted_slot,
+        .uptime_s = info.uptime_s,
+        .provisioning = info.provisioning,
+        .health = info.health,
+        .time_synced = info.time_synced,
+        .last_error = info.last_error,
+    };
+}
+
+/// Source of the last_error field: main wires portal.lastErrorSource
+/// here at startup (a fn pointer rather than an import keeps system.zig
+/// dependency-flat and the unit builds deterministic — null source
+/// serves last_error: null). Must return null or a STATIC string.
+pub var last_error_source: ?*const fn () ?[]const u8 = null;
 
 /// TODO(fill): reconciler summary (docs/06 §2) replaces this constant.
 pub const health_ok = "ok";
@@ -72,6 +120,8 @@ pub fn collectWith(allocator: std.mem.Allocator, provisioning: []const u8) error
         .uptime_s = uptimeSeconds(),
         .provisioning = provisioning,
         .health = health_ok,
+        .time_synced = timekeep.synced(),
+        .last_error = if (last_error_source) |f| f() else null,
     };
 }
 
@@ -243,4 +293,35 @@ test "collectWith threads the store's provisioning state through" {
     defer arena.deinit();
     const info = try collectWith(arena.allocator(), "provisioned");
     try std.testing.expectEqualStrings("provisioned", info.provisioning);
+}
+
+test "RedactedSystemInfo is SystemInfo minus exactly machine_id" {
+    // Structural guarantee for the AP surface: every redacted field
+    // exists on SystemInfo with the same type, and the only field
+    // removed is machine_id — a new SystemInfo field that is forgotten
+    // in RedactedSystemInfo (or vice versa) fails here, forcing a
+    // deliberate redaction decision.
+    const full = std.meta.fields(SystemInfo);
+    const red = std.meta.fields(RedactedSystemInfo);
+    try std.testing.expectEqual(full.len, red.len + 1);
+    inline for (red) |rf| {
+        var found = false;
+        inline for (full) |ff| {
+            if (comptime std.mem.eql(u8, ff.name, rf.name)) {
+                try std.testing.expect(ff.type == rf.type);
+                found = true;
+            }
+        }
+        try std.testing.expect(found);
+        try std.testing.expect(comptime !std.mem.eql(u8, rf.name, "machine_id"));
+    }
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const info = try collectWith(arena.allocator(), "provisioning");
+    const r = redact(info);
+    try std.testing.expectEqualStrings("provisioning", r.provisioning);
+    const json = try std.json.Stringify.valueAlloc(arena.allocator(), r, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "machine_id") == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "time_synced") != null);
 }

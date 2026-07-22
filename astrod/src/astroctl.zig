@@ -24,6 +24,9 @@ const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
 const sync = @import("sync.zig");
+const wifi = @import("wifi.zig");
+const timekeep = @import("timekeep.zig");
+const fsutil = @import("fsutil.zig");
 
 pub const default_socket_path = "/run/astro/astrod.sock";
 
@@ -70,6 +73,22 @@ const usage_text =
     \\  wan set <csv>              Replace it, e.g. `wan set ethernet,wifi`
     \\  ethernet get <iface>       Show the wired config for one interface
     \\  ethernet set <iface>       Replace it: --dhcp | --static=ADDR/PREFIX[,GW]
+    \\  provision status           Provisioning state + wired/wifi observations
+    \\  wifi ap show               Provisioning-AP state, incl. the derived
+    \\                             SSID/PSK (label story; the PSK is derived
+    \\                             locally from /etc/machine-id and is NEVER
+    \\                             served over HTTP — this is the socket-only
+    \\                             surface for it)
+    \\  wifi ap enable             Force the provisioning AP up (persisted
+    \\                             override; PUT /api/v1/network/wifi/ap)
+    \\  wifi ap disable            Force the provisioning AP down
+    \\  wifi ap auto               Return AP control to the provisioning
+    \\                             state machine (clears the override)
+    \\  factory-reset [id]         Wipe /data and reboot (docs/07 §5).
+    \\                             Prompts for this device's machine-id;
+    \\                             --yes-really-wipe with the machine-id as
+    \\                             the argument skips the prompt (scripts)
+    \\  time                       Clock status: NTP sync + build-epoch floor
     \\  help                       Show this help
     \\
     \\  ("system reboot" / "system poweroff" are accepted aliases)
@@ -85,6 +104,8 @@ const usage_text =
     \\  --dhcp            ethernet set: IPv4 via DHCP
     \\  --static=ADDR/PREFIX[,GW]
     \\                    ethernet set: static IPv4 (gateway optional)
+    \\  --yes-really-wipe factory-reset: skip the interactive confirm; the
+    \\                    machine-id must be given as the positional argument
     \\
     \\Exit codes: 0 success, 1 API/operation error, 2 usage error
     \\
@@ -110,6 +131,13 @@ pub const Action = enum {
     wan_set,
     eth_get,
     eth_set,
+    provision_status,
+    wifi_ap_show,
+    wifi_ap_enable,
+    wifi_ap_disable,
+    wifi_ap_auto,
+    factory_reset,
+    time_status,
 };
 
 pub const Invocation = struct {
@@ -132,6 +160,10 @@ pub const Invocation = struct {
     dhcp: bool = false,
     /// wifi connect: association wait bound.
     timeout_s: u32 = default_connect_timeout_s,
+    /// factory-reset: non-interactive confirm — requires the machine-id
+    /// as the positional argument (and vice versa), so a script can never
+    /// wipe a device without naming it explicitly.
+    yes_really_wipe: bool = false,
 };
 
 pub const Parsed = union(enum) { help, usage_error, invoke: Invocation };
@@ -147,6 +179,7 @@ pub fn parseCommand(args: []const []const u8) Parsed {
     var dhcp = false;
     var timeout_s: u32 = default_connect_timeout_s;
     var timeout_set = false;
+    var yes_really_wipe = false;
     var words: [3][]const u8 = undefined;
     var nwords: usize = 0;
     for (args) |arg| {
@@ -165,6 +198,8 @@ pub fn parseCommand(args: []const []const u8) Parsed {
             if (static_spec.?.len == 0) return .usage_error;
         } else if (std.mem.eql(u8, arg, "--dhcp")) {
             dhcp = true;
+        } else if (std.mem.eql(u8, arg, "--yes-really-wipe")) {
+            yes_really_wipe = true;
         } else if (std.mem.startsWith(u8, arg, "--timeout=")) {
             timeout_s = std.fmt.parseInt(u32, arg["--timeout=".len..], 10) catch return .usage_error;
             if (timeout_s == 0) return .usage_error;
@@ -194,6 +229,11 @@ pub fn parseCommand(args: []const []const u8) Parsed {
             .events
         else if (std.mem.eql(u8, words[0], "network"))
             .network
+        else if (std.mem.eql(u8, words[0], "factory-reset"))
+            // Interactive form: the confirm machine-id is prompted for.
+            .factory_reset
+        else if (std.mem.eql(u8, words[0], "time"))
+            .time_status
         else
             return .usage_error,
         2 => if (std.mem.eql(u8, words[0], "system") and std.mem.eql(u8, words[1], "reboot"))
@@ -214,11 +254,18 @@ pub fn parseCommand(args: []const []const u8) Parsed {
             .wifi_forget
         else if (std.mem.eql(u8, words[0], "wan") and std.mem.eql(u8, words[1], "get"))
             .wan_get
-        else
-            // Includes commands missing their positional argument
-            // ("update install", "wifi connect", "wan set",
-            // "ethernet get/set"): usage errors, not partial commands.
-            return .usage_error,
+        else if (std.mem.eql(u8, words[0], "provision") and std.mem.eql(u8, words[1], "status"))
+            .provision_status
+        else if (std.mem.eql(u8, words[0], "factory-reset")) blk: {
+            // Non-interactive form: the machine-id rides as the positional
+            // argument (paired with --yes-really-wipe, enforced below).
+            target = words[1];
+            break :blk .factory_reset;
+        } else
+        // Includes commands missing their positional argument
+        // ("update install", "wifi connect", "wan set",
+        // "ethernet get/set"): usage errors, not partial commands.
+        return .usage_error,
         3 => blk: {
             if (std.mem.eql(u8, words[0], "update") and std.mem.eql(u8, words[1], "install")) {
                 target = words[2];
@@ -240,6 +287,13 @@ pub fn parseCommand(args: []const []const u8) Parsed {
                 target = words[2];
                 break :blk .eth_set;
             }
+            if (std.mem.eql(u8, words[0], "wifi") and std.mem.eql(u8, words[1], "ap")) {
+                if (std.mem.eql(u8, words[2], "show")) break :blk .wifi_ap_show;
+                if (std.mem.eql(u8, words[2], "enable")) break :blk .wifi_ap_enable;
+                if (std.mem.eql(u8, words[2], "disable")) break :blk .wifi_ap_disable;
+                if (std.mem.eql(u8, words[2], "auto")) break :blk .wifi_ap_auto;
+                return .usage_error;
+            }
             return .usage_error;
         },
         else => unreachable,
@@ -251,6 +305,14 @@ pub fn parseCommand(args: []const []const u8) Parsed {
     if (psk != null and action != .wifi_connect) return .usage_error;
     if (timeout_set and action != .wifi_connect) return .usage_error;
     if ((static_spec != null or dhcp) and action != .eth_set) return .usage_error;
+    if (yes_really_wipe and action != .factory_reset) return .usage_error;
+    if (action == .factory_reset) {
+        // The flag and the explicit machine-id come as a PAIR: a bare
+        // --yes-really-wipe (nothing named) and a bare id (no flag) are
+        // both usage errors — a scripted wipe must spell out its target,
+        // and an id alone falls through to the interactive prompt never.
+        if (yes_really_wipe != (target.len != 0)) return .usage_error;
+    }
     if (action == .eth_set) {
         // Exactly one mode: --dhcp XOR --static=..., and the static spec
         // must parse — the API round trip should never see CLI typos.
@@ -269,6 +331,7 @@ pub fn parseCommand(args: []const []const u8) Parsed {
         .static_spec = static_spec,
         .dhcp = dhcp,
         .timeout_s = timeout_s,
+        .yes_really_wipe = yes_really_wipe,
     } };
 }
 
@@ -320,6 +383,11 @@ fn execute(gpa: std.mem.Allocator, inv: Invocation) u8 {
         .wifi_connect => wifiConnect(arena, inv),
         .wan_set => wanSet(arena, inv),
         .eth_get, .eth_set => ethernetCommand(arena, inv),
+        .provision_status => provisionStatus(arena, inv),
+        .wifi_ap_show => wifiApShow(arena, inv),
+        .wifi_ap_enable, .wifi_ap_disable, .wifi_ap_auto => wifiApSet(arena, inv),
+        .factory_reset => factoryReset(arena, inv),
+        .time_status => timeStatus(arena, inv),
         else => simpleRequest(arena, inv),
     };
 }
@@ -350,7 +418,7 @@ fn simpleRequest(arena: std.mem.Allocator, inv: Invocation) u8 {
         .wifi_networks => formatWifiNetworks(arena, resp.body) catch resp.body,
         .wan_get => formatWanPolicy(arena, resp.body) catch resp.body,
         .wifi_forget => "wifi connection forgotten\n",
-        .update_install, .events, .wifi_scan, .wifi_connect, .wan_set, .eth_get, .eth_set => unreachable,
+        .update_install, .events, .wifi_scan, .wifi_connect, .wan_set, .eth_get, .eth_set, .provision_status, .wifi_ap_show, .wifi_ap_enable, .wifi_ap_disable, .wifi_ap_auto, .factory_reset, .time_status => unreachable,
     };
     writeAll(posix.STDOUT_FILENO, out);
     return 0;
@@ -371,7 +439,7 @@ fn requestFor(action: Action) []const u8 {
         .wifi_networks => "GET /api/v1/network/wifi/networks HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
         .wifi_forget => "DELETE /api/v1/network/wifi/connection HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
         .wan_get => "GET /api/v1/network/wan HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-        .update_install, .events, .wifi_scan, .wifi_connect, .wan_set, .eth_get, .eth_set => unreachable,
+        .update_install, .events, .wifi_scan, .wifi_connect, .wan_set, .eth_get, .eth_set, .provision_status, .wifi_ap_show, .wifi_ap_enable, .wifi_ap_disable, .wifi_ap_auto, .factory_reset, .time_status => unreachable,
     };
 }
 
@@ -702,10 +770,209 @@ fn ethernetCommand(arena: std.mem.Allocator, inv: Invocation) u8 {
     return 0;
 }
 
+// ---- provisioning commands (phase 4, docs/07 §4-§6) -------------------------
+
+/// `provision status`: GET /system for the state-machine summary, then
+/// GET /network and GET /network/wifi for the wired/wifi observations the
+/// machine consumes (docs/07 §4). The observation endpoints degrade to
+/// "unavailable" lines instead of failing the command — the state line is
+/// the contract, the observations are context.
+fn provisionStatus(arena: std.mem.Allocator, inv: Invocation) u8 {
+    const raw = exchange(arena, inv.socket_path, requestFor(.show_system)) catch |err|
+        return transportFail(arena, inv.socket_path, err);
+    const resp = parseResponse(raw) catch {
+        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        return 1;
+    };
+    if (resp.status >= 400) {
+        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: provision status failed\n";
+        writeAll(posix.STDERR_FILENO, msg);
+        return 1;
+    }
+    const network_body: ?[]const u8 = blk: {
+        const r = exchange(arena, inv.socket_path, requestFor(.network)) catch break :blk null;
+        const p = parseResponse(r) catch break :blk null;
+        break :blk if (p.status == 200) p.body else null;
+    };
+    const wifi_body: ?[]const u8 = blk: {
+        const req = "GET /api/v1/network/wifi HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        const r = exchange(arena, inv.socket_path, req) catch break :blk null;
+        const p = parseResponse(r) catch break :blk null;
+        break :blk if (p.status == 200) p.body else null;
+    };
+    const out = formatProvisionStatus(arena, resp.body, network_body, wifi_body) catch resp.body;
+    writeAll(posix.STDOUT_FILENO, out);
+    return 0;
+}
+
+/// `wifi ap show`: GET /network/wifi/ap for the live state, plus the
+/// DERIVED per-device PSK computed locally from /etc/machine-id — this
+/// command is the socket-surface-only label story (docs/07 §4): the PSK
+/// is never served by any HTTP endpoint, so reading it requires being on
+/// the device with the group-gated socket AND readable machine-id.
+fn wifiApShow(arena: std.mem.Allocator, inv: Invocation) u8 {
+    const req = "GET /api/v1/network/wifi/ap HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    const raw = exchange(arena, inv.socket_path, req) catch |err|
+        return transportFail(arena, inv.socket_path, err);
+    const resp = parseResponse(raw) catch {
+        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        return 1;
+    };
+    if (resp.status >= 400) {
+        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: wifi ap show failed\n";
+        writeAll(posix.STDERR_FILENO, msg);
+        return 1;
+    }
+    var psk_buf: [16]u8 = undefined;
+    var id_buf: [128]u8 = undefined;
+    const derived_psk: ?[]const u8 = blk: {
+        const text = fsutil.readFileBounded(machine_id_path, &id_buf) catch break :blk null;
+        const trimmed = std.mem.trim(u8, text, " \t\r\n");
+        if (trimmed.len == 0) break :blk null;
+        break :blk wifi.deriveApPsk(&psk_buf, trimmed);
+    };
+    const out = formatWifiApState(arena, resp.body, derived_psk) catch resp.body;
+    writeAll(posix.STDOUT_FILENO, out);
+    return 0;
+}
+
+const machine_id_path = "/etc/machine-id";
+
+/// PUT /api/v1/network/wifi/ap body per mode: the tri-state override
+/// (docs/06 §5.2 WifiApConfig — true forces up, false forces down, null
+/// returns control to the provisioning state machine).
+pub fn apBodyFor(action: Action) []const u8 {
+    return switch (action) {
+        .wifi_ap_enable => "{\"enabled\":true}",
+        .wifi_ap_disable => "{\"enabled\":false}",
+        .wifi_ap_auto => "{\"enabled\":null}",
+        else => unreachable,
+    };
+}
+
+/// `wifi ap enable|disable|auto`: PUT the override, print the applied
+/// state (no PSK line — only `show` derives it).
+fn wifiApSet(arena: std.mem.Allocator, inv: Invocation) u8 {
+    const body = apBodyFor(inv.action);
+    const req = std.fmt.allocPrint(
+        arena,
+        "PUT /api/v1/network/wifi/ap HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}",
+        .{ body.len, body },
+    ) catch return oom();
+    const raw = exchange(arena, inv.socket_path, req) catch |err|
+        return transportFail(arena, inv.socket_path, err);
+    const resp = parseResponse(raw) catch {
+        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        return 1;
+    };
+    if (resp.status >= 400) {
+        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: wifi ap request failed\n";
+        writeAll(posix.STDERR_FILENO, msg);
+        return 1;
+    }
+    writeAll(posix.STDOUT_FILENO, formatWifiApState(arena, resp.body, null) catch resp.body);
+    return 0;
+}
+
+/// `factory-reset`: confirm-with-serial (docs/06 §5.1). Interactive form
+/// fetches this device's machine-id, shows it, and requires it typed
+/// back; --yes-really-wipe takes it as the positional argument instead.
+/// Either way the API re-verifies — the CLI never sends a confirm it
+/// invented.
+fn factoryReset(arena: std.mem.Allocator, inv: Invocation) u8 {
+    const confirm: []const u8 = blk: {
+        if (inv.yes_really_wipe) break :blk inv.target;
+        const raw = exchange(arena, inv.socket_path, requestFor(.show_system)) catch |err|
+            return transportFail(arena, inv.socket_path, err);
+        const resp = parseResponse(raw) catch {
+            writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+            return 1;
+        };
+        if (resp.status >= 400) {
+            const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: cannot fetch the machine-id\n";
+            writeAll(posix.STDERR_FILENO, msg);
+            return 1;
+        }
+        const mid = parseMachineId(arena, resp.body) catch {
+            writeAll(posix.STDERR_FILENO, "astroctl: system document without a machine_id\n");
+            return 1;
+        };
+        const prompt = std.fmt.allocPrint(arena,
+            \\factory reset WIPES all device data (/data: config, keys, logs,
+            \\wifi credentials, API token) and reboots. Firmware slots survive.
+            \\device machine-id: {s}
+            \\type the machine-id to confirm:
+        ++ " ", .{mid}) catch return oom();
+        writeAll(posix.STDOUT_FILENO, prompt);
+        const line = readLineStdin(arena) catch |err| switch (err) {
+            error.EmptyLine => {
+                writeAll(posix.STDERR_FILENO, "astroctl: aborted (nothing entered)\n");
+                return 2;
+            },
+            error.InputOutput => {
+                writeAll(posix.STDERR_FILENO, "astroctl: cannot read the confirmation from stdin\n");
+                return 1;
+            },
+            error.OutOfMemory => return oom(),
+        };
+        break :blk line;
+    };
+    const body = std.json.Stringify.valueAlloc(arena, .{ .confirm = confirm }, .{}) catch return oom();
+    const req = std.fmt.allocPrint(
+        arena,
+        "POST /api/v1/system/factory-reset HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}",
+        .{ body.len, body },
+    ) catch return oom();
+    const raw = exchange(arena, inv.socket_path, req) catch |err|
+        return transportFail(arena, inv.socket_path, err);
+    const resp = parseResponse(raw) catch {
+        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        return 1;
+    };
+    if (resp.status >= 400) {
+        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: factory reset refused\n";
+        writeAll(posix.STDERR_FILENO, msg);
+        return 1;
+    }
+    writeAll(posix.STDOUT_FILENO, "factory reset accepted; the device reboots and wipes /data now\n");
+    return 0;
+}
+
+/// `time`: the daemon's synced view (GET /system time_synced — adjtimex
+/// STA_UNSYNC via astrod, docs/07 §6) plus the LOCAL floor context read
+/// the same way astrod reads it (build-epoch + last-known-time files).
+fn timeStatus(arena: std.mem.Allocator, inv: Invocation) u8 {
+    const raw = exchange(arena, inv.socket_path, requestFor(.show_system)) catch |err|
+        return transportFail(arena, inv.socket_path, err);
+    const resp = parseResponse(raw) catch {
+        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        return 1;
+    };
+    if (resp.status >= 400) {
+        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: time status failed\n";
+        writeAll(posix.STDERR_FILENO, msg);
+        return 1;
+    }
+    const floor = timekeep.floorEpoch(timekeep.build_epoch_path, timekeep.last_known_path);
+    const now = timekeep.nowRealtime();
+    const out = formatTimeStatus(arena, resp.body, floor, now) catch resp.body;
+    writeAll(posix.STDOUT_FILENO, out);
+    return 0;
+}
+
 /// Read the WPA passphrase from stdin (first line, or everything up to
 /// EOF): `wifi connect` without --psk= keeps the secret out of argv and
 /// thus out of /proc/*/cmdline.
 fn readPskStdin(arena: std.mem.Allocator) error{ EmptyPassphrase, InputOutput, OutOfMemory }![]const u8 {
+    return readLineStdin(arena) catch |err| switch (err) {
+        error.EmptyLine => error.EmptyPassphrase,
+        else => |e| e,
+    };
+}
+
+/// First stdin line (or everything up to EOF), CR/LF-trimmed; also the
+/// factory-reset confirm reader.
+fn readLineStdin(arena: std.mem.Allocator) error{ EmptyLine, InputOutput, OutOfMemory }![]const u8 {
     var buf: [256]u8 = undefined;
     var data: std.ArrayList(u8) = .empty;
     while (data.items.len < 256) {
@@ -717,7 +984,7 @@ fn readPskStdin(arena: std.mem.Allocator) error{ EmptyPassphrase, InputOutput, O
     var s: []const u8 = data.items;
     if (std.mem.indexOfScalar(u8, s, '\n')) |i| s = s[0..i];
     s = std.mem.trimEnd(u8, s, "\r");
-    if (s.len == 0) return error.EmptyPassphrase;
+    if (s.len == 0) return error.EmptyLine;
     return s;
 }
 
@@ -1307,6 +1574,135 @@ pub fn formatEthernetConfig(allocator: std.mem.Allocator, body: []const u8) ![]u
         try out.appendSlice(allocator, line);
     }
     return out.toOwnedSlice(allocator);
+}
+
+// ---- provisioning parsing and rendering (pure, tested) ----------------------
+
+/// machine_id out of a GET /system document (spec SystemInfo; absent on
+/// the redacted AP variant — but this CLI only speaks the unix socket).
+/// Duped into `allocator` — pass an arena.
+pub fn parseMachineId(allocator: std.mem.Allocator, body: []const u8) ![]const u8 {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.BadResponse;
+    const mid = parsed.value.object.get("machine_id") orelse return error.BadResponse;
+    if (mid != .string or mid.string.len == 0) return error.BadResponse;
+    return try allocator.dupe(u8, mid.string);
+}
+
+/// `provision status` rendering: the state line from GET /system, one
+/// wired line per ethernet interface from GET /network, the wifi summary
+/// from GET /network/wifi. A null observation body renders "unavailable"
+/// (endpoint 501/absent) — the state line alone is still truthful.
+/// Pass an arena — intermediate strings are not individually freed.
+pub fn formatProvisionStatus(allocator: std.mem.Allocator, system_body: []const u8, network_body: ?[]const u8, wifi_body: ?[]const u8) ![]u8 {
+    var sys_parsed = try std.json.parseFromSlice(std.json.Value, allocator, system_body, .{});
+    defer sys_parsed.deinit();
+    if (sys_parsed.value != .object) return error.BadResponse;
+    const state = jsonString(sys_parsed.value.object.get("provisioning")) orelse return error.BadResponse;
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, try std.fmt.allocPrint(allocator, "state    {s}\n", .{state}));
+
+    if (network_body) |nb| blk: {
+        var net_parsed = std.json.parseFromSlice(std.json.Value, allocator, nb, .{}) catch {
+            try out.appendSlice(allocator, "wired    unavailable\n");
+            break :blk;
+        };
+        defer net_parsed.deinit();
+        const ifs_v = if (net_parsed.value == .object) net_parsed.value.object.get("interfaces") else null;
+        if (ifs_v == null or ifs_v.? != .array) {
+            try out.appendSlice(allocator, "wired    unavailable\n");
+            break :blk;
+        }
+        var any_eth = false;
+        for (ifs_v.?.array.items) |iface_v| {
+            if (iface_v != .object) continue;
+            const io = iface_v.object;
+            const t = jsonString(io.get("type")) orelse continue;
+            if (!std.mem.eql(u8, t, "ethernet")) continue;
+            any_eth = true;
+            const name = jsonString(io.get("name")) orelse "-";
+            const carrier = yesNo(io.get("carrier"));
+            var addr: []const u8 = "no address";
+            if (io.get("addresses")) |av| {
+                if (av == .array and av.array.items.len > 0 and av.array.items[0] == .string)
+                    addr = av.array.items[0].string;
+            }
+            try out.appendSlice(allocator, try std.fmt.allocPrint(
+                allocator,
+                "wired    {s}: carrier {s}, {s}\n",
+                .{ name, carrier, addr },
+            ));
+        }
+        if (!any_eth) try out.appendSlice(allocator, "wired    none\n");
+    } else {
+        try out.appendSlice(allocator, "wired    unavailable\n");
+    }
+
+    if (wifi_body) |wb| blk: {
+        var wifi_parsed = std.json.parseFromSlice(std.json.Value, allocator, wb, .{}) catch {
+            try out.appendSlice(allocator, "wifi     unavailable\n");
+            break :blk;
+        };
+        defer wifi_parsed.deinit();
+        if (wifi_parsed.value != .object) {
+            try out.appendSlice(allocator, "wifi     unavailable\n");
+            break :blk;
+        }
+        const wo = wifi_parsed.value.object;
+        const wstate = jsonString(wo.get("state")) orelse "unavailable";
+        const mode = jsonString(wo.get("mode")) orelse "-";
+        if (std.mem.eql(u8, wstate, "connected")) {
+            const ssid = jsonString(wo.get("connected_ssid")) orelse "-";
+            try out.appendSlice(allocator, try std.fmt.allocPrint(allocator, "wifi     connected to {s}\n", .{ssid}));
+        } else if (std.mem.eql(u8, mode, "ap")) {
+            try out.appendSlice(allocator, "wifi     ap (provisioning portal up)\n");
+        } else {
+            try out.appendSlice(allocator, try std.fmt.allocPrint(allocator, "wifi     {s}\n", .{wstate}));
+        }
+    } else {
+        try out.appendSlice(allocator, "wifi     unavailable\n");
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+/// WifiApState rendering (spec: enabled/ssid/subnet). `derived_psk` is
+/// the locally derived label passphrase — appended only by `wifi ap
+/// show`, the socket-only PSK surface; null (enable/disable/auto, or an
+/// unreadable machine-id) renders no psk line at all.
+pub fn formatWifiApState(allocator: std.mem.Allocator, body: []const u8, derived_psk: ?[]const u8) ![]u8 {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.BadResponse;
+    const obj = parsed.value.object;
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, try std.fmt.allocPrint(allocator, "enabled  {s}\n", .{yesNo(obj.get("enabled"))}));
+    try out.appendSlice(allocator, try std.fmt.allocPrint(allocator, "ssid     {s}\n", .{jsonString(obj.get("ssid")) orelse "-"}));
+    try out.appendSlice(allocator, try std.fmt.allocPrint(allocator, "subnet   {s}\n", .{jsonString(obj.get("subnet")) orelse "-"}));
+    if (derived_psk) |psk| {
+        try out.appendSlice(allocator, try std.fmt.allocPrint(allocator, "psk      {s}\n", .{psk}));
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// `time` rendering: the daemon's synced flag plus the local floor
+/// context. floor_ok makes the docs/07 §6 gate condition (synced OR past
+/// the floor) readable at a glance.
+pub fn formatTimeStatus(allocator: std.mem.Allocator, system_body: []const u8, floor: i64, now: i64) ![]u8 {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, system_body, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.BadResponse;
+    const synced = yesNo(parsed.value.object.get("time_synced"));
+    return std.fmt.allocPrint(
+        allocator,
+        "synced   {s}\nfloor    {d}\nnow      {d}\nfloor_ok {s}\n",
+        .{ synced, floor, now, if (now >= floor) "yes" else "no" },
+    );
 }
 
 /// Incremental SSE frame renderer: feed() consumes raw stream bytes and,
@@ -1901,4 +2297,169 @@ test "SseRenderer: frames across chunk boundaries, keepalives, overflow" {
     out.clearRetainingCapacity();
     try renderer.feed(arena, "id: 9\r\ndata: {}\r\n\r\n", &out);
     try std.testing.expectEqualStrings("[9] message {}\n", out.items);
+}
+
+test "parseCommand: provisioning command group (phase 4)" {
+    const ps = parseCommand(&.{ "provision", "status" });
+    try std.testing.expectEqual(Action.provision_status, ps.invoke.action);
+
+    const show = parseCommand(&.{ "wifi", "ap", "show" });
+    try std.testing.expectEqual(Action.wifi_ap_show, show.invoke.action);
+    const en = parseCommand(&.{ "wifi", "ap", "enable" });
+    try std.testing.expectEqual(Action.wifi_ap_enable, en.invoke.action);
+    const dis = parseCommand(&.{ "wifi", "ap", "disable" });
+    try std.testing.expectEqual(Action.wifi_ap_disable, dis.invoke.action);
+    const auto = parseCommand(&.{ "wifi", "ap", "auto" });
+    try std.testing.expectEqual(Action.wifi_ap_auto, auto.invoke.action);
+
+    const t = parseCommand(&.{"time"});
+    try std.testing.expectEqual(Action.time_status, t.invoke.action);
+
+    // Interactive factory-reset: bare command, no id, no flag.
+    const interactive = parseCommand(&.{"factory-reset"});
+    try std.testing.expectEqual(Action.factory_reset, interactive.invoke.action);
+    try std.testing.expect(!interactive.invoke.yes_really_wipe);
+    try std.testing.expectEqualStrings("", interactive.invoke.target);
+
+    // Scripted form: flag + explicit machine-id, free flag order.
+    const scripted = parseCommand(&.{ "factory-reset", "--yes-really-wipe", "0a1b2c3d4e5f" });
+    try std.testing.expectEqual(Action.factory_reset, scripted.invoke.action);
+    try std.testing.expect(scripted.invoke.yes_really_wipe);
+    try std.testing.expectEqualStrings("0a1b2c3d4e5f", scripted.invoke.target);
+}
+
+test "parseCommand: provisioning group usage errors" {
+    // The flag and the explicit id are a pair: neither alone is valid.
+    try std.testing.expect(parseCommand(&.{ "factory-reset", "--yes-really-wipe" }) == .usage_error);
+    try std.testing.expect(parseCommand(&.{ "factory-reset", "0a1b2c3d4e5f" }) == .usage_error);
+    // The flag is factory-reset-only.
+    try std.testing.expect(parseCommand(&.{ "system", "--yes-really-wipe" }) == .usage_error);
+    try std.testing.expect(parseCommand(&.{ "wifi", "ap", "enable", "--yes-really-wipe" }) == .usage_error);
+    // Unknown ap subcommand / missing subcommand.
+    try std.testing.expect(parseCommand(&.{ "wifi", "ap", "frobnicate" }) == .usage_error);
+    try std.testing.expect(parseCommand(&.{ "wifi", "ap" }) == .usage_error);
+    try std.testing.expect(parseCommand(&.{"provision"}) == .usage_error);
+    try std.testing.expect(parseCommand(&.{ "provision", "frobnicate" }) == .usage_error);
+    // Misplaced flags on the new commands.
+    try std.testing.expect(parseCommand(&.{ "time", "--follow" }) == .usage_error);
+    try std.testing.expect(parseCommand(&.{ "provision", "status", "--force" }) == .usage_error);
+
+    try std.testing.expectEqual(@as(u8, 0), evaluate(&.{ "wifi", "ap", "show" }));
+    try std.testing.expectEqual(@as(u8, 0), evaluate(&.{ "factory-reset", "--yes-really-wipe", "x" }));
+    try std.testing.expectEqual(@as(u8, 2), evaluate(&.{ "factory-reset", "x" }));
+}
+
+test "apBodyFor emits the tri-state override bodies" {
+    try std.testing.expectEqualStrings("{\"enabled\":true}", apBodyFor(.wifi_ap_enable));
+    try std.testing.expectEqualStrings("{\"enabled\":false}", apBodyFor(.wifi_ap_disable));
+    try std.testing.expectEqualStrings("{\"enabled\":null}", apBodyFor(.wifi_ap_auto));
+}
+
+test "parseMachineId extracts the id, rejects redacted/garbled documents" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const mid = try parseMachineId(arena, "{\"board\":\"x\",\"machine_id\":\"0a1b2c3d4e5f6789\"}");
+    try std.testing.expectEqualStrings("0a1b2c3d4e5f6789", mid);
+
+    // The redacted AP-surface document has no machine_id — must error,
+    // never silently confirm with garbage.
+    try std.testing.expectError(error.BadResponse, parseMachineId(arena, "{\"board\":\"x\"}"));
+    try std.testing.expectError(error.BadResponse, parseMachineId(arena, "{\"machine_id\":\"\"}"));
+    try std.testing.expectError(error.BadResponse, parseMachineId(arena, "[]"));
+}
+
+test "formatProvisionStatus renders state + wired + wifi observations" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const sys = "{\"provisioning\":\"provisioning\",\"machine_id\":\"abc\"}";
+    const net =
+        \\{"interfaces":[
+        \\ {"name":"eth0","type":"ethernet","up":true,"carrier":true,"addresses":["10.0.2.15/24"]},
+        \\ {"name":"wlan0","type":"wifi","up":true,"carrier":false,"addresses":[]}],
+        \\ "wan":{"order":["ethernet","wifi"]}}
+    ;
+    const wifi_disc = "{\"radio_present\":true,\"powered\":true,\"mode\":\"station\",\"state\":\"disconnected\",\"connected_ssid\":null,\"rssi_dbm\":null}";
+    const out = try formatProvisionStatus(arena, sys, net, wifi_disc);
+    const expected =
+        "state    provisioning\n" ++
+        "wired    eth0: carrier yes, 10.0.2.15/24\n" ++
+        "wifi     disconnected\n";
+    try std.testing.expectEqualStrings(expected, out);
+
+    // Connected wifi names the ssid; AP mode is called out as the portal.
+    const wifi_conn = "{\"mode\":\"station\",\"state\":\"connected\",\"connected_ssid\":\"cafe-24\"}";
+    const out2 = try formatProvisionStatus(arena, "{\"provisioning\":\"provisioned\"}", net, wifi_conn);
+    try std.testing.expect(std.mem.indexOf(u8, out2, "wifi     connected to cafe-24\n") != null);
+    const wifi_ap = "{\"mode\":\"ap\",\"state\":\"unavailable\",\"connected_ssid\":null}";
+    const out3 = try formatProvisionStatus(arena, sys, net, wifi_ap);
+    try std.testing.expect(std.mem.indexOf(u8, out3, "wifi     ap (provisioning portal up)\n") != null);
+
+    // Null observation bodies degrade, never fail the command.
+    const degraded = try formatProvisionStatus(arena, sys, null, null);
+    const expected_degraded =
+        "state    provisioning\n" ++
+        "wired    unavailable\n" ++
+        "wifi     unavailable\n";
+    try std.testing.expectEqualStrings(expected_degraded, degraded);
+
+    // A system document without the provisioning field is a bad response.
+    try std.testing.expectError(error.BadResponse, formatProvisionStatus(arena, "{}", null, null));
+}
+
+test "formatWifiApState renders the state and only show appends the psk" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const body = "{\"enabled\":true,\"ssid\":\"astro-4e5f67\",\"subnet\":\"192.168.223.0/24\"}";
+    const with_psk = try formatWifiApState(arena, body, "0123456789abcdef");
+    const expected =
+        "enabled  yes\n" ++
+        "ssid     astro-4e5f67\n" ++
+        "subnet   192.168.223.0/24\n" ++
+        "psk      0123456789abcdef\n";
+    try std.testing.expectEqualStrings(expected, with_psk);
+
+    const without = try formatWifiApState(arena, "{\"enabled\":false,\"ssid\":\"astro-4e5f67\",\"subnet\":\"192.168.223.0/24\"}", null);
+    try std.testing.expect(std.mem.indexOf(u8, without, "psk") == null);
+    try std.testing.expect(std.mem.indexOf(u8, without, "enabled  no\n") != null);
+
+    try std.testing.expectError(error.BadResponse, formatWifiApState(arena, "[]", null));
+}
+
+test "wifi ap show derivation matches the daemon's (one identity everywhere)" {
+    // The CLI derives the SSID/PSK with the same wifi.zig functions the
+    // daemon uses, so the label story can never drift from the AP.
+    var ssid_buf: [32]u8 = undefined;
+    var psk_buf: [16]u8 = undefined;
+    const mid = "8007a5c25ff34ce3a1a9e64e5f670000\n";
+    const ssid = wifi.deriveApSsid(&ssid_buf, mid);
+    try std.testing.expectEqualStrings("astro-670000", ssid);
+    const psk = wifi.deriveApPsk(&psk_buf, mid);
+    try std.testing.expectEqual(@as(usize, 16), psk.len);
+    for (psk) |c| try std.testing.expect(std.ascii.isHex(c) and !std.ascii.isUpper(c));
+}
+
+test "formatTimeStatus renders synced, floor, now, and the gate verdict" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const synced = try formatTimeStatus(arena, "{\"time_synced\":true}", 1700000000, 1700000100);
+    const expected =
+        "synced   yes\n" ++
+        "floor    1700000000\n" ++
+        "now      1700000100\n" ++
+        "floor_ok yes\n";
+    try std.testing.expectEqualStrings(expected, synced);
+
+    const behind = try formatTimeStatus(arena, "{\"time_synced\":false}", 1700000000, 12345);
+    try std.testing.expect(std.mem.indexOf(u8, behind, "synced   no\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, behind, "floor_ok no\n") != null);
+
+    try std.testing.expectError(error.BadResponse, formatTimeStatus(arena, "[]", 0, 0));
 }

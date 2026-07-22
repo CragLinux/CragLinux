@@ -36,6 +36,16 @@ enable_services() {
     # firstboot: once per /data lifetime (docs/07 §3; no-op on direct boots)
     ln -sf "../firstboot" "${boot_d}/firstboot"
     log_info "Enabled platform service: firstboot"
+    # chronyd: NTP client (docs/07 §6, M3 phase 4) — resolves to the
+    # /etc/dinit.d shadow (minimal /etc/astro/chrony.conf). The packaged
+    # 'chrony' waitsync boot gate ships enabled in chrony-dinit's own
+    # boot.d but is neutralized by its /etc/dinit.d shadow (no 180 s
+    # offline boot stall; see that file). astro-portal-redirect-{start,
+    # stop} and astro-factory-reset are deliberately NOT enabled here:
+    # they are on-demand root oneshots astrod dispatches over the dinit
+    # control socket (docs/02 §7).
+    ln -sf "../chronyd" "${boot_d}/chronyd"
+    log_info "Enabled platform service: chronyd"
 
     # Enable services
     if [ -n "${SERVICES_ENABLE:-}" ]; then

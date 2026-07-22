@@ -104,6 +104,31 @@ if ! mountpoint -q /data; then
     mount -t ext4 -o noatime "$data_dev" /data || exit 1
 fi
 
+# --- factory reset executor (docs/07 §5, M3 phase 4) ---------------------
+# The flag is left by the astro-factory-reset oneshot (API path: astrod
+# verifies {"confirm": "<machine-id>"} then dispatches it, syncs,
+# reboots) or by a board's reset-button hook. Running HERE — right after
+# the mount, before any other service reads /data — is the docs/07 §5
+# "early dinit oneshot, before anything reads /data" requirement: no
+# process on this boot ever observes a half-wiped tree. Fast path only
+# (rm -rf of the contents, lost+found kept); the blkdiscard + re-mkfs
+# secure path is a DEFERRED per-product option (docs/07 §5) — recorded,
+# not implemented. Boot then continues on the fresh /data: the skeleton
+# below is recreated and firstboot reruns by construction (its
+# done-stamp lived on /data). Slots are untouched.
+if [ -e /data/.astro/factory-reset-request ]; then
+    # To the console: rare + significant (same convention as grow_data).
+    echo "data-mount: factory-reset flag found, wiping /data" > /dev/console 2>/dev/null || \
+        echo "data-mount: factory-reset flag found, wiping /data"
+    for _entry in /data/* /data/.[!.]* /data/..?*; do
+        # Unmatched globs stay literal; -L catches dangling symlinks.
+        [ -e "$_entry" ] || [ -L "$_entry" ] || continue
+        case "$_entry" in /data/lost+found) continue ;; esac
+        rm -rf "$_entry"
+    done
+    sync
+fi
+
 # Ensure the AD-005 §4.1 skeleton exists (survives a factory-reset wipe)
 mkdir -p /data/config \
          /data/overlay/etc /data/overlay/.etc-work \

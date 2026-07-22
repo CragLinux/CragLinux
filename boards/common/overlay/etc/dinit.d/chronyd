@@ -1,0 +1,25 @@
+# Astro SHADOW of the packaged chronyd service (docs/07 §6, M3 phase 4;
+# /etc/dinit.d wins over /usr/lib/dinit.d — same mechanism as the iwd
+# and rauc shadows). Diffs vs the chrony-dinit file
+# (cports/main/chrony/files/chronyd), re-diff on chrony template bumps:
+#
+#   -f /etc/astro/chrony.conf  NEW: the minimal Astro config baked by
+#                       the rootfs stage (pool + makestep only; no
+#                       driftfile — /var/lib is on the RO rootfs and
+#                       drift tracking has no /data home yet). The
+#                       packaged /etc/chrony.conf example stays where
+#                       apk put it but is not read.
+#   logfile             NEW: /var/log is the /data-backed bind mount.
+#
+# Everything else (process type, -n foreground, -u _chrony privilege
+# drop, smooth-recovery, network.target/local.target deps) is upstream.
+# Enabled platform-wide by hooks/20-enable-services.sh (chronyd by
+# name → this shadow). Sync status surfaces as time.synced in
+# GET /system (astrod reads adjtimex STA_UNSYNC — no chronyc calls).
+
+type = process
+command = /usr/bin/chronyd -n -u _chrony -f /etc/astro/chrony.conf
+smooth-recovery = true
+logfile = /var/log/chronyd.log
+depends-on: network.target
+depends-on: local.target

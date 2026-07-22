@@ -1334,3 +1334,325 @@ Both are UPSTREAMING.md drafts now.
   the new owner, and InterfacesAdded re-fills the mirror. No
   NameOwnerChanged re-sync was needed; if a future board hot-swaps
   radios, revisit.
+
+## 19. M3 phase 4 spine: provisioning state machine, surfaces, time (2026-07-20)
+
+The phase-4 skeleton (docs/07 §3–§6): every typed interface the fill
+stage implements against, plus the boards/build plumbing, landed and
+unit-verified (container 190 pass / 4 skip; live surface smoke green).
+
+### What landed
+
+- **src/provision.zig** — the docs/07 §4 state machine as a PURE
+  transition function `step(state, ap_active, event, obs) → Decision`
+  plus a `Machine` wrapper executing effect callbacks
+  (enterAp/leaveAp/persistState/announceMdns). Full transition-table
+  tests incl. the wired path, api.wired_provisions, the AP
+  wrong-password loop, and factory-reset re-entry. DEVIATION recorded:
+  "connectivity verified" v1 = address + default route (gateway ping
+  deferred).
+- **Surface awareness** — auth.Surface {unix, localhost, lan, ap} tags
+  every listener; auth.authorize() per surface; router.Context.surface;
+  the AP surface serves ONLY the AD-014 unauthenticated subset
+  (router.ap_allowed_routes; 403 urn:astro:problem:forbidden otherwise,
+  even with a valid token) plus router.portal_routes (portal page +
+  captive probes, AP-only, deliberately OUTSIDE the AD-013 gate — a
+  test pins that they never enter /api/). GET /system on the AP surface
+  is redacted (system.RedactedSystemInfo: machine_id omitted; a
+  field-parity test forces a redaction decision for every new field).
+- **src/timekeep.zig (fully implemented)** — build-epoch/last-known
+  floor (applyFloor via clock_settime; EPERM DEVIATION recorded: the
+  capless daemon can only gate, firstboot roots the boot-time floor),
+  hourly persist Keeper + persist before deferred shutdowns, adjtimex
+  STA_UNSYNC → time.synced in GET /system (SystemInfo + spec), and the
+  docs/07 §6 https gate wired into POST /update URL installs
+  (503 urn:astro:problem:clock-not-set).
+- **Stubs with tested interfaces** — src/mdns.zig (announce-only
+  responder; instanceLabel/TXT/name-encoding pure + tested, socket loop
+  NotImplemented; no probing/conflict resolution v1 — machine-id-derived
+  names), src/portal.zig (embedded portal page + probe 302s are REAL and
+  routed; DNS catch-all on :5354 stubbed), wifi.zig AP extension points
+  (apStart/apStop signatures; deriveApSsid/deriveApPsk
+  (hmac-sha256(key=machine-id, msg="astro-ap-psk-v1")[0..16] hex) and
+  renderApProfile implemented + tested against iwd-3.12 src/ap.c
+  mechanics: StartProfile loads STATE_DIR/ap/<ssid>.ap with
+  [Security].Passphrase + the [IPv4] pool block; the [IPv4] block needs
+  global EnableNetworkConfiguration=true — the fill must flip it for the
+  AP window).
+- **Routes/spec** — GET,PUT /network/wifi/ap + POST /system/factory-reset
+  routed as 501 stubs and documented (schemas WifiApState/WifiApConfig/
+  FactoryResetRequest, Forbidden component, AP-surface story in
+  info.description).
+- **Boards/build** — nftables + chrony(+-dinit) into common
+  packages.list (pin verified; nftables-dinit deliberately NOT
+  installed); portal-redirect-{up,down}.sh + astro-portal-redirect-
+  {start,stop} + astro-factory-reset dinit oneshots (root, dispatched on
+  demand via the dinit client — not in boot.d); data-mount.sh
+  factory-reset executor (flag → rm -rf of /data contents except
+  lost+found, before anything reads /data; blkdiscard secure path
+  deferred); firstboot applies the time floor (root); rootfs stage bakes
+  /etc/astro/build-epoch (SOURCE_DATE_EPOCH or build time) +
+  /etc/astro/chrony.conf (pool + makestep); chronyd enabled platform-
+  wide via an /etc/dinit.d shadow (-f /etc/astro/chrony.conf);
+  mac80211_hwsim.radios=3 on all three qemu board cmdlines (module is
+  =y, so the param must ride the cmdline).
+
+### Traps found
+
+- **CONFIG_NFT_NAT was silently missing from every built kernel.** The
+  phase-3 fragment set NFT_NAT=y without NF_TABLES_IPV4; kconfig dropped
+  it silently (depends on NF_TABLES_IPV4 || NF_TABLES_IPV6 —
+  net/netfilter/Kconfig:565), verified in the built .configs. The
+  fragment now sets NF_TABLES_IPV4=y + NFT_REDIR=y with every symbol
+  cited against the actual portal ruleset. Kernel fragments need
+  .config audits, not just fragment reviews.
+- **chrony-dinit ships an ENABLED `chrony` waitsync gate** (chronyc
+  waitsync 180 …) before time-sync.target — up to 180 s of boot stall
+  per boot on an offline appliance. Neutralized by an /etc/dinit.d name
+  shadow (/usr/bin/true); time-sync.target is reached immediately and
+  consumers use astrod's time.synced instead.
+- **Zig 0.16: std.Thread.sleep is gone** (Io rework) — sync.sleepMs
+  (pthread-side nanosleep) is the house sleep; timekeep uses it.
+- **dinit scripted oneshots stay "started"** after success: astrod
+  restarting astro-portal-redirect-start on a second AP cycle is a no-op
+  until the service is stopped — the fill needs a small STOPSERVICE
+  addition to dinit.zig (recorded in the service files).
+
+### Verified
+
+- Container `zig build test`: 190 pass / 4 skip (38 new); zig fmt
+  clean; shellcheck clean on all touched/new shell.
+- Live container smoke (astrod --listen + new test-only --ap-listen):
+  unix/localhost behavior unchanged (401/200, machine_id present,
+  time_synced new), phase-4 routes 501 on authenticated surfaces,
+  portal page + 302 probes on the AP surface only (404 elsewhere),
+  AP-surface GET /system redacted, subset members dispatched, and
+  everything else 403 forbidden even with a valid bearer token.
+- Image rebuild/boot-smoke/test-api deliberately NOT run here: the
+  spine changes packages + kernel config, so the fleet gates run with
+  the phase-4 fill's image rebuild (next stage owns it).
+
+## 20. M3 phase 4 complete: provisioning, AP portal, factory reset, time (2026-07-20)
+
+The phase-4 fill is live end to end: mDNS announce, the wired path, the
+AP captive portal with the single-radio flip, factory reset, and the
+chrony/build-epoch time story — all green on the qemu fleet (details
+under Verified; every number below is from the final runs).
+
+### What landed (on top of the §19 spine)
+
+- **dinit.zig** — STOPSERVICE (opcode 4, control-cmds.h) with gentle
+  flags, and restart via dinitctl's own STOPSERVICE|restart|pre-ack
+  flag combination (2|4|128, PREACK reply consumed; NAK maps to
+  NotStarted and restartServiceByName degrades to a plain start).
+  Re-arms the portal-redirect oneshots between AP cycles and restarts
+  iwd for the netconfig window.
+- **main.zig wiring** — constructs the phase-4 trio in serve():
+  mdns.Responder (gated on api.mdns), portal.ApController (hooks into
+  a dynamically bound AP listener: the accept loop owns the socket,
+  the controller only flips an atomic + eventfd; IP_FREEBIND so
+  192.168.223.1 binds before iwd's netconfig assigns it), and
+  provision.Manager (ap_enter/ap_leave/ap_is_active wired to the
+  controller). New DeferredActions: factory_reset (dispatch the root
+  oneshot with the 202 already on the wire) and wifi_flip (the
+  synchronous AP→station flip AFTER the 202 — the flip tears down the
+  very listener the response leaves on).
+- **Handlers filled** — GET/PUT /network/wifi/ap (WifiApState from the
+  scoped wifi.apActive() + machine-id-derived ssid; PUT persists the
+  tri-state override, strict body, pokes the machine) and POST
+  /system/factory-reset (confirm-with-machine-id, probes dinit AND
+  loads the astro-factory-reset service before answering 202).
+  netconf.putWifiConnection: on the AP surface with the AP up it
+  persists only (durable before the 202) and defers the flip;
+  elsewhere it arms the provisioning connect-attempt window.
+- **provision.zig** — startup edge moved onto the reconcile thread
+  (AP bring-up at boot can take tens of seconds and must never delay
+  listener bind/readiness); Observation gained ap_forced
+  (enabled_override=true wants the AP even with ethernet carrier —
+  the on-demand story and the only way to raise it on the slirp rig)
+  and connect_in_flight (freezes both AP edges so observes racing the
+  flip cannot bounce the radio); a leave edge tears down a
+  no-longer-wanted AP (force-down, carrier appearing); flipConnect()
+  is the synchronous flip executor; ap_is_active re-syncs the
+  machine's optimistic ap_active with the controller so a failed
+  enterAp retries instead of wedging.
+- **system.zig/spec** — last_error (?string) on SystemInfo AND the
+  redacted AP view (parity + conformance gates updated), sourced from
+  the ApController through a fn-pointer hook (static strings; atomic
+  tag mirror for cross-thread reads).
+- **store.zig** — setApEnabledOverride (atomic persist).
+- **Overlay** — iwd.env grows CONFIGURATION_DIRECTORY=
+  /run/astro/iwd:/etc/iwd (first main.conf wins, iwd-3.12
+  main.c:548-567; no override present = boot behavior unchanged);
+  tmpfiles rule `d /run/astro/iwd 0755 astrod astrod` (the AP-window
+  netconfig override dir — on /run so a crash can never make the
+  split-brain config permanent).
+- **astro-cports/main/chrony** — NEW shadow: the pinned chrony pulls
+  gnutls-devel, and full gnutls cannot be cross-built (gnutls libdane
+  → unbound → protobuf-c → protobuf, and protobuf is marked broken
+  for cross in the pin). The shadow builds --disable-nts
+  --without-gnutls (sechash/CMAC stay on nettle; Astro's baked config
+  is pool+makestep, NTS was never in the docs/07 §6 story), pkgrel
+  bumped (openssh-shadow rationale). Without it no image with chrony
+  in packages.list could build at all.
+
+### Traps found (all live, all fixed in the owning module)
+
+- **events.zig @min type-narrowing overflow (CRASH).** `@min(timeout_ms,
+  ms_per_day)` narrows the result to u27, so
+  `(wait_ms % 1000) * ns_per_ms` overflowed for any timeout with a
+  sub-second remainder ≥ 135 ms — provision.Manager's subscriber
+  cadence next(500) aborted the daemon-side thread every time. Fixed
+  with a load-bearing `: u64` annotation + regression test. Zig's @min
+  result-range inference makes innocent-looking arithmetic overflow;
+  annotate when mixing with comptime bounds.
+- **D-Bus policy denied AccessPoint.StartProfile (docs/09 §5
+  default-deny doing its job).** The astrod user policy whitelists
+  interfaces; phase 4 added AccessPoint calls without adding the
+  grant. Found live in provisioning-e2e as
+  org.freedesktop.DBus.Error.AccessDenied — and the failure shape was
+  nasty: Device.Mode="ap" rides org.freedesktop.DBus.Properties
+  (already allowed), so the radio flipped into ap mode with no AP
+  running. astrod.conf now grants net.connman.iwd.AccessPoint.
+  Interface-scoped D-Bus policies must be re-audited whenever a new
+  interface is called.
+- **wifi.apActive() counted ANY AP in the iwd tree.** The hwsim rig
+  runs its upstream test AP on wlan1 through the same iwd, so
+  GET /network/wifi/ap said enabled=true before astrod ever touched a
+  radio. Scoped to the v1 AP radio (first device alphabetically, same
+  policy as apRadioPathZ).
+- **mDNS responder died to the boot race.** astrod can start before
+  dhcpcd's first lease; IP_ADD_MEMBERSHIP(224.0.0.251) then fails
+  ENODEV and start() gave up for good. The join is now best-effort at
+  start and retried from the responder loop (sends never needed the
+  membership; only query reception waits).
+- **timekeep on armv7: linux.timespec.sec is isize (y2038 ABI).**
+  `.sec = floor` (i64) failed to compile 32-bit; clamped via
+  std.math.cast. The native-container test build cannot catch 32-bit
+  target breaks — the cross build is the gate that caught it (plus a
+  stale astroctl/netconf state the incremental zig cache kept
+  replaying until a manual rebuild flushed it).
+- **iwd netconfig window vs the test rig.** apStart now checks the
+  EFFECTIVE config (first main.conf along CONFIGURATION_DIRECTORY)
+  and skips the override+restart when netconfig is already enabled —
+  on the e2e rig the bind-mounted =true config means an iwd restart
+  would have killed the upstream test AP on wlan1 mid-case.
+- **A helper radio's Station masqueraded as the DUT's — the AP
+  flapped every ~5 s and no phone could ever associate.** The
+  nastiest live bug of the phase. wifi.zig's modelState/stationPathZ
+  picked "the first device WITH a Station interface"; with wlan0 in
+  AP mode its Station object is gone, so the model silently fell
+  through to the rig's phone radio (wlan2). The phone's own
+  association attempt then surfaced as network.wifi.state
+  "connecting" → the provisioning machine read it as the portal flip
+  starting (wifi_connect_started: leaveAp) → the AP went down mid-
+  authentication → the phone's connect failed ("disconnected" →
+  wifi_connect_failed) → the AP came back (wrong-password loop doing
+  its job) → iwd autoconnect retried → forever. Symptoms were
+  maximally misleading: iwctl said only "Operation failed", iwd.log
+  showed probe responses but auth timeouts (reason 2) or EAPOL death
+  (disassoc reason 4) depending on where in the ~5.5 s bounce cycle
+  the handshake landed, GET /network/wifi/ap said enabled=true
+  throughout (the sub-second down-windows dodge polling), and GET
+  /network/wifi said mode "station" while the AP beaconed. Root
+  cause nailed by elimination — SIGSTOP astrod made the association
+  succeed instantly — then dbus-monitor showed astrod itself cycling
+  Stop/Mode/StartProfile. Fix: one dutDevice() policy (first device
+  alphabetically, the apRadioPathZ rule) now scopes EVERY station-
+  facing surface (state snapshot, stationPathZ and with it
+  scan/networks/tryConnect, the rssi read); a model test pins that a
+  connecting helper Station never leaks into the snapshot. Same bug
+  class as the earlier "apActive counted ANY AP" trap — multi-radio
+  rigs punish every unscoped model read, and single-radio production
+  boards can never catch this class in CI. A SECOND copy hid in
+  publishStateEvent (its own first-has_station loop feeding the very
+  network.wifi.state event the machine maps): after the snapshot
+  paths were scoped the AP still bounced exactly once per phone
+  Network.Connect. Both the payload and the publish TRIGGER are now
+  dutDevice-scoped (helper-radio Station churn publishes nothing).
+  Lesson: a selection POLICY that lives in more than one loop isn't a
+  policy — hunt every duplicate the moment the first copy turns out
+  wrong.
+- **chronyd never clears STA_UNSYNC without `rtcsync` —
+  time.synced was unreachable.** chronyc showed a selected source
+  and sane tracking while GET /system time_synced stayed false
+  forever: chrony only touches the kernel's synchronized flag
+  (sys_linux.c, guarded by the rtcsync directive) when rtcsync is
+  configured, and the baked config had deliberately omitted it ("no
+  battery RTC on these boards"). astrod's adjtimex()-based
+  time.synced reads exactly that flag. rtcsync is now in the baked
+  /etc/astro/chrony.conf (rootfs.sh); the 11-minute kernel-to-RTC
+  copy it enables is a no-op without an RTC driver. Verified live:
+  restarting chronyd with rtcsync flipped time_synced true
+  immediately.
+- **test-api's resolv-conf case read the pre-move path.** The M3
+  phase-4 /run/astro-resolv move (chronyd could not traverse the
+  0750 /run/astro gate) left the case cat-ing /run/astro/resolv.conf
+  — empty since the move, failing the marker grep. The case now
+  reads the rendered file where the renderer actually puts it.
+- **AP→station flip race on fast boards (one-in-two flake on
+  qemu-x86_64).** After Device.Mode="station" the Station
+  interface's InterfacesAdded can lag astrod's immediate connect
+  attempt: tryConnect saw no station, gave up the direct attempt,
+  and that run's iwd autoconnect happened not to converge inside the
+  e2e's 90 s window — station stuck "disconnected", AP correctly
+  gone (override already cleared). armv7's slower TCG never hit it.
+  tryConnect now waits up to 3 s (station_register_wait_ms) for the
+  Station to (re)register before concluding the radio is
+  station-less.
+
+### Recorded deviations (docs/07)
+
+- "Connectivity verified" v1 = some interface has a global address AND
+  an IPv4 default route (/proc/net/route; gateway ping deferred, §19).
+  Consequence: on a wired+wifi device the ethernet path can satisfy
+  promotion the moment a wifi config is persisted — the e2e relies on
+  this ("wifi-e2e promoted the device").
+- Portal HTTP rides 192.168.223.1:8080 with a root nft redirect pair
+  for :80/:53 (astrod stays capless); DNS catch-all on :5354.
+- The AP auto-trigger stays "no ethernet carrier" (docs/07 §4); the
+  slirp rig always has carrier, so the e2e raises the AP via the
+  manual override (enabled_override=true = forced, carrier
+  notwithstanding) and returns control with `wifi ap auto`.
+- mDNS v1: IPv4-only socket (no ff02::fb), uniform TTL 120, no
+  probing/known-answer suppression, host label == instance label
+  (§19); multicast not asserted on-air (slirp does not bridge guest
+  multicast) — GET /system carries the TXT source of truth.
+- provision.Manager consumes one events.max_subscribers slot: the SSE
+  client budget is effectively 15 (main.zig comment updated).
+
+### Verified
+
+- Container `zig build test`: 237 pass / 4 skip; zig fmt clean;
+  shellcheck clean (overlay scripts, test-api.sh, hooks); astrod
+  cross-compiles ReleaseSafe for all three arches (static, <8 MiB).
+- qemu-armv7 dev image rebuilt from scratch inputs: chrony 4.8-r1
+  (shadow) + nftables in the manifest, chronyd/nft/astrod on the
+  rootfs, kernel .config carries NF_TABLES_IPV4/NFT_NAT/NFT_REDIR.
+- boot-smoke qemu-armv7: PASS, zero FAILED, 44–48 s to verdict —
+  chronyd, iwd, astrod all [ OK ]; nothing portal-related activates at
+  boot with eth carrier present (the state machine decides), and
+  boot-success/mark-good never depended on being provisioned (the
+  boot-success graph gates on astrod healthy, not provisioned — the
+  dev image entering provisioning at boot changes nothing there).
+- test-api qemu-armv7: PASS 10/10 (423 s final run; provisioning-e2e
+  269 s incl. two factory-reset reboots). Full AP story observed
+  live: AP down by default with eth carrier → `wifi ap enable` →
+  wlan0 at 192.168.223.1 with the iwd [IPv4] DHCP pool → wlan2
+  associates over the air with the derived SSID/PSK and leases from
+  the pool → portal surface (302 probes, page, redacted /system, 403
+  wall with a valid token, scan 202, cached networks) → nft
+  astro_portal 80→8080/53→5354 → portal PUT → flip → station
+  connected to the upstream AP → provisioned → AP gone, listener
+  dead. astrod VmRSS after the whole AP/portal cycle: 1756 kB
+  (budget 16 MiB).
+- test-api qemu-x86_64: PASS 10/10 (359 s final run) — same story on
+  the fast board after the station_register_wait_ms hardening (the
+  one flip-race flake above reproduced once in three runs before it).
+- time case both boards: floor_ok immediately (build-epoch floor),
+  time.synced true within the 120 s window through slirp UDP once
+  rtcsync landed.
+- AD-020 update+rollback qemu-armv7: PASS (535 s final) — API update
+  A→B flip verified, then poisoned-bundle automatic rollback after 3
+  watchdog reboots; the provisioning-AP-at-boot behavior disturbs
+  neither mark-good nor the watchdog path.
