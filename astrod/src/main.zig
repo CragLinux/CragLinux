@@ -638,8 +638,16 @@ fn handleConnection(server: *Server, fd: posix.fd_t, surface: Surface) !void {
         };
         ctx.request.staged_upload = staged;
     } else {
-        if (req.content_length > max_body_len)
-            return writeProblem(fd, arena, st, 413, "Content Too Large");
+        if (req.content_length > max_body_len) {
+            try writeProblem(fd, arena, st, 413, "Content Too Large");
+            // Drain (bounded) before close: on the TCP surfaces, closing
+            // with unread request bytes in the receive queue sends an RST
+            // that DISCARDS the transmitted 413 at the peer — the client
+            // then reports a connection error instead of the answer. The
+            // cap keeps a hostile Content-Length from pinning the thread.
+            drainBounded(fd, req.content_length - @min(req.content_length, len - head_end));
+            return;
+        }
         // Drain the body fully before answering (also for the 401 path:
         // closing with unread data can RST the response away).
         const body = try arena.alloc(u8, req.content_length);
@@ -702,6 +710,23 @@ fn handleConnection(server: *Server, fd: posix.fd_t, surface: Surface) !void {
     };
 }
 
+/// Read-and-discard up to `remaining` request-body bytes (capped) so the
+/// response written just before survives the close on TCP surfaces (see
+/// the 413 path). Best-effort: read errors just stop the drain.
+const drain_cap = 1 * 1024 * 1024;
+
+fn drainBounded(fd: posix.fd_t, remaining: usize) void {
+    // Load-bearing type annotation: @min against a comptime bound narrows
+    // the result range (the events.zig §20 overflow trap class).
+    var left: usize = @min(remaining, drain_cap);
+    var sink: [4096]u8 = undefined;
+    while (left > 0) {
+        const n = posix.read(fd, sink[0..@min(sink.len, left)]) catch return;
+        if (n == 0) return;
+        left -= n;
+    }
+}
+
 fn unauthorizedResponse(ctx: *router.Context) router.Response {
     return router.problemResponse(ctx, .{
         .type = "urn:astro:problem:unauthorized",
@@ -729,7 +754,14 @@ const FdWriter = struct {
 fn writeProblem(fd: posix.fd_t, arena: std.mem.Allocator, st: *store.Store, status: u16, title: []const u8) !void {
     var ctx: router.Context = .{ .allocator = arena, .store = st, .request = .{ .method = .GET, .path = "/" } };
     try writeResponse(fd, arena, router.problemResponse(&ctx, .{
-        .type = "urn:astro:problem:bad-request",
+        // Stable per-class URNs (AD-013): the HTTP-layer rejections used
+        // to all claim bad-request, which mislabeled 405/413/431.
+        .type = switch (status) {
+            405 => "urn:astro:problem:method-not-allowed",
+            413 => "urn:astro:problem:content-too-large",
+            431 => "urn:astro:problem:headers-too-large",
+            else => "urn:astro:problem:bad-request",
+        },
         .title = title,
         .status = status,
     }));

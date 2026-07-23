@@ -1656,3 +1656,80 @@ under Verified; every number below is from the final runs).
   A→B flip verified, then poisoned-bundle automatic rollback after 3
   watchdog reboots; the provisioning-AP-at-boot behavior disturbs
   neither mark-good nor the watchdog path.
+
+## 21. Test-suite hardening pass (2026-07-22)
+
+The three QEMU harnesses moved onto a shared library and grew an
+adversarial API tier; green means the same thing it did before — every
+existing assertion kept its strength, cases were only added.
+
+- **build/lib/testlib.sh** — the duplicated plumbing extracted once:
+  self-containerize preamble (in-container serial redirect, §12), the
+  hardened SSH array (ServerAlive*, §14/§18 lessons), QEMU start/stop,
+  event-driven waits (`tl_wait_for/_ssh/_ssh_down/_serial` — bounded
+  polls, no bare sleeps; the two genuinely unavoidable sleeps left in
+  the suites are commented as retry pacing / negative dwell), per-case
+  junit bookkeeping, and `tl_finish`. Per-board deadline multiplier
+  (`tl_scale`: armv7 150 %, aarch64 125 % of x86_64) applied inside the
+  wait helpers instead of scattered magic numbers.
+- **Stale-QEMU preflight** (`tl_qemu_lock_check`): a leftover qemu from
+  an aborted run write-locks scratch.qcow2/OVMF_VARS.fd and the next
+  boot used to die mid-suite with an obscure "Failed to get 'write'
+  lock". `qemu-img info` (shared lock) now probes those files before
+  boot and refuses crisply, naming the host-side pgrep/pkill to run.
+  Verified live against a running guest from a second container.
+- **junit upgrade**: every writer now emits one `<testcase>` per case
+  with per-case wall time (`time=` on testcase); test-update-rollback
+  was split into four phases (boot-slot-a, api-install, api-apply-flip,
+  poison-rollback), boot-smoke keeps its single case. Suite/artifact
+  file names unchanged.
+- **test-api.sh**: linear flow rebuilt as a case registry +
+  `--case=NAME[,NAME]` selector and `--list-cases` (boots the guest
+  once, runs only the selection; registry order preserved). The old
+  fixed `sleep 10` reboot handling in the rollback gate became
+  wait-down-then-wait-up (the sleep raced a still-answering old boot).
+- **New adversarial cases** (api-negative, auth-matrix, concurrency,
+  fuzz-lite — 33 s added on armv7, 23 s on x86_64): strict-body 400s,
+  64 KiB-cap 413, forged-Content-Length 507 (stageStream's statvfs check
+  fires before any body byte is read — no tmpfs rig needed, and no
+  staging residue; the declared length must be 2.8 GiB, NOT tens of GiB:
+  32-bit astrod's `content_length: usize` is u32, so an unrepresentable
+  Content-Length fails header parsing and correctly answers 400 —
+  caught live on qemu-armv7), bearer mutations (trailing garbage/empty/bare/wrong
+  scheme), token rotation mid-session (old token 401s on the next
+  request — the auth cache keys on inode/size/mtime), astro-api socket
+  group gate (member 200 / non-member ECONNREFUSED via doas), 20-way
+  parallel GETs + racing scans under an attached SSE client (no 5xx,
+  ids monotonic, RSS stable), and a dozen wrong-method/path probes
+  asserting 404/405 problem+json shape with no connection drops.
+- **astrod fixes found by the new cases** (container `zig build test`
+  still green, budgets hold):
+  1. *HTTP-layer problem types were all "bad-request"*: 405 (unknown
+     method), 413 and 431 answered problem+json with the wrong `type`
+     urn. `writeProblem` now maps method-not-allowed /
+     content-too-large / headers-too-large.
+  2. *413 could be RST-discarded on the TCP surfaces*: the oversized-
+     body path answered and closed with the request body still unread —
+     on 127.0.0.1:8080 the close RSTs and the client can see a
+     connection error instead of the 413. main.zig now drains the
+     remainder (bounded, 1 MiB cap) after writing the response. Unix-
+     socket clients never saw it (AF_UNIX has no RST), which is why the
+     suite had not caught it.
+
+### Verified (all foreground-observed, final runs)
+
+- Container `zig build test` green after the astrod fixes; shellcheck
+  clean at the repo severity/exclusions over the three suites + testlib.
+- boot-smoke qemu-armv7 dev: PASS 48 s (was 48 s).
+- test-api qemu-armv7: PASS 14/14 in 441 s (was 10/10 in 423 s — the
+  four new cases cost 33 s; the event-driven waits clawed back roughly
+  half of that from the old fixed polls).
+- test-api qemu-x86_64: PASS 14/14 in 357 s (was 10/10 in 355 s — flat
+  despite 23 s of new cases, same mechanism).
+- AD-020 qemu-armv7: PASS in 535 s (was 545 s), now four junit phases
+  (boot-slot-a 54 s / api-install 62 s / api-apply-flip 54 s /
+  poison-rollback 365 s, 3 watchdog reboots).
+- `--case` selector spot-runs (x86_64): boot + selected case only, e.g.
+  `--case=api-negative` verdict in 40 s.
+- Stale-QEMU preflight verified live: probing a board dir while its
+  guest ran refused with the crisp §20 message from a second container.
