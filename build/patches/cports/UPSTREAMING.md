@@ -1,7 +1,19 @@
-# Upstreaming draft: `main/fakeroot` checksum refresh
+# Historical: cports change analyses (pre-fork)
 
-Status: **DRAFT** — carried as
-`0002-fakeroot-refresh-checksum-salsa-archive-regen.patch`.
+> **These were drafts for upstreaming to Chimera cports. Superseded by the
+> fork.** Upstream declined the fixes and does not accept AI-assisted
+> contributions (2026-07), so Astro now maintains its own cports fork and
+> these changes live there as ordinary commits (`git -C cports log`, and
+> the `main/<pkg>:` messages). This file is kept only as the original
+> root-cause analysis for each change — useful if a fix is ever offered to
+> Chimera through a human contributor, or to understand why the fork
+> carries what it does. The per-patch file references below are stale (the
+> patches were migrated into the fork and removed from this tree); see the
+> fork commits instead.
+
+---
+
+## `main/fakeroot` checksum refresh
 
 salsa.debian.org regenerated its auto-generated archive for the
 `upstream/1.37.1.2` tag, so the sha256 pinned in `main/fakeroot` (still

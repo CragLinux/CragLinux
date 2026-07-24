@@ -1,0 +1,53 @@
+# Astro Linux - scheduled cports update-currency report.
+#
+# Owning the cports fork means owning version/security currency. This job
+# sweeps the port tree weekly (and on demand) and publishes the report so
+# an agent or maintainer can work the list down / open re-pin PRs. It only
+# READS upstream version metadata — it never re-pins anything (re-pins are
+# deliberate, per cports/README.md).
+
+name: update-report
+on:
+  schedule:
+    - cron: "17 6 * * 1"   # Mondays 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "astro | shipped | all"
+        default: "shipped"
+
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Materialize the cports fork (pinned)
+        run: |
+          if command -v hm >/dev/null; then
+            hm sync --locked
+          else
+            PIN=$(python3 -c "import tomllib;print(tomllib.load(open('.harbormaster.lock','rb'))['entry']['cports']['resolved_sha'])")
+            URL=$(python3 -c "import tomllib;print(tomllib.load(open('.harbormaster.lock','rb'))['entry']['cports']['url'])")
+            git clone --no-checkout "$URL" cports
+            git -C cports checkout "$PIN"
+          fi
+
+      - name: Build astro-builder container
+        run: podman build -t astro-builder -f container/Containerfile container/
+
+      - name: cports update report
+        run: ./build/astro-update-report.sh --scope "${{ github.event.inputs.scope || 'shipped' }}"
+
+      - name: Publish report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cports-update-report
+          path: build/state/update-report/
+          if-no-files-found: warn
+
+      - name: Summary
+        if: always()
+        run: cat build/state/update-report/report.md >> "$GITHUB_STEP_SUMMARY" || true

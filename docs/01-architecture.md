@@ -68,7 +68,7 @@ Key structural rules:
            ├─ stage: bootloader → U-Boot / GRUB artifacts + env tooling
            ├─ stage: bootstrap  → cbuild bldroot (bubblewrap sandbox)
            ├─ stage: packages   → cbuild builds: cports (hm-pinned checkout)
-           │                      + astro-cports + external-tree collections
+           │                      + fork templates + external-tree collections
            │                      ⇒ signed apk repository
            ├─ stage: rootfs     → apk-installed rootfs + overlays + hooks
            │                      ⇒ squashfs (prod) / ext4 (dev)
@@ -113,10 +113,10 @@ v1 has **no verified boot**: the boot chain is not attested. This is stated, not
 |---|---|---|---|
 | musl, chimerautils, dinit, apk-tools, LLVM | Chimera cports | consume pinned templates | `cports/` (Harbormaster-pinned checkout) |
 | kernel | kernel.org LTS | config fragments, Clang build, per-board | `boards/`, `build/` |
-| U-Boot / GRUB | upstream | defconfigs, env layout, boot scripts | `boards/`, `astro-cports/` |
-| RAUC | rauc.io | package template + dinit services + system.conf per board | `astro-cports/main/rauc*`, `boards/` |
-| iwd, dhcpcd, dbus | upstream/cports | templates (cports where available) + dinit services + D-Bus policy | `astro-cports/`, cports |
-| mdns responder | upstream | package + service | `astro-cports/` |
+| U-Boot / GRUB | upstream | defconfigs, env layout, boot scripts | `boards/`, fork |
+| RAUC | rauc.io | package template + dinit services + system.conf per board | fork `main/rauc*`, `boards/` |
+| iwd, dhcpcd, dbus | upstream/cports | fork templates + dinit services + D-Bus policy | fork, `boards/` |
+| mdns responder | — | built into astrod (announce-only) | `astrod/` |
 | **astrod** | — | 100 % Astro (Zig) | `astrod/` |
 | **astroctl** CLI | — | 100 % Astro | `astrod/` |
 | orchestrator (`astro` CLI) | clang-cross prototype | import, extend | `build/` |
@@ -130,7 +130,7 @@ Status: **Accepted** = confirmed by project owner · **Recommended** = design's 
 
 | ID | Decision | Choice | Status | Owner doc |
 |---|---|---|---|---|
-| AD-001 | Build model vs Chimera | cports pinned via Harbormaster lock + `astro-cports` overlay collection; never fork | Accepted | [03](03-build-system.md) |
+| AD-001 | Build model vs Chimera | ~~cports pinned via Harbormaster lock + `astro-cports` overlay collection; never fork~~ **superseded by [AD-027](#ad-027)** | Superseded | [03](03-build-system.md) |
 | AD-002 | Toolchain roles | cbuild's toolchain builds the distro; standalone LLVM toolchain becomes the app SDK | Recommended | [03](03-build-system.md) |
 | AD-003 | Repo structure | Monorepo; companion repos (cports) via Harbormaster lock; external trees separate repos | Recommended | [10](10-release-ci.md) |
 | AD-004 | Rootfs mutability | RO squashfs in prod, package set frozen at image time; rw dev variant | Recommended | [02](02-base-system.md) |
@@ -156,5 +156,21 @@ Status: **Accepted** = confirmed by project owner · **Recommended** = design's 
 | AD-024 | CI infrastructure | Podman container-based, local-first; hosted CI is a thin wrapper added later | Accepted | [10](10-release-ci.md) |
 | AD-025 | LAN API exposure | Default **off** after provisioning; unix socket + localhost token are the default surface | Accepted | [06](06-config-api.md) |
 | AD-026 | Developer sideload | `astro deploy` pushes app binaries/packages to dev-variant devices in seconds; prod images never accept sideloads | Recommended | [08](08-external-trees.md) |
+| <a id="ad-027"></a>AD-027 | cports fork (supersedes AD-001) | Astro maintains a **fork** of cports (`aka-mj/cports`, branch `astro`), Harbormaster-pinned; Astro changes are ordinary in-fork commits, not an overlay collection; a scheduled update-report tracks currency | Accepted | [03](03-build-system.md) |
 
 Amendment process: ADs change via PR to the owning doc plus this index; a "Recommended" AD becomes "Accepted" when the project owner signs off in review ([10-release-ci.md §6](10-release-ci.md)).
+
+> **AD-027 rationale (supersedes AD-001).** AD-001 chose to pin upstream
+> cports and carry Astro's changes as out-of-tree patches + an
+> `astro-cports` overlay, explicitly avoiding a fork. Experience reversed
+> that: our cross-build and new-package changes were declined upstream,
+> upstream does not accept AI-assisted contributions (which Astro uses),
+> and an independent review flagged that upstream changes to pinned
+> templates could silently break our reproducible builds. Forking removes
+> that coupling and lets us set our own contribution policy. The cost —
+> owning version and security currency for the tree — is mitigated by the
+> scheduled `astro update-report` sweep and its CI job. We fork at the
+> AD-001 pin (`e3c9e1a0`), so no build behavior changes at the cutover;
+> re-pins remain deliberate lock diffs (AD-023 unchanged). Fork provenance,
+> attribution, and the AI-contribution policy live in `cports/README.md`
+> and `cports/CONTRIBUTING.md`; Chimera's BSD license is retained verbatim.

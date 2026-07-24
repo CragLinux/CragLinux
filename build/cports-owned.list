@@ -1,0 +1,21 @@
+# Templates Astro maintains in the cports fork (fork delta vs the
+# fork point in build/cports-fork-point). Second field:
+#   new = not in Chimera's repo -> always built from source
+#   mod = exists upstream, we differ -> source-built only when installed
+# Regenerate with build/lib/gen-owned-list.sh after every re-pin
+# (needs full fork history, not a shallow CI checkout).
+basu new
+boost mod
+chrony mod
+dinit-dbus mod
+doctest mod
+elfutils mod
+fakeroot mod
+glib mod
+iwd mod
+json-glib mod
+libubootenv new
+llvm mod
+openssh mod
+rauc new
+readline mod

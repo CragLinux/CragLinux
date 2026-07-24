@@ -12,7 +12,7 @@
 4. `/data` **survives updates** and is shared by both slots ([02-base-system.md §4](02-base-system.md)); cross-version compatibility of `/data` is a managed concern (§7).
 5. **The only update authority is a signed RAUC bundle** verified against the device keyring. No unsigned side-loading, including in dev images (dev images trust the dev CA).
 
-RAUC baseline: v1.15+; target-side dependencies (GLib, OpenSSL, libdbus, libcurl, libnl) are all in cports or added to astro-cports.
+RAUC baseline: v1.15+; target-side dependencies (GLib, OpenSSL, libdbus, libcurl, libnl) are all in cports or added to the fork.
 
 ## 2. `system.conf`
 
@@ -124,7 +124,7 @@ A dinit-triggered udev hook (opt-in per product, off by default) detects a vfat 
 
 ### 5.3 Fleet (deferred, designed-for)
 
-`rauc-hawkbit-updater` packaged in astro-cports as an optional add-on (post-v1): bridges RAUC's D-Bus API to a hawkBit server's DDI API. It coexists with astrod untouched — both are D-Bus clients of RAUC; astrod remains the status surface. No Astro-hosted fleet server, ever ([00-overview.md §4](00-overview.md)).
+`rauc-hawkbit-updater` packaged in the fork as an optional add-on (post-v1): bridges RAUC's D-Bus API to a hawkBit server's DDI API. It coexists with astrod untouched — both are D-Bus clients of RAUC; astrod remains the status surface. No Astro-hosted fleet server, ever ([00-overview.md §4](00-overview.md)).
 
 ## 6. Signing and PKI
 

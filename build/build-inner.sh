@@ -244,27 +244,23 @@ if should_run_step "packages"; then
         echo "    ${pkg}"
     done < "$MANIFEST_FILE"
 
-    # In binary packages-mode only the Astro-touched templates are built from
-    # source (astro-cports/, build/patches/cports/ shadows, and the
-    # boards/common/source-packages.list overrides); everything else is
-    # installed from Chimera's signed binary repo at rootfs time.
+    # In binary packages-mode only the Astro-owned fork templates are built
+    # from source (build/cports-owned.list); everything else is installed
+    # from Chimera's signed binary repo at rootfs time.
     BUILD_LIST_FILE="$MANIFEST_FILE"
     if [ "$PACKAGES_MODE" = "binary" ]; then
         log_step "Resolving source-build subset (binary packages-mode)..."
-        # M1 wave 2 refinement: PATCH-derived templates are built only when
-        # the manifest actually lists them. The llvm cross patch is a no-op
-        # for native profiles (and *removes* mlir/flang on cross), so
-        # building it for hours on boards that never install it (x86_64
-        # prod) buys nothing — and where a Chimera binary shadows a subset
-        # template anyway, the skew report flags it loudly
-        # (build/lib/skew_check.py). astro-cports shadows and the explicit
-        # boards/common/source-packages.list keep their unconditional
-        # forced-source semantics.
+        # "new" fork packages (no Chimera equivalent) + source-packages.list
+        # are always built. "mod" fork templates are built only when the
+        # manifest lists them: the llvm cross patch is a no-op for native
+        # profiles (and *removes* mlir/flang on cross), so building it for
+        # hours on boards that never install it (x86_64 prod) buys nothing;
+        # where a Chimera binary shadows a mod template anyway, the skew
+        # report flags it loudly (build/lib/skew_check.py).
         {
-            resolve_source_package_list \
-                | grep -Fxv -f <(resolve_patched_templates) || true
-            resolve_patched_templates | grep -Fx -f "$MANIFEST_FILE" || true
-        } | awk '!seen[$0]++' > "$SOURCE_MANIFEST_FILE"
+            resolve_source_package_list
+            resolve_owned_templates mod | grep -Fx -f "$MANIFEST_FILE" || true
+        } | awk 'NF && !seen[$0]++' > "$SOURCE_MANIFEST_FILE"
         BUILD_LIST_FILE="$SOURCE_MANIFEST_FILE"
         if [ -s "$SOURCE_MANIFEST_FILE" ]; then
             log_info "Source-build subset ($(wc -l < "$SOURCE_MANIFEST_FILE") packages):"

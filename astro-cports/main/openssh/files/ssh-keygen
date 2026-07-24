@@ -1,3 +1,0 @@
-type = scripted
-command = /usr/lib/openssh/gen-host-keys
-depends-on: local.target

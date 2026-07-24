@@ -55,54 +55,39 @@ resolve_package_list() {
     printf '%s\n' "${packages[@]}" | awk '!seen[$0]++'
 }
 
-# Templates touched by quilt-style cports patches: any path of the form
-# (a|b)/<collection>/<template>/... inside build/patches/cports/*.patch.
-# One name per line, deduplicated.
-resolve_patched_templates() {
-    local patch
-    for patch in "${PROJECT_ROOT}"/build/patches/cports/*.patch; do
-        [ -f "$patch" ] || continue
-        grep -E '^(---|\+\+\+) [ab]/(main|user)/' "$patch" \
-            | sed -E 's#^(---|\+\+\+) [ab]/(main|user)/([^/]+)/.*#\3#'
-    done | sort -u
+# Astro-owned fork templates of a given class ("new" or "mod") from
+# build/cports-owned.list. "new" = not in Chimera's binary repo (always
+# source-built); "mod" = we differ from upstream (source-built only when
+# an image installs it). One name per line.
+resolve_owned_templates() {
+    local class="$1" owned="${PROJECT_ROOT}/build/cports-owned.list"
+    [ -f "$owned" ] || return 0
+    local name kind
+    while read -r name kind _; do
+        case "$name" in ''|\#*) continue ;; esac
+        [ "$kind" = "$class" ] && echo "$name"
+    done < "$owned"
 }
 
-# Resolve the subset of templates that must be built from source in binary
-# packages-mode (docs/03 §1 "Binary consumption for dev builds"):
-#   1. every template in the astro-cports/ collection,
-#   2. every cports template shadowed/patched via build/patches/cports/
-#      (derived from the template paths inside the patch files),
-#   3. anything listed in boards/common/source-packages.list.
-# Output: bare template names to stdout, one per line, deduplicated.
+# Templates that must be built from source in binary packages-mode
+# UNCONDITIONALLY (docs/03 §1): the fork's NEW packages (Chimera's repo
+# has no equivalent) plus boards/common/source-packages.list overrides.
+# "mod" templates are handled separately in build-inner.sh (built only
+# when the manifest lists them). Output: bare names, deduplicated.
 resolve_source_package_list() {
-    local packages=()
+    local packages=() line
+    while IFS= read -r line; do packages+=("$line"); done < <(resolve_owned_templates new)
 
-    # 1. astro-cports collection templates (any collection subdir, e.g. main/)
-    local tmpl
-    for tmpl in "${PROJECT_ROOT}"/astro-cports/*/*/template.py; do
-        [ -f "$tmpl" ] || continue
-        packages+=("$(basename "$(dirname "$tmpl")")")
-    done
-
-    # 2. Templates touched by quilt-style cports patches
-    local pkg
-    while IFS= read -r pkg; do
-        [ -n "$pkg" ] && packages+=("$pkg")
-    done < <(resolve_patched_templates)
-
-    # 3. Explicit overrides
     local source_list="${PROJECT_ROOT}/boards/common/source-packages.list"
     if [ -f "$source_list" ]; then
-        local line
         while IFS= read -r line; do
-            line="${line%%#*}"
-            line="${line// /}"
+            line="${line%%#*}"; line="${line// /}"
             [ -n "$line" ] && packages+=("$line")
         done < "$source_list"
     fi
 
     [ ${#packages[@]} -eq 0 ] && return 0
-    printf '%s\n' "${packages[@]}" | awk '!seen[$0]++'
+    printf '%s\n' "${packages[@]}" | awk 'NF && !seen[$0]++'
 }
 
 # Enable cbuild's transparent ccache support (cports Usage.md "Ccache").
@@ -156,67 +141,60 @@ EOF
 prepare_cports_tree() {
     local cbuild_dir="${PROJECT_ROOT}/cports"
     [ -d "${cbuild_dir}/.git" ] || \
-        die "cports checkout not found (or not a git checkout) at ${cbuild_dir}.\n  cports is managed by Harbormaster; run 'hm sync --locked' to materialize it."
+        die "cports checkout not found (or not a git checkout) at ${cbuild_dir}.\n  cports is Astro's fork, managed by Harbormaster; run 'hm sync --locked' to materialize it."
 
-    log_step "Preparing cports tree (build/patches/cports + astro-cports shadows)..."
+    # Astro's patches/overrides/new packages now live IN the fork (see
+    # cports/README.md). Nothing to overlay at build time. The escape
+    # hatch below still applies any locally-dropped patch/shadow so an
+    # experiment doesn't require a fork commit; normally there are none.
+    log_step "Preparing cports tree (fork; local escape-hatch overlays if any)..."
 
-    # 1. Apply quilt-style patches, idempotently: a patch that no longer
-    #    applies but *reverse*-applies is already present and is skipped.
-    local patch applied=0 present=0
+    local patch applied=0
     for patch in "${PROJECT_ROOT}"/build/patches/cports/*.patch; do
         [ -f "$patch" ] || continue
         if git -C "$cbuild_dir" apply --check "$patch" 2>/dev/null; then
             git -C "$cbuild_dir" apply "$patch" || die "git apply failed for ${patch}"
-            log_info "  PATCH applied: $(basename "$patch")"
+            log_info "  local PATCH applied: $(basename "$patch")"
             applied=$((applied + 1))
-        elif git -C "$cbuild_dir" apply --reverse --check "$patch" 2>/dev/null; then
-            log_info "  PATCH already applied (skipped): $(basename "$patch")"
-            present=$((present + 1))
-        else
-            die "cports patch neither applies nor reverse-applies: ${patch}\n  The cports pin probably moved — rebase the patch against the new pin."
         fi
     done
 
-    # 2. Overlay astro-cports shadow templates (astro-cports/<cat>/<pkg>/).
     local tmpl pkg cat shadows=0
     for tmpl in "${PROJECT_ROOT}"/astro-cports/*/*/template.py; do
         [ -f "$tmpl" ] || continue
         pkg="$(basename "$(dirname "$tmpl")")"
         cat="$(basename "$(dirname "$(dirname "$tmpl")")")"
-        log_info "  SHADOW: astro-cports/${cat}/${pkg} -> cports/${cat}/${pkg}"
+        log_info "  local SHADOW: astro-cports/${cat}/${pkg}"
         mkdir -p "${cbuild_dir}/${cat}/${pkg}"
         rsync -a --delete "${PROJECT_ROOT}/astro-cports/${cat}/${pkg}/" \
                           "${cbuild_dir}/${cat}/${pkg}/"
         shadows=$((shadows + 1))
     done
-
-    # 3. Regenerate subpackage symlinks (main/<pkg>-<sub> -> <pkg>): shadow
-    #    templates that do not exist upstream (e.g. rauc, libubootenv) have
-    #    no committed symlinks, and the reset removes any generated ones;
-    #    without them cbuild fails with "subpackage ... is missing a symlink".
     if [ "$shadows" -gt 0 ]; then
         (cd "$cbuild_dir" && ./cbuild relink-subpkgs > /dev/null 2>&1) || \
             log_warn "cbuild relink-subpkgs failed (continuing)"
     fi
 
-    log_info "cports tree prepared: ${applied} patch(es) applied, ${present} already present, ${shadows} shadow template(s)"
+    if [ "$applied" -eq 0 ] && [ "$shadows" -eq 0 ]; then
+        log_info "cports fork tree used as-is (no local overlays)"
+    else
+        log_info "cports tree prepared: ${applied} local patch(es), ${shadows} local shadow(s)"
+    fi
 }
 
 reset_cports_tree() {
     local cbuild_dir="${PROJECT_ROOT}/cports"
     [ -d "${cbuild_dir}/.git" ] || return 0
 
-    log_step "Resetting cports tree to the pristine pin..."
-    # Restore modified tracked files (patches, shadowed templates)
+    # Restore the fork tree to its committed HEAD (undoes any escape-hatch
+    # overlay + cbuild's in-place edits). NOT -x: cports/.gitignore covers
+    # bldroot*, cbuild_cache, packages*, pkgstage*, sources*, etc/keys and
+    # etc/config.ini, so build state, distfiles and signing keys survive.
+    log_step "Resetting cports fork tree to its committed HEAD..."
     git -C "$cbuild_dir" checkout -- . || log_warn "git checkout in cports failed"
-    # Remove untracked files introduced by patches/shadows. Deliberately NOT
-    # using -x: cports/.gitignore covers bldroot*, cbuild_cache, packages*,
-    # pkgstage*, sources*, etc/keys and etc/config.ini, and 'git clean'
-    # without -x never touches ignored paths — so build state, distfiles and
-    # signing keys survive the reset (verified against the pinned .gitignore).
     git -C "$cbuild_dir" clean -fd -e keygen.log | sed 's/^/  /' || \
         log_warn "git clean in cports failed"
-    log_info "cports tree reset (tracked files restored, untracked leftovers cleaned)"
+    log_info "cports fork tree reset"
 }
 
 ##############################################################################

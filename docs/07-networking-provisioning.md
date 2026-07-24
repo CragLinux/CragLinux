@@ -22,7 +22,7 @@ The decisive argument is the **policy row**: Astro already has exactly one place
 **Implementation notes:**
 - iwd runs with its network-configuration feature **disabled** (`EnableNetworkConfiguration=false`) — addressing is dhcpcd's job in station mode; in AP mode iwd's built-in DHCP server *is* used (single-purpose, provisioning subnet only).
 - dhcpcd runs as a single daemon on allowed interfaces (allowlist rendered by astrod), handles IPv4 DHCP + IPv6 RA/DHCPv6 and static assignments (`static ip_address=` per-interface blocks).
-- Verified against current cports before implementation: iwd and dhcpcd package state upstream (both are established in the musl world; if a template is missing in cports it goes into astro-cports).
+- Verified against current cports before implementation: iwd and dhcpcd package state upstream (both are established in the musl world; if a template is missing in cports it is added to the fork).
 
 ## 2. Configuration rendering model
 
@@ -65,7 +65,7 @@ Persisted in `astro.json` (`system.provisioning`): `factory → provisioning →
             └──(factory reset)──► factory
 ```
 
-**Wired path (always on):** if an Ethernet link comes up and DHCP succeeds while unprovisioned, the API is reachable on that LAN **for provisioning purposes** (token still required — the token is printed on the device label / retrievable over serial; products choose their bootstrap-secret story). mDNS advertises `_astro._tcp` (TXT: serial, version, provisioning state) so installer tools can discover devices; the responder is a small mdns package in astro-cports, active per `[api] mdns` flag.
+**Wired path (always on):** if an Ethernet link comes up and DHCP succeeds while unprovisioned, the API is reachable on that LAN **for provisioning purposes** (token still required — the token is printed on the device label / retrievable over serial; products choose their bootstrap-secret story). mDNS advertises `_astro._tcp` (TXT: serial, version, provisioning state) so installer tools can discover devices; the responder is built into astrod (announce-only), active per `[api] mdns` flag.
 
 **Wireless path — AP-mode captive portal (v1, per project owner):**
 1. In `provisioning` with no Ethernet carrier (configurable trigger), astrod enables iwd AP mode: SSID `astro-<serial-suffix>`, WPA2 PSK derived per-device (printed on label; open-AP is a per-product opt-out, discouraged), iwd's built-in DHCP serving `192.168.223.0/24`.
@@ -92,6 +92,6 @@ Battery-less boards boot in 1970; TLS (update downloads, NTS) then fails certifi
 
 Mitigations, all v1:
 1. **Build-time floor**: firstboot sets the clock to the image's build timestamp if current time is earlier (monotonic floor persisted in `/data/.astro/last-known-time`, updated on clean shutdown and hourly).
-2. NTP client (chrony from cports, or busybox-free equivalent already in Chimera's base — final pick recorded in astro-cports) with `makestep`-style initial correction, started after first connectivity, before astrod reports `time.synced=true`.
+2. NTP client (chrony from cports, or busybox-free equivalent already in Chimera's base — final pick recorded in the fork) with `makestep`-style initial correction, started after first connectivity, before astrod reports `time.synced=true`.
 3. astrod gates *its own* TLS-dependent operations (`POST /update` with https URL) on `time.synced || time > floor`, and surfaces `time` state in `GET /system` so product apps can gate theirs.
 4. NTS/HTTPS time hardening deferred to the security roadmap ([09 §7](09-security.md)).

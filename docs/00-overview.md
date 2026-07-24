@@ -103,7 +103,7 @@ QEMU boards are not second-class: they boot through the **real bootloaders**, so
 ## 7. License
 
 > **AD-022 — Astro is licensed Apache-2.0.**
-> All original Astro code and documentation (orchestrator, astrod, astro-cports templates, docs) are Apache-2.0. This is compatible with our key dependencies: cbuild/cports is BSD-2-Clause, dinit is Apache-2.0, RAUC is LGPL-2.1 (consumed as a distinct work, not linked into Astro code), iwd is LGPL-2.1, Zig and its stdlib are MIT. Per-package licenses are carried in apk metadata as SPDX expressions, as cbuild already enforces.
+> Original Astro code and documentation in *this* repo (orchestrator, astrod/astroctl, docs) are Apache-2.0. The **cports fork** (AD-027) is a separate repo under Chimera's BSD-2-Clause license, retained verbatim; templates Astro adds or modifies there are contributions to that BSD tree, not Apache-2.0 (their SPDX `license` field states each package's own upstream license, as cbuild enforces). Compatible with our key dependencies: cbuild/cports BSD-2-Clause, dinit Apache-2.0, RAUC LGPL-2.1 (consumed as a distinct work, not linked into Astro code), iwd LGPL-2.1, Zig and its stdlib MIT.
 
 ## 8. Glossary
 
@@ -112,7 +112,7 @@ QEMU boards are not second-class: they boot through the **real bootloaders**, so
 | **board** | A hardware (or QEMU) target definition: `boards/<name>/board.toml` + kernel fragments + overlays + hooks |
 | **variant** | An image flavor orthogonal to boards (e.g. `prod`, `dev`): `variants/<name>.toml` |
 | **external tree** | A team-owned directory of packages/boards/overlays layered onto the build (`--external`) |
-| **collection** | cbuild term: a repository of package templates (cports `main/`, `user/`; Astro adds `astro-cports`) |
+| **collection** | cbuild term: a repository of package templates (cports `main/`, `user/`; Astro's changes live in the fork) |
 | **template** | cbuild term: a `template.py` file defining one package |
 | **overlay** | Files copied verbatim (after templating) into the rootfs during assembly |
 | **slot** | RAUC term: an updatable partition (rootfs.A, rootfs.B, boot.A, …) |

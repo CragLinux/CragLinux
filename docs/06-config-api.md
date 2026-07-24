@@ -52,7 +52,7 @@ Fit: Zig rides the same LLVM backend as the rest of the distro, cross-compiles t
 Design consequences (the two honest gaps, and their mitigations):
 
 1. **No native Zig D-Bus library exists.** astrod links a C D-Bus implementation via Zig's first-class C interop:
-   - **Primary: `basu`** — the systemd-free sd-bus extraction; small, musl-friendly, the sd-bus API is well-shaped for clients (async calls, signal matches, property tracking). Packaged in astro-cports; astrod wraps it in one Zig module (`src/bus.zig`) so the dependency is swappable.
+   - **Primary: `basu`** — the systemd-free sd-bus extraction; small, musl-friendly, the sd-bus API is well-shaped for clients (async calls, signal matches, property tracking). Packaged in the fork (`main/basu`); astrod wraps it in one Zig module (`src/bus.zig`) so the dependency is swappable.
    - **Fallback: `libdbus-1`** — already on the image for the daemons; clunkier API, kept as the documented plan-B if basu misbehaves under musl.
    - The wrapper is the *only* place C bus types appear; reconcilers see typed Zig interfaces. An integration-test suite runs against real iwd/RAUC in the QEMU `test api` stage.
 2. **Zig is pre-1.0; the language and std churn.** The build container pins the exact Zig version (single source of truth: `build/zig-version`); astrod vendors its few dependencies (no network package manager use at build time — fits cbuild's offline build phase); version bumps are deliberate PRs that run the full test suite.
