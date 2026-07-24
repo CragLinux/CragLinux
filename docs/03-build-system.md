@@ -7,7 +7,7 @@
 
 ## 1. AD-027 (supersedes AD-001) — Relationship to Chimera: a maintained fork
 
-> **AD-027 — Astro maintains a fork of Chimera's cports (`aka-mj/cports`, branch `astro`), Harbormaster-pinned by the committed `.harbormaster.lock`. Astro's packages and fixes are ordinary in-fork commits; a scheduled update-report tracks currency.** *(Accepted; supersedes AD-001)*
+> **AD-027 — Astro maintains a fork of Chimera's cports (`aka-mj/astro-cports`, branch `astro`), Harbormaster-pinned by the committed `.harbormaster.lock`. Astro's packages and fixes are ordinary in-fork commits; a scheduled update-report tracks currency.** *(Accepted; supersedes AD-001)*
 >
 > ~~**AD-001** — Astro consumes Chimera's cports as a pinned checkout and adds packages via a separate `astro-cports` collection; never forks.~~ Superseded — see the [AD-027 rationale in the index](01-architecture.md#ad-027). In short: our fixes and new packages were declined upstream, upstream forbids the AI-assisted contributions Astro uses, and pinned-template drift risked breaking reproducible builds. We forked **at the AD-001 pin `e3c9e1a0`**, so nothing about the produced artifacts changed at the cutover.
 

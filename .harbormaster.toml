@@ -20,7 +20,7 @@ clone_depth = 1
 # (AD-023); the update-report tooling surfaces what is stale.
 [[repository]]
 name = "cports"
-url = "git@github.com:aka-mj/cports.git"
+url = "git@github.com:aka-mj/astro-cports.git"
 type = "git"
 branch = "astro"
 path = "cports"

@@ -156,7 +156,7 @@ Status: **Accepted** = confirmed by project owner · **Recommended** = design's 
 | AD-024 | CI infrastructure | Podman container-based, local-first; hosted CI is a thin wrapper added later | Accepted | [10](10-release-ci.md) |
 | AD-025 | LAN API exposure | Default **off** after provisioning; unix socket + localhost token are the default surface | Accepted | [06](06-config-api.md) |
 | AD-026 | Developer sideload | `astro deploy` pushes app binaries/packages to dev-variant devices in seconds; prod images never accept sideloads | Recommended | [08](08-external-trees.md) |
-| <a id="ad-027"></a>AD-027 | cports fork (supersedes AD-001) | Astro maintains a **fork** of cports (`aka-mj/cports`, branch `astro`), Harbormaster-pinned; Astro changes are ordinary in-fork commits, not an overlay collection; a scheduled update-report tracks currency | Accepted | [03](03-build-system.md) |
+| <a id="ad-027"></a>AD-027 | cports fork (supersedes AD-001) | Astro maintains a **fork** of cports (`aka-mj/astro-cports`, branch `astro`), Harbormaster-pinned; Astro changes are ordinary in-fork commits, not an overlay collection; a scheduled update-report tracks currency | Accepted | [03](03-build-system.md) |
 
 Amendment process: ADs change via PR to the owning doc plus this index; a "Recommended" AD becomes "Accepted" when the project owner signs off in review ([10-release-ci.md §6](10-release-ci.md)).
 
