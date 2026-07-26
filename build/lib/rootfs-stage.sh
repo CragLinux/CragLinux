@@ -15,14 +15,16 @@ set -e
 # root-owned files — all without sudo (GAP §3.5 ownership item).
 #
 # All inputs arrive via exported environment (set by build-inner.sh):
-#   PROJECT_ROOT BOARD VARIANT BOARD_ARCH BOARD_DIR EXTERNAL_DIR
+#   PROJECT_ROOT BOARD VARIANT BOARD_ARCH BOARD_DIR
 #   BOARD_CONFIG_JSON VARIANT_CONFIG_JSON ROOTFS_DIR ROOTFS_TYPE
 #   MANIFEST_FILE PACKAGES_MODE BUILD_OUTPUT USERS_CREATE SERVICES_*
+#   LAYERS_JSON (docs/08 §4 ordered layer list — consumed by the merge engine)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "${SCRIPT_DIR}/common.sh"
 source "${SCRIPT_DIR}/rootfs.sh"
+source "${SCRIPT_DIR}/merge.sh"
 source "${SCRIPT_DIR}/astrod.sh"
 
 : "${PROJECT_ROOT:?rootfs-stage.sh must be launched by build-inner.sh}"
@@ -46,8 +48,10 @@ fi
 # apk/repo arch is the cbuild arch (armv7hf -> armv7), not the board arch.
 create_rootfs "$ROOTFS_DIR" "${CBUILD_ARCH:-$(cbuild_arch_for "$BOARD_ARCH")}" "$MANIFEST_FILE" "${PACKAGES_MODE:-source}"
 
-# Apply overlays
-apply_overlays "$ROOTFS_DIR" "$BOARD_DIR" "$VARIANT" "${EXTERNAL_DIR:-}"
+# Apply overlays across every layer, in merge order (docs/08 §4). The merge
+# order + resolved paths live in $LAYERS_JSON; apply_overlays delegates to
+# merge_overlays.
+apply_overlays "$ROOTFS_DIR"
 
 # Install kernel into rootfs
 install_kernel_to_rootfs "$ROOTFS_DIR" "$BOARD" "$BOARD_ARCH" "$BOARD_CONFIG_JSON"
@@ -70,8 +74,8 @@ stamp_os_release "$ROOTFS_DIR" "$BOARD" "$VARIANT"
 # Build + install the astrod/astroctl binary (docs/06, AD-012)
 build_astrod "$BOARD_ARCH" "$ROOTFS_DIR"
 
-# Run hooks
-run_hooks "$ROOTFS_DIR" "$BOARD_DIR"
+# Run hooks, interleaved by numeric prefix across every layer (docs/08 §4).
+run_hooks "$ROOTFS_DIR"
 
 log_info "Rootfs assembled at: ${ROOTFS_DIR}"
 

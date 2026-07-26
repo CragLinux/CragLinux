@@ -2,58 +2,11 @@
 # Astro Linux - Package list resolution and building
 # Sourced by build-inner.sh, not executed directly.
 
-# Resolve the merged package list from common + board + firmware + variant + kernel
-# Output: writes merged list to stdout (one package per line, deduplicated)
-resolve_package_list() {
-    local board_dir="$1"
-    local variant_config_json="$2"
-    local external_dir="${3:-}"
-
-    local packages=()
-
-    # 1. Common base packages
-    local common_list="${PROJECT_ROOT}/boards/common/packages.list"
-    if [ -f "$common_list" ]; then
-        while IFS= read -r line; do
-            line="${line%%#*}"      # strip comments
-            line="${line// /}"      # strip whitespace
-            [ -n "$line" ] && packages+=("$line")
-        done < "$common_list"
-    fi
-
-    # 2. Board packages
-    local board_list="${board_dir}/packages.list"
-    if [ -f "$board_list" ]; then
-        while IFS= read -r line; do
-            line="${line%%#*}"
-            line="${line// /}"
-            [ -n "$line" ] && packages+=("$line")
-        done < "$board_list"
-    fi
-
-    # 3. Firmware packages (from board.toml)
-    local firmware_pkgs
-    firmware_pkgs=$(echo "$BOARD_CONFIG_JSON" | jq -r '.firmware.packages // [] | .[]' 2>/dev/null)
-    if [ -n "$firmware_pkgs" ]; then
-        while IFS= read -r pkg; do
-            [ -n "$pkg" ] && packages+=("$pkg")
-        done <<< "$firmware_pkgs"
-    fi
-
-    # 4. Variant packages
-    local variant_pkgs
-    variant_pkgs=$(echo "$variant_config_json" | jq -r '.packages.install // [] | .[]' 2>/dev/null)
-    if [ -n "$variant_pkgs" ]; then
-        while IFS= read -r pkg; do
-            [ -n "$pkg" ] && packages+=("$pkg")
-        done <<< "$variant_pkgs"
-    fi
-
-    # Note: kernel is built directly (not through cbuild), so not included here
-
-    # Deduplicate while preserving order
-    printf '%s\n' "${packages[@]}" | awk '!seen[$0]++'
-}
+# NOTE: the former resolve_package_list() (common + board + firmware + variant
+# concatenation) has been superseded by the layer-driven merge_packages_list()
+# in build/lib/merge.sh (docs/08 §4), which build-inner.sh calls with the
+# ordered layer list so external-tree packages.list entries fold in additively.
+# The no-tree output is diff-identical to the old function.
 
 # Astro-owned fork templates of a given class ("new" or "mod") from
 # build/cports-owned.list. "new" = not in Chimera's binary repo (always
@@ -69,9 +22,31 @@ resolve_owned_templates() {
     done < "$owned"
 }
 
+# Bare template names carried by external-tree cports/ collections (docs/08
+# §4 / AD-027), one per line, in ascending-priority layer order. A tree's
+# packages exist in no binary repo, so — exactly like the fork's "new"
+# templates — they are ALWAYS built from source. Reads the ordered layer list
+# ($LAYERS_JSON, exported by build-inner.sh); prints NOTHING when the file is
+# absent or no tree carries a cports/ collection, so the no-external build path
+# stays byte-identical. Names are emitted bare (matching resolve_owned_templates
+# and how build_packages resolves main/<pkg> then user/<pkg>).
+resolve_tree_template_names() {
+    local layers_json="${LAYERS_JSON:-}"
+    [ -n "$layers_json" ] && [ -f "$layers_json" ] || return 0
+    local path tmpl
+    while IFS= read -r path; do
+        [ -n "$path" ] && [ -d "${path}/cports" ] || continue
+        for tmpl in "${path}"/cports/*/*/template.py; do
+            [ -f "$tmpl" ] || continue
+            basename "$(dirname "$tmpl")"
+        done
+    done < <(jq -r '.[] | select(.kind=="tree") | .path' "$layers_json")
+}
+
 # Templates that must be built from source in binary packages-mode
 # UNCONDITIONALLY (docs/03 §1): the fork's NEW packages (Chimera's repo
-# has no equivalent) plus boards/common/source-packages.list overrides.
+# has no equivalent) plus boards/common/source-packages.list overrides plus
+# every external-tree cports/ template (docs/08 §4 — no binary equivalent).
 # "mod" templates are handled separately in build-inner.sh (built only
 # when the manifest lists them). Output: bare names, deduplicated.
 resolve_source_package_list() {
@@ -85,6 +60,11 @@ resolve_source_package_list() {
             [ -n "$line" ] && packages+=("$line")
         done < "$source_list"
     fi
+
+    # External-tree templates: always source-built (like "new" fork packages).
+    while IFS= read -r line; do
+        [ -n "$line" ] && packages+=("$line")
+    done < <(resolve_tree_template_names)
 
     [ ${#packages[@]} -eq 0 ] && return 0
     printf '%s\n' "${packages[@]}" | awk 'NF && !seen[$0]++'
@@ -180,6 +160,76 @@ prepare_cports_tree() {
     else
         log_info "cports tree prepared: ${applied} local patch(es), ${shadows} local shadow(s)"
     fi
+
+    # External-tree cports/ collections layer on top of the materialized fork
+    # (docs/08 §4, AD-027). No-op when no --external tree carries a cports/.
+    overlay_tree_cports "$cbuild_dir"
+}
+
+##############################################################################
+# overlay_tree_cports <cbuild_dir>
+#
+# Layer every external tree's cports/ collection onto the materialized fork
+# checkout (docs/08 §4 "cports collections", AD-027 fork model). cbuild has no
+# out-of-tree collection support (see the prepare/reset header above), so — as
+# with the astro-cports escape-hatch shadows — each tree template dir is copied
+# over cports/<cat>/<pkg>, giving exact shadowing semantics for the duration of
+# the packages stage; reset_cports_tree restores the pin afterwards.
+#
+# Ordering + conflict rules are delegated to merge.sh:merge_cports_collections,
+# the single authoritative detector: it walks the tree layers in ascending
+# priority (later wins), LOGS every tree-shadows-fork override loudly, and exits
+# nonzero when two DIFFERENT trees provide the same template name with differing
+# contents (byte-identical duplicates are allowed with a warning). Its stdout
+# carries both those [INFO]/[WARN]/[ERROR] lines AND the resolved copy plan
+# ("<cat>/<pkg>\t<tree-name>", one per resolved shadow, in apply order). We
+# split the two by tab-field count, surface the logs, gate on the exit code,
+# then copy each planned template from its owning tree and relink subpackages.
+##############################################################################
+overlay_tree_cports() {
+    local cbuild_dir="$1"
+    local layers_json="${LAYERS_JSON:-}"
+    [ -n "$layers_json" ] && [ -f "$layers_json" ] || return 0
+
+    # Fast exit unless some tree layer actually carries a cports/ collection —
+    # keeps the no-tree and tree-without-packages paths free of extra work.
+    local any=0 p
+    while IFS= read -r p; do
+        [ -n "$p" ] && [ -d "${p}/cports" ] && { any=1; break; }
+    done < <(jq -r '.[] | select(.kind=="tree") | .path' "$layers_json")
+    [ "$any" -eq 1 ] || return 0
+
+    log_step "Overlaying external-tree cports collections (docs/08 §4, AD-027)..."
+
+    local out rc=0
+    out="$(merge_cports_collections "$layers_json" "$cbuild_dir")" || rc=$?
+    # Provenance/shadow/error logs are the tab-less lines; surface them.
+    awk -F'\t' 'NF!=2' <<< "$out" >&2
+    [ "$rc" -eq 0 ] || \
+        die "external-tree cports collection conflict: two trees provide the same template with differing contents (docs/08 §4) — see [ERROR] above"
+
+    local plan key name treepath src count=0
+    plan="$(awk -F'\t' 'NF==2' <<< "$out")"
+    while IFS=$'\t' read -r key name; do
+        [ -n "$key" ] || continue
+        treepath="$(jq -r --arg n "$name" \
+            'first(.[] | select(.kind=="tree" and .name==$n)).path' "$layers_json")"
+        [ -n "$treepath" ] && [ "$treepath" != "null" ] || \
+            die "cports overlay: cannot resolve tree path for '${name}'"
+        src="${treepath}/cports/${key}"
+        [ -d "$src" ] || die "cports overlay: source template dir missing: ${src}"
+        log_info "  tree cports overlay: ${name}/cports/${key}"
+        mkdir -p "${cbuild_dir}/${key}"
+        rsync -a --delete "${src}/" "${cbuild_dir}/${key}/"
+        count=$((count + 1))
+    done <<< "$plan"
+
+    if [ "$count" -gt 0 ]; then
+        # New subpackage decorators may have arrived with the tree templates.
+        (cd "$cbuild_dir" && ./cbuild relink-subpkgs > /dev/null 2>&1) || \
+            log_warn "cbuild relink-subpkgs failed after tree cports overlay (continuing)"
+        log_info "cports: overlaid ${count} external-tree template(s) onto the fork"
+    fi
 }
 
 reset_cports_tree() {
@@ -187,7 +237,11 @@ reset_cports_tree() {
     [ -d "${cbuild_dir}/.git" ] || return 0
 
     # Restore the fork tree to its committed HEAD (undoes any escape-hatch
-    # overlay + cbuild's in-place edits). NOT -x: cports/.gitignore covers
+    # overlay, external-tree cports/ collection overlays, and cbuild's in-place
+    # edits). Tree collections land at cports/<cat>/<pkg>: a NEW template dir is
+    # untracked and removed by 'git clean -fd'; a template that SHADOWED a fork
+    # template is git-tracked and restored by 'git checkout -- .' (with any
+    # rsynced-in extra files swept by the clean). NOT -x: cports/.gitignore covers
     # bldroot*, cbuild_cache, packages*, pkgstage*, sources*, etc/keys and
     # etc/config.ini, so build state, distfiles and signing keys survive.
     log_step "Resetting cports fork tree to its committed HEAD..."

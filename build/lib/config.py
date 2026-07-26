@@ -10,7 +10,9 @@ Usage:
     python3 build/lib/config.py board boards/rpi4/board.toml --format=env
 """
 
+import copy
 import json
+import os
 import re
 import sys
 import tomllib
@@ -23,9 +25,16 @@ from schema import (
     BOARD_CONDITIONAL_RULES,
     DEPRECATED_DISK_SCHEMA,
     RAUC_BOOTLOADER_FOR_TYPE,
+    TREE_SCHEMA,
     VARIANT_SCHEMA,
     USER_ENTRY_SCHEMA,
 )
+
+# The dev/unversioned sentinel (docs/10 §2 — the same fallback image.sh,
+# bundle.sh and os-release stamping use for ASTRO_VERSION). A working-tree
+# build reports this; it is treated as "not a release" and bypasses the
+# external-tree version gate (see check_astro_version).
+DEV_VERSION = "0.0.0-dev"
 
 # Partition sizes: integer + K/M/G suffix (docs/04 §2)
 SIZE_RE = re.compile(r"^[1-9][0-9]*[KMG]$")
@@ -202,7 +211,13 @@ def apply_defaults(config, schema):
             if field_name.startswith("_"):
                 continue
             if field_name not in result_section and "default" in field_schema:
-                result_section[field_name] = field_schema["default"]
+                # deepcopy so mutable defaults (e.g. [image].formats == ["img"])
+                # are never shared with the schema. derive_board_defaults
+                # appends to formats in place; without the copy that would
+                # mutate BOARD_SCHEMA and poison every later board processed in
+                # the same interpreter (the external-tree merge engine loads
+                # many boards per run — one CLI process no longer isolates it).
+                result_section[field_name] = copy.deepcopy(field_schema["default"])
 
         result[section_name] = result_section
 
@@ -323,6 +338,142 @@ def derive_board_defaults(config, raw_config, config_path):
     return config
 
 
+# ---------------------------------------------------------------------------
+# Version comparison for the external-tree compatibility gate (docs/08 §2/§4)
+#
+# Algorithm (a faithful Python port of astrod/src/version.zig so the build-time
+# gate and the on-device AD-021 update gate order versions identically):
+#   1. Split off an optional suffix at the FIRST '-'. The base is compared as
+#      '.'-separated segments; a segment pair is compared NUMERICALLY when both
+#      are all-digits, otherwise bytewise (lexicographically). Missing trailing
+#      segments count as "0", so "2026.10" == "2026.10.0" < "2026.10.1".
+#   2. Equal bases: a version WITHOUT a suffix outranks one WITH a suffix
+#      ("1.0.0" > "1.0.0-rc1", the semver pre-release rule); two suffixes
+#      compare bytewise.
+# Never raises: any string orders (garbage sorts lexicographically), so a
+# malformed bound can only mis-order, never crash the build.
+# ---------------------------------------------------------------------------
+
+
+def _split_version(v):
+    """Return (base, suffix) splitting at the first '-'; suffix is None if none."""
+    idx = v.find("-")
+    if idx == -1:
+        return v, None
+    return v[:idx], v[idx + 1:]
+
+
+def _cmp(a, b):
+    """Three-way compare of two scalars: -1, 0, or 1."""
+    return (a > b) - (a < b)
+
+
+def _cmp_segment(a, b):
+    """Compare one dotted segment: numeric if both all-digits, else bytewise."""
+    if a.isdigit() and b.isdigit():
+        return _cmp(int(a), int(b))
+    return _cmp(a, b)
+
+
+def compare_versions(a, b):
+    """Total order over version strings. Returns -1, 0, or 1 (a vs b)."""
+    base_a, suffix_a = _split_version(a)
+    base_b, suffix_b = _split_version(b)
+
+    seg_a = base_a.split(".")
+    seg_b = base_b.split(".")
+    for i in range(max(len(seg_a), len(seg_b))):
+        x = seg_a[i] if i < len(seg_a) else "0"
+        y = seg_b[i] if i < len(seg_b) else "0"
+        ord_ = _cmp_segment(x, y)
+        if ord_ != 0:
+            return ord_
+
+    # Bases equal: no-suffix outranks any suffix; two suffixes are bytewise.
+    if suffix_a is None and suffix_b is None:
+        return 0
+    if suffix_a is None:
+        return 1
+    if suffix_b is None:
+        return -1
+    return _cmp(suffix_a, suffix_b)
+
+
+def astro_version():
+    """The running Astro release version, from $ASTRO_VERSION (docs/10 §2).
+
+    Falls back to the dev sentinel, exactly like image.sh/bundle.sh.
+    """
+    return os.environ.get("ASTRO_VERSION") or DEV_VERSION
+
+
+def check_astro_version(version, astro_min, astro_max, tree_name, config_path):
+    """Fail fast when the running Astro version is outside [min, max] (docs/08 §2).
+
+    Bounds are inclusive; an empty bound means unbounded. A dev/unversioned
+    build (version == DEV_VERSION) bypasses the gate: a working-tree build is
+    not a release, and enforcing calver bounds against "0.0.0-dev" would
+    spuriously fail every local build. A real calver release is enforced.
+    """
+    if version == DEV_VERSION:
+        return
+    if astro_min and compare_versions(version, astro_min) < 0:
+        raise ConfigError(
+            f"Configuration errors in {config_path}:\n"
+            f"  [tree] '{tree_name}' requires Astro >= {astro_min}, "
+            f"but this is Astro {version} (astro_min gate, docs/08 §2)"
+        )
+    if astro_max and compare_versions(version, astro_max) > 0:
+        raise ConfigError(
+            f"Configuration errors in {config_path}:\n"
+            f"  [tree] '{tree_name}' requires Astro <= {astro_max}, "
+            f"but this is Astro {version} (astro_max gate, docs/08 §2)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Per-type finalize pipelines (validate + defaults + derivations).
+#
+# These take an ALREADY-PARSED dict — either a single parsed board.toml /
+# variant .toml, or the pre-defaults deep-merge of several such fragments
+# across external-tree layers (docs/08 §4) — and run the same
+# validate/apply_defaults/derive steps on it. Single-sourcing the pipeline
+# here keeps load_config (one file) and merge.py:deep_merge_board_variant
+# (layered) behaviourally IDENTICAL; historically each inlined its own copy
+# and they drifted.
+#
+# CONTRACT: `raw_config` MUST be the PRE-DEFAULTS dict. derive_board_defaults
+# inspects it to decide whether [qemu] was actually authored (the qcow2
+# auto-add). Passing a post-apply_defaults dict — where every optional section
+# is materialised — would make that test always true and wrongly add "qcow2"
+# to boards that never declared [qemu].
+# ---------------------------------------------------------------------------
+
+
+def finalize_board_config(raw_config, config_path):
+    """Validate + default + derive a board config from a parsed (pre-defaults) dict."""
+    config = migrate_deprecated_disk(raw_config, config_path)
+    validate_config(config, BOARD_SCHEMA, config_path)
+    config = apply_defaults(config, BOARD_SCHEMA)
+    config = derive_board_defaults(config, raw_config, config_path)
+    return config
+
+
+def finalize_variant_config(raw_config, config_path):
+    """Validate + default a variant config from a parsed (pre-defaults) dict.
+
+    The [rootfs].type default is keyed on the variant id (the .toml stem):
+    "prod" → squashfs (AD-004 read-only root), everything else → ext4.
+    config_path is the resolved variant FILE, so its stem is the variant id.
+    """
+    validate_config(raw_config, VARIANT_SCHEMA, config_path)
+    config = apply_defaults(raw_config, VARIANT_SCHEMA)
+    if not config.setdefault("rootfs", {}).get("type"):
+        variant_id = Path(config_path).stem
+        config["rootfs"]["type"] = "squashfs" if variant_id == "prod" else "ext4"
+    return config
+
+
 def load_config(config_path, config_type):
     """Load, validate, and return a config with defaults applied."""
     path = Path(config_path)
@@ -333,18 +484,17 @@ def load_config(config_path, config_type):
         raw_config = tomllib.load(f)
 
     if config_type == "board":
-        config = migrate_deprecated_disk(raw_config, config_path)
-        validate_config(config, BOARD_SCHEMA, config_path)
-        config = apply_defaults(config, BOARD_SCHEMA)
-        config = derive_board_defaults(config, raw_config, config_path)
+        config = finalize_board_config(raw_config, config_path)
+    elif config_type == "tree":
+        validate_config(raw_config, TREE_SCHEMA, config_path)
+        config = apply_defaults(raw_config, TREE_SCHEMA)
+        tree = config["tree"]
+        check_astro_version(
+            astro_version(), tree["astro_min"], tree["astro_max"],
+            tree["name"], config_path,
+        )
     else:
-        validate_config(raw_config, VARIANT_SCHEMA, config_path)
-        config = apply_defaults(raw_config, VARIANT_SCHEMA)
-        # [rootfs].type defaults by variant id: prod → squashfs (AD-004
-        # read-only root), everything else → ext4 (dev flow).
-        if not config.setdefault("rootfs", {}).get("type"):
-            variant_id = path.stem
-            config["rootfs"]["type"] = "squashfs" if variant_id == "prod" else "ext4"
+        config = finalize_variant_config(raw_config, config_path)
     return config
 
 
@@ -352,7 +502,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Astro Linux config loader")
-    parser.add_argument("type", choices=["board", "variant"], help="Config type")
+    parser.add_argument("type", choices=["board", "variant", "tree"], help="Config type")
     parser.add_argument("path", help="Path to .toml config file")
     parser.add_argument(
         "--format",

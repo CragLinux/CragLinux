@@ -91,7 +91,7 @@ Merge order everywhere: **`boards/common` → external trees (ascending priority
 | overlays | file-level, last writer wins; the build logs every override (`overlay: acme-product/etc/foo overrides boards/common/etc/foo`) |
 | TOML (board/variant) | deep merge per table; scalars: last wins; lists: **replace, not append** (append hides intent; a tree that wants to extend `config_fragments` restates it) — the one exception: `packages.install` accumulates |
 | hooks | interleaved by numeric prefix across all layers (`10-core… 60-acme… 90-board…`); same number → layer order |
-| cports collections | cbuild collection precedence: astro-cports shadows cports; tree collections shadow both (same-name template override is allowed but build-flagged loudly) |
+| cports collections | each tree's `cports/` is an additional cbuild collection layered on the fork ([03 §1](03-build-system.md) AD-027). Precedence: the fork is the base; tree collections shadow it in **ascending priority** (higher-priority tree wins). A tree template shadowing a same-name **fork** template is allowed but build-flagged loudly; two trees providing the same template name is a **hard error unless byte-identical**. Tree templates are always source-built (no binary equivalent) |
 
 Worked conflict example (documented in the tree author guide): two trees both providing `etc/acme/defaults.toml` → higher-priority tree wins, build log carries both provenance lines; two trees providing template `acme-common` → hard error unless versions identical.
 

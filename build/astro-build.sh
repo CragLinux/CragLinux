@@ -39,7 +39,16 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 BOARD=""
 VARIANT=""
-EXTERNAL="${ASTRO_EXTERNAL:-}"
+# --external=PATH is REPEATABLE (docs/08 §4 multi-tree composition); the
+# colon-separated $ASTRO_EXTERNAL seeds the list first. Each tree is bind
+# -mounted read-through and passed to the inner build as --external=/external-N.
+EXTERNALS=()
+if [ -n "${ASTRO_EXTERNAL:-}" ]; then
+    IFS=':' read -r -a _env_externals <<< "$ASTRO_EXTERNAL"
+    for _e in "${_env_externals[@]}"; do
+        [ -n "$_e" ] && EXTERNALS+=("$_e")
+    done
+fi
 STEP=""
 CLEAN=false
 INTERACTIVE=false
@@ -48,7 +57,7 @@ PASSTHROUGH_ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --external=*)
-            EXTERNAL="${1#--external=}"
+            EXTERNALS+=("${1#--external=}")
             ;;
         --step=*)
             STEP="${1#--step=}"
@@ -94,13 +103,14 @@ if [ "$INTERACTIVE" = false ]; then
             local_board="$(basename "$(dirname "$d")")"
             echo "  ${local_board}"
         done
-        if [ -n "$EXTERNAL" ] && [ -d "${EXTERNAL}/boards" ]; then
-            for d in "${EXTERNAL}"/boards/*/board.toml; do
+        for ext in ${EXTERNALS+"${EXTERNALS[@]}"}; do
+            [ -d "${ext}/boards" ] || continue
+            for d in "${ext}"/boards/*/board.toml; do
                 [ -f "$d" ] || continue
                 local_board="$(basename "$(dirname "$d")")"
-                echo "  ${local_board} (external)"
+                echo "  ${local_board} (external: $(basename "$ext"))"
             done
-        fi
+        done
         exit 1
     fi
 fi
@@ -160,12 +170,23 @@ fi
 # :Z relabels for SELinux (required on Fedora/RHEL)
 RUN_ARGS+=(-v "${PROJECT_ROOT}:/workspace:Z")
 
-# Bind-mount external tree if specified
-if [ -n "$EXTERNAL" ]; then
-    EXTERNAL="$(cd "$EXTERNAL" && pwd)"
-    RUN_ARGS+=(-v "${EXTERNAL}:/external:Z")
-    RUN_ARGS+=(-e "ASTRO_EXTERNAL=/external")
-fi
+# Bind-mount each external tree (docs/08 §2 multi-tree). Each host tree is
+# mounted read-only at a stable in-container path /external-N (N = input
+# order) and passed to the inner build as --external=/external-N, in the same
+# order — layers.py orders them by tree.toml priority regardless, but keeping
+# input order stable preserves the documented tie-break. $ASTRO_EXTERNAL is
+# NOT forwarded (the host paths do not exist in the container); the explicit
+# --external args carry the whole list.
+EXTERNAL_INNER_ARGS=()
+_ext_idx=0
+for _ext in ${EXTERNALS+"${EXTERNALS[@]}"}; do
+    [ -d "$_ext" ] || { echo "External tree not found: $_ext" >&2; exit 1; }
+    _ext_abs="$(cd "$_ext" && pwd)"
+    _ext_mnt="/external-${_ext_idx}"
+    RUN_ARGS+=(-v "${_ext_abs}:${_ext_mnt}:ro,Z")
+    EXTERNAL_INNER_ARGS+=("--external=${_ext_mnt}")
+    _ext_idx=$((_ext_idx + 1))
+done
 
 ##############################################################################
 # Launch build inside container
@@ -176,6 +197,6 @@ if [ "$INTERACTIVE" = true ]; then
     exec $ENGINE "${RUN_ARGS[@]}" "$IMAGE_NAME"
 else
     echo "[INFO] Building ${BOARD}/${VARIANT} in container (engine: ${ENGINE})"
-    INNER_CMD="./build/build-inner.sh ${BOARD} ${VARIANT} ${PASSTHROUGH_ARGS[*]}"
+    INNER_CMD="./build/build-inner.sh ${BOARD} ${VARIANT} ${PASSTHROUGH_ARGS[*]} ${EXTERNAL_INNER_ARGS[*]}"
     exec $ENGINE "${RUN_ARGS[@]}" "$IMAGE_NAME" -c "$INNER_CMD"
 fi

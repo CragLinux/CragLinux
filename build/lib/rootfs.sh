@@ -257,45 +257,27 @@ binary_skew_report() {
 # 'tar -xzf' extracted nothing and the build "passed" with an empty rootfs.
 # apk install failures are hard errors now.
 
-# Apply overlay directories in order
+# Apply overlays across every layer, in merge order (docs/08 §4).
+#
+# Layer-driven successor to the former single-external overlay walk: the
+# authoritative merge order — boards/common -> external trees (ascending
+# tree.toml priority) -> board -> variant — lives in the ordered layer list
+# resolved by build/lib/layers.py and persisted at $LAYERS_JSON. The actual
+# file-by-file, last-writer-wins application (with per-file override
+# provenance logging and the phase-1 code/config fence seam) is
+# merge_overlays() in build/lib/merge.sh, which this delegates to;
+# process_templates() (below) runs there afterwards.
+#
+# The resolved board dir and variant file are carried by $LAYERS_JSON, so this
+# takes only the rootfs dir. With NO external trees the layer list is exactly
+# [core, board, variant], so the overlay result is byte-for-byte what the old
+# common->board->variant rsync produced (verified: no overlay ships empty or
+# non-0755 dirs, and the lone symlink is copied with cp -a).
 apply_overlays() {
     local rootfs_dir="$1"
-    local board_dir="$2"
-    local variant_name="$3"
-    local external_dir="${4:-}"
+    local layers_json="${LAYERS_JSON:?apply_overlays requires \$LAYERS_JSON (exported by build-inner.sh)}"
 
-    log_step "Applying overlays..."
-
-    # 1. Common overlay
-    local common_overlay="${PROJECT_ROOT}/boards/common/overlay"
-    if [ -d "$common_overlay" ]; then
-        log_info "  Applying common overlay"
-        rsync -a "$common_overlay/" "$rootfs_dir/"
-    fi
-
-    # 2. External global overlay (if set)
-    if [ -n "$external_dir" ] && [ -d "${external_dir}/overlay" ]; then
-        log_info "  Applying external global overlay"
-        rsync -a "${external_dir}/overlay/" "$rootfs_dir/"
-    fi
-
-    # 3. Board overlay
-    if [ -d "${board_dir}/overlay" ]; then
-        log_info "  Applying board overlay"
-        rsync -a "${board_dir}/overlay/" "$rootfs_dir/"
-    fi
-
-    # 4. Variant overlay (if exists)
-    local variant_overlay="${board_dir}/variants/${variant_name}/overlay"
-    if [ -d "$variant_overlay" ]; then
-        log_info "  Applying variant overlay"
-        rsync -a "$variant_overlay/" "$rootfs_dir/"
-    fi
-
-    # Process .template files
-    process_templates "$rootfs_dir"
-
-    log_info "Overlays applied"
+    merge_overlays "$layers_json" "$rootfs_dir"
 }
 
 # Process files ending in .template with envsubst
@@ -315,36 +297,42 @@ process_templates() {
     fi
 }
 
-# Run hook scripts from common and board directories
+# Run hook scripts from every layer, interleaved by numeric prefix (docs/08 §4).
+#
+# The hook set and its execution order come from the merged layer list: hooks
+# from boards/common, external trees, and the board are interleaved by their
+# numeric filename prefix ACROSS all layers (10-core.sh, 30-treeA.sh,
+# 60-treeB.sh, 90-board.sh run in numeric order regardless of which layer
+# contributed them; a tie on the number falls back to merge order). That
+# ordering lives in merge_hooks() (build/lib/merge.sh), which reads
+# $LAYERS_JSON; run_hooks is the consumer that sources each path in the
+# printed order.
+#
+# With NO external trees the layer list is [core, board] for hooks and the
+# board's own hooks are numbered above every common hook (50+ vs 00-30), so
+# the interleave collapses to "all common hooks then the board hook" — exactly
+# the historical order. The board layer's hooks come from $LAYERS_JSON.
 run_hooks() {
     local rootfs_dir="$1"
-    local board_dir="$2"
+    local layers_json="${LAYERS_JSON:?run_hooks requires \$LAYERS_JSON (exported by build-inner.sh)}"
 
     log_step "Running hooks..."
 
-    # Export rootfs dir for hooks
+    # Documented hook environment (docs/08 §8 stability contract).
     export ROOTFS_DIR="$rootfs_dir"
 
-    # 1. Common hooks
-    local common_hooks="${PROJECT_ROOT}/boards/common/hooks"
-    if [ -d "$common_hooks" ]; then
-        for hook in "$common_hooks"/*.sh; do
-            [ -f "$hook" ] || continue
-            log_info "  Running: common/$(basename "$hook")"
-            source "$hook"
-        done
-    fi
+    local hook count=0 label
+    while IFS= read -r hook; do
+        [ -f "$hook" ] || continue
+        # Label as "<layer-dir>/hooks/<file>" for readable provenance in the log.
+        label="$(basename "$(dirname "$(dirname "$hook")")")/hooks/$(basename "$hook")"
+        log_info "  Running: ${label}"
+        # shellcheck disable=SC1090  # hook path resolved at runtime from the layer list
+        source "$hook"
+        count=$((count + 1))
+    done < <(merge_hooks "$layers_json")
 
-    # 2. Board hooks
-    if [ -d "${board_dir}/hooks" ]; then
-        for hook in "${board_dir}/hooks"/*.sh; do
-            [ -f "$hook" ] || continue
-            log_info "  Running: $(basename "$(dirname "$board_dir")")/$(basename "$hook")"
-            source "$hook"
-        done
-    fi
-
-    log_info "Hooks complete"
+    log_info "Hooks complete (${count} hook(s))"
 }
 
 # Install kernel image, modules, and DTBs into rootfs

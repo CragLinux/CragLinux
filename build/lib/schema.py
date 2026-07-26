@@ -229,6 +229,21 @@ VARIANT_SCHEMA = {
     },
 }
 
+# External-tree identity schema (docs/08 §2). One [tree] section at the root
+# of every external tree's tree.toml. `priority` orders trees among each
+# other (lower merges first, higher wins — docs/08 §4). `astro_min`/`astro_max`
+# are inclusive calver bounds ("2026.10"); an empty string means unbounded.
+# The version gate is enforced in config.py (check_astro_version).
+TREE_SCHEMA = {
+    "tree": {
+        "_required_section": True,
+        "name": {"type": str, "required": True},
+        "priority": {"type": int, "required": False, "default": 50},
+        "astro_min": {"type": str, "required": False, "default": ""},
+        "astro_max": {"type": str, "required": False, "default": ""},
+    },
+}
+
 # User entry schema (for items in users.create list)
 USER_ENTRY_SCHEMA = {
     "name": {"type": str, "required": True},

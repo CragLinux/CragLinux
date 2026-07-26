@@ -15,6 +15,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/packages.sh"
 source "${SCRIPT_DIR}/lib/rootfs.sh"
+source "${SCRIPT_DIR}/lib/merge.sh"
 source "${SCRIPT_DIR}/lib/image.sh"
 source "${SCRIPT_DIR}/lib/bundle.sh"
 
@@ -29,11 +30,16 @@ shift 2 || die "Usage: $0 <board> <variant> [--step=<step>] [--clean]"
 STEP=""
 CLEAN=false
 PACKAGES_MODE_CLI=""
+# --external=PATH is REPEATABLE (docs/08 §4 multi-tree). Accumulated verbatim
+# and passed through to layers.py; $ASTRO_EXTERNAL (colon-separated) is honored
+# there too.
+EXTERNAL_ARGS=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --step=*) STEP="${1#--step=}" ;;
         --packages-mode=*) PACKAGES_MODE_CLI="${1#--packages-mode=}" ;;
+        --external=*) EXTERNAL_ARGS+=("$1") ;;
         --clean)  CLEAN=true ;;
     esac
     shift
@@ -44,27 +50,29 @@ if [ -n "$PACKAGES_MODE_CLI" ] && [ "$PACKAGES_MODE_CLI" != "binary" ] && [ "$PA
 fi
 
 ##############################################################################
-# Locate board and variant configs
+# Discover external trees + resolve the ordered layer list (docs/08 §2, §4)
+#
+# layers.py is THE single source of truth for merge order. It parses the
+# --external list (+ $ASTRO_EXTERNAL), version-gates each tree.toml, orders
+# trees by priority, and resolves BOARD_DIR / VARIANT_FILE (either may live in
+# a tree). The emitted JSON array (LAYERS_JSON, exported below) is what the
+# merge engine (build/lib/merge.sh) consumes. With NO external trees this
+# yields exactly the historical in-tree paths — the no-tree build is unchanged.
 ##############################################################################
 
-EXTERNAL_DIR="${ASTRO_EXTERNAL:-}"
+require_command python3
+require_command jq
 
-# Search for board: external first, then in-tree
-BOARD_DIR=""
-if [ -n "$EXTERNAL_DIR" ] && [ -f "${EXTERNAL_DIR}/boards/${BOARD}/board.toml" ]; then
-    BOARD_DIR="${EXTERNAL_DIR}/boards/${BOARD}"
-    log_info "Using external board: ${BOARD_DIR}"
-elif [ -f "${PROJECT_ROOT}/boards/${BOARD}/board.toml" ]; then
-    BOARD_DIR="${PROJECT_ROOT}/boards/${BOARD}"
-else
+LAYERS_ARR=$(python3 "${SCRIPT_DIR}/lib/layers.py" \
+    --board "$BOARD" --variant "$VARIANT" "${EXTERNAL_ARGS[@]}") || \
+    die "external-tree / layer resolution failed"
+
+BOARD_DIR=$(echo "$LAYERS_ARR" | jq -r 'first(.[] | select(.kind=="board")).path')
+VARIANT_FILE=$(echo "$LAYERS_ARR" | jq -r 'first(.[] | select(.kind=="variant")).path')
+[ -n "$BOARD_DIR" ] && [ "$BOARD_DIR" != "null" ] && [ -f "${BOARD_DIR}/board.toml" ] || \
     die "Board not found: ${BOARD}"
-fi
-
-# Locate variant config
-VARIANT_FILE="${BOARD_DIR}/variants/${VARIANT}.toml"
-if [ ! -f "$VARIANT_FILE" ]; then
-    die "Variant not found: ${VARIANT_FILE}"
-fi
+[ -n "$VARIANT_FILE" ] && [ "$VARIANT_FILE" != "null" ] && [ -f "$VARIANT_FILE" ] || \
+    die "Variant not found: ${VARIANT}"
 
 ##############################################################################
 # Load and validate configs
@@ -72,15 +80,22 @@ fi
 
 log_step "Loading configuration: ${BOARD}/${VARIANT}"
 
-require_command python3
-require_command jq
-
-# Validate and load board config as JSON
-BOARD_CONFIG_JSON=$(python3 "${SCRIPT_DIR}/lib/config.py" board "${BOARD_DIR}/board.toml" --format=json)
+# Load board/variant config through the external-tree deep-merge (docs/08 §4):
+# merge.py folds every tree layer's board.toml / variant .toml fragment (deep
+# merge per table, scalars last-wins, lists replace except [packages].install
+# which accumulates) then runs config.py's validate/apply_defaults/derive
+# pipeline. With NO --external tree the fragment stack is the single resolved
+# file, so the emitted JSON is byte-identical to `config.py board|variant`
+# (regression-tested in build/lib/test_merge_board_variant.py) — the no-tree
+# build is unchanged.
+BOARD_CONFIG_JSON=$(python3 "${SCRIPT_DIR}/lib/merge.py" board \
+    --board "$BOARD" --variant "$VARIANT" "${EXTERNAL_ARGS[@]}") || \
+    die "board config merge failed"
 export BOARD_CONFIG_JSON
 
-# Validate and load variant config as JSON
-VARIANT_CONFIG_JSON=$(python3 "${SCRIPT_DIR}/lib/config.py" variant "$VARIANT_FILE" --format=json)
+VARIANT_CONFIG_JSON=$(python3 "${SCRIPT_DIR}/lib/merge.py" variant \
+    --board "$BOARD" --variant "$VARIANT" "${EXTERNAL_ARGS[@]}") || \
+    die "variant config merge failed"
 export VARIANT_CONFIG_JSON
 
 # Extract key values for shell use
@@ -114,7 +129,7 @@ export ROOTFS_TYPE
 
 # Export for hooks
 export BOARD BOARD_NAME BOARD_ARCH VARIANT VARIANT_NAME KERNEL_PACKAGE KERNEL_CMDLINE BOOTLOADER_TYPE
-export PROJECT_ROOT EXTERNAL_DIR BOARD_DIR
+export PROJECT_ROOT BOARD_DIR
 
 # Services (space-separated for hooks)
 SERVICES_ENABLE=$(echo "$VARIANT_CONFIG_JSON" | jq -r '.services.enable // [] | join(" ")')
@@ -153,6 +168,12 @@ if [ "$CLEAN" = true ]; then
 fi
 
 mkdir -p "$BUILD_OUTPUT"
+
+# Persist the ordered layer list for the merge engine + stages (docs/08 §4).
+# LAYERS_JSON is the file every merge.sh / merge.py consumer reads.
+LAYERS_JSON="${BUILD_OUTPUT}/layers.json"
+printf '%s\n' "$LAYERS_ARR" > "$LAYERS_JSON"
+export LAYERS_JSON
 
 ##############################################################################
 # Step: Toolchain
@@ -237,7 +258,12 @@ fi
 if should_run_step "packages"; then
     log_step "Resolving package list..."
 
-    resolve_package_list "$BOARD_DIR" "$VARIANT_CONFIG_JSON" "$EXTERNAL_DIR" > "$MANIFEST_FILE"
+    # Additive-only merge across every layer (docs/08 §4): boards/common +
+    # each tree's + the board's packages.list, then board.toml [firmware].packages
+    # and variant [packages].install (which accumulates), deduped keeping first
+    # occurrence. Reads $BOARD_CONFIG_JSON/$VARIANT_CONFIG_JSON from the env.
+    # With no tree this is diff-identical to the former resolve_package_list.
+    merge_packages_list "$LAYERS_JSON" > "$MANIFEST_FILE"
 
     log_info "Package manifest ($(wc -l < "$MANIFEST_FILE") packages):"
     while IFS= read -r pkg; do

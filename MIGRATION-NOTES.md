@@ -1733,3 +1733,108 @@ existing assertion kept its strength, cases were only added.
   `--case=api-negative` verdict in 40 s.
 - Stale-QEMU preflight verified live: probing a board dir while its
   guest ran refused with the crisp §20 message from a second container.
+
+## 22. M4 phase 0: the external-tree merge engine (2026-07-24)
+
+The foundation of the M4 "Extensible" milestone (docs/08): products stop
+forking Astro and instead compose it with pinned external trees. Phase 0
+is the full §4 layering contract — multi-tree composition with explicit
+priority, all layering rules, provenance logging — wired into the live
+build. The fence, service manifests, SDK and `astro deploy` (phases 1–3)
+are deliberately out of scope; the overlay merge carries a marked
+PHASE-1 FENCE SEAM where the code/config check slots in.
+
+### The spine: one ordered layer list, everyone walks it
+
+`build/lib/layers.py` is the single source of truth. Given the board,
+the variant, and zero or more `--external` trees (+ `$ASTRO_EXTERNAL`,
+colon-separated), it emits the **ordered layer list** — a JSON array
+ALREADY in final merge order (`boards/common → trees ascending
+tree.toml priority → board → variant`), persisted at
+`$LAYERS_JSON = build/state/images/<board>-<variant>/layers.json`.
+`array[0]` applies first (lowest precedence), `array[-1]` wins. Every
+consumer — shell and Python — walks it in order and never re-sorts.
+Tree band ties break by input order (env before CLI) then path; a tree
+may PROVIDE a board/variant (`<tree>/boards/<b>/`, `<tree>/variants/<v>.toml`,
+highest-priority wins) or LAYER onto an in-tree one.
+
+### What got wired (the phase-0 fills were reference impls; this connected them)
+
+- **Config load** (`build-inner.sh`) now goes through
+  `merge.py board|variant` instead of `config.py`: it deep-merges every
+  contributing board.toml / variant .toml fragment across layers (deep
+  merge per table, scalars last-wins, **lists REPLACE** except
+  `[packages].install` which **accumulates**+dedupes) then runs the SAME
+  validate/apply_defaults/derive pipeline `config.py` uses — single-sourced
+  in `config.py:finalize_board_config/finalize_variant_config` so the two
+  paths cannot drift.
+- **Package manifest** (`build-inner.sh`) now comes from
+  `merge_packages_list` (merge.sh): additive-only concatenation across
+  `boards/common` + every tree's + the board's `packages.list`, then
+  board `[firmware].packages` and variant `[packages].install`, deduped
+  keeping first occurrence. **No removal syntax** — masking a base
+  package is forbidden (docs/08 §4; the docs/02 tiers are the way to ship
+  less). The old `resolve_package_list` was deleted.
+- **Overlays + hooks** (rootfs stage): `apply_overlays`/`run_hooks` in
+  `rootfs.sh` delegate to `merge_overlays`/`merge_hooks`. Overlays apply
+  file-by-file, LAST-WRITER-WINS, and LOG every override with provenance
+  (`overlay: acme-product/etc/acme/foo overrides acme-common/…`). Hooks
+  from all layers interleave by numeric filename prefix ACROSS layers
+  (`10-core … 15-treeB … 30-treeA … 90-board`), tie → layer order.
+- **cports collections**: each tree's `cports/` is an additional cbuild
+  collection layered on the fork (AD-027). `merge_cports_collections`
+  (merge.sh) is the authoritative detector — ascending priority, loudly
+  flags a tree template shadowing a fork template, HARD-ERRORS when two
+  trees provide the same template name with differing bytes (byte-
+  identical → warn+allow). `packages.sh:overlay_tree_cports` consumes its
+  plan, copies each template over the materialized fork, relinks
+  subpackages, and `reset_cports_tree` restores the pin. Tree templates
+  have no binary equivalent, so they are always source-built.
+
+### Traps / decisions (recorded)
+
+- **The qcow2 by-reference bug** (found by the config.py fill's tests,
+  fixed here on the live path): `apply_defaults` handed out schema
+  default lists BY REFERENCE and `derive_board_defaults` did
+  `formats.append("qcow2")` in place — mutating `BOARD_SCHEMA` and
+  poisoning every later board in the same interpreter. Invisible in the
+  one-board-per-process CLI; the merge engine loads many boards per run.
+  Now deep-copies mutable defaults. The delegation to `finalize_*` also
+  fixed a divergence where `merge.py` fed the POST-defaults dict to
+  `derive_board_defaults` and wrongly added qcow2 to rpi4 (no `[qemu]`).
+- **Byte-identity is the contract for the no-tree path**: with no
+  `--external`, the layer list collapses to `[core, board(, variant)]` and
+  every merge function reduces to exactly the pre-phase-0 behavior. This
+  was the hard constraint (all fleet CI must stay green) and is proven,
+  not asserted (below).
+- `EXTERNAL_DIR` (the primitive single-overlay var) is fully removed —
+  its overlay path is superseded by `$LAYERS_JSON`.
+
+### Verified (all foreground-observed)
+
+- **No-tree byte-identity** (astro-builder container): `config.py` vs
+  `merge.py` board+variant JSON identical for all four boards ×
+  dev/prod; `resolve_package_list` (git HEAD) vs `merge_packages_list`
+  identical for qemu-armv7/aarch64/x86_64 dev, rpi4 dev, qemu-armv7 prod;
+  `merge_hooks` for rpi4/dev yields the historical common-00→30-then-
+  board-50 order.
+- **Full no-tree build** `./build/astro-build.sh qemu-armv7 dev`:
+  completes green through rootfs → ext4 image → qcow2 → RAUC bundle;
+  `layers.json` = `[core, board, variant]`, 27-package manifest, 5 hooks.
+- **boot-smoke qemu-armv7 dev: PASS 46 s, zero [FAILED]** (was 48 s in
+  §21) — the no-tree image boots to boot-success + login unchanged.
+- **Multi-tree fixture** (two throwaway trees, acme-common@30 +
+  acme-product@60, passed to `--external` in REVERSE priority order to
+  prove priority — not CLI order — decides): layer order
+  `core → acme-common → acme-product → board → variant`; both trees'
+  sentinel packages present with treeA before treeB and base `musl`
+  deduped; `defaults.conf` resolves to treeB with the provenance line
+  logged and treeA-only files surviving; hooks interleave
+  `…10, 15-treeB, 20, 30-common, 30-treeA, 60-treeB`; version gate
+  bypassed for `0.0.0-dev`, passes at `ASTRO_VERSION=2026.10` (≥ min
+  2026.05), fails fast at `2026.01`; cports plan resolves
+  `main/acme-meta → acme-common`, the template is source-build-listed,
+  two differing same-name trees hard-error, byte-identical dup warns.
+- shellcheck clean (repo severity/exclusions) over all touched shell;
+  ruff clean on `build/lib`; `test_merge_board_variant.py` 15/15 green
+  (now including rpi4 through the merge wrapper).
