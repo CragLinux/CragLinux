@@ -110,6 +110,17 @@ step "lint-config" lint_config
 step "lint-zig"    lint_zig
 
 ##############################################################################
+# 1b. build/lib unit suites (merge engine M4p0; fence + service manifests M4p1)
+##############################################################################
+build_lib_unit() {
+    in_container 'python3 build/lib/test_merge_board_variant.py \
+        && python3 build/lib/test_service_manifest.py \
+        && ./build/lib/test_fence.sh \
+        && ./build/lib/test_service_manifests_hook.sh'
+}
+step "build-lib-unit" build_lib_unit
+
+##############################################################################
 # 2. astrod unit tests + binary budget (docs/06 §3)
 ##############################################################################
 astrod_unit() {

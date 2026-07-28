@@ -112,6 +112,148 @@ merge_hooks() {
 }
 
 ##############################################################################
+# THE CODE/CONFIG FENCE (docs/08 §3, AD-017)
+#
+# Apps ship as apk packages; overlays are NON-EXECUTABLE CONFIGURATION ONLY.
+# The fence is MECHANICAL, not honor-system: merge_overlays calls fence_check
+# on EVERY incoming overlay file (from EVERY layer — core, tree, board,
+# variant) and the build DIES if that file would install executable code via
+# the overlay path. Two independent rejection rules:
+#
+#   (1) PATH  — a file landing under usr/bin/ or usr/sbin/ is ALWAYS rejected;
+#       a file under usr/lib/ is rejected UNLESS it sits in a known,
+#       non-executable data/config/hook directory (FENCE_USR_LIB_ALLOW below).
+#       usr/lib/os-release is the one allowed exact file.
+#   (2) ELF   — a regular file whose first four bytes are the ELF magic
+#       (7f 45 4c 46) is rejected ANYWHERE in the overlay, whatever its path.
+#
+# Symlinks are PATH-checked (rule 1) but never ELF-probed (rule 2 would read
+# the link target's bytes): the code a symlink points at must itself live in
+# an allowed location to have passed the fence in its own right.
+#
+# MERGED-USR: this image is merged-/usr (base-files ships bin -> usr/bin,
+# sbin -> usr/sbin, lib -> usr/lib as symlinks; see rootfs.sh). An overlay
+# dropping "bin/evil" therefore lands at "usr/bin/evil" on the live system and
+# would EVADE a fence that only matched the "usr/" spelling. Rule 1 closes this
+# by canonicalizing a leading bin/, sbin/, lib/ (and lib64/) segment to its
+# usr/ form BEFORE the path test, so both spellings of the same directory are
+# fenced identically. This is enforcement of the exact AD-017 rule, not a new
+# fenced location. (usr/local/** and opt/** are other executable-capable dirs
+# outside AD-017's enumeration — see the FOLLOWUP note in the audit if that
+# ever needs tightening.)
+#
+# FENCE_USR_LIB_ALLOW — the allowed usr/lib data/config/hook subtrees. Each
+# entry X permits "usr/lib/X" and "usr/lib/X/**". These are distro MECHANISM
+# directories (dinit service TEXT files, tmpfiles/sysctl/modules-load/udev
+# rules, firmware blobs, os-release drop-ins, the astro platform-script dir,
+# the dhcpcd hook dir), NOT places an app drops a binary. Keep this list
+# TIGHT and documented — every entry widens the fence.
+#
+# AUDIT (M4 phase 1): every existing Astro overlay (boards/common/overlay and
+# each boards/*/overlay) passes this fence. The one non-obvious entry is
+# `dhcpcd-hooks`: boards/common ships usr/lib/dhcpcd-hooks/60-astro-lease, a
+# SYMLINK into the allowed usr/lib/astro/dhcpcd-hook.sh. dhcpcd only sources
+# hooks from its compiled-in hook dir (usr/lib/dhcpcd-hooks), so the wiring
+# legitimately must live under usr/lib — it is a platform mechanism dir, not
+# app code (the actual script is in the allowlisted usr/lib/astro/). This is
+# recorded as a real audit finding, not a silent carve-out.
+#
+# Full audit result (M4 phase 1 harden pass): 34 overlay entries across
+# boards/common/overlay (the only populated overlay tree; boards/*/overlay are
+# empty). ALL pass. Zero ELF files anywhere. Notable entries verified:
+#   - usr/lib/astro/*.sh                -> allowed (astro platform-script dir)
+#   - usr/lib/dinit.d/* (via etc + usr) -> dinit service TEXT, allowed
+#   - usr/lib/{tmpfiles.d,os-release}   -> allowed data/config
+#   - usr/lib/dhcpcd-hooks/60-astro-lease -> SYMLINK, allowlisted dir (above)
+#   - usr/libexec/astro/mark-good       -> #!/bin/sh TEXT, and usr/libexec is
+#                                          NOT a fenced path (AD-017 fences
+#                                          usr/{bin,sbin,lib} only); passes.
+# FOLLOWUP (surfaced, NOT actioned here — outside AD-017's enumeration): the
+# fence does not cover usr/local/{bin,sbin,lib}/** or opt/** (executable-capable
+# but not merged-/usr aliases of the fenced dirs). No overlay uses them today.
+# If a future tree tries to, the integrate agent should decide whether AD-017's
+# path set grows; left as a documented gap rather than a silent expansion.
+##############################################################################
+FENCE_ELF_MAGIC=$'\x7fELF'
+FENCE_USR_LIB_ALLOW=(
+    astro           # usr/lib/astro/**         platform helper scripts (docs/02 §7)
+    dinit.d         # usr/lib/dinit.d/**       dinit service TEXT files (allowed, §3)
+    tmpfiles.d      # usr/lib/tmpfiles.d/**    systemd-tmpfiles config
+    sysctl.d        # usr/lib/sysctl.d/**      kernel sysctl config
+    modules-load.d  # usr/lib/modules-load.d/** module autoload lists
+    os-release.d    # usr/lib/os-release.d/**  os-release drop-ins
+    udev/rules.d    # usr/lib/udev/rules.d/**  udev rules (text)
+    firmware        # usr/lib/firmware/**      device firmware blobs (data)
+    dhcpcd-hooks    # usr/lib/dhcpcd-hooks/**  dhcpcd lease hook dir (see AUDIT above)
+)
+
+# _fence_die <dest_relpath> <layer_name> <why>
+# Emit the precise AD-017 error (file + layer + reason + the fix) and exit.
+_fence_die() {
+    die "code/config fence (AD-017, docs/08 §3): overlay layer '${2}' file '${1}' — ${3}.
+       Fix: ship it as an apk TEMPLATE in the tree's cports/ collection
+       (docs/08 §3, AD-017) so it installs into the image's apk world;
+       overlays are restricted to non-executable configuration."
+}
+
+# fence_check <incoming_file_abs> <dest_relpath> <layer_name>
+# Dies (exit 1) if <dest_relpath>/<incoming_file_abs> violates AD-017.
+# <dest_relpath> is relative to the rootfs (no leading slash), e.g.
+# "usr/bin/foo" or "etc/acme/x.conf". Returns 0 on a passing file.
+fence_check() {
+    local file="$1" rel="$2" layer="$3"
+
+    # ---- rule 1: fenced install paths ---------------------------------------
+    # Canonicalize merged-/usr aliases to their usr/ spelling first, so bin/,
+    # sbin/, lib/, lib64/ are fenced identically to usr/bin, usr/sbin, usr/lib
+    # (they ARE those dirs on this image — see MERGED-USR note above). The
+    # ORIGINAL rel is what we report to the operator; canon drives the test.
+    local canon="$rel"
+    case "$rel" in
+        bin/*|sbin/*|lib/*) canon="usr/${rel}" ;;
+        lib64/*)            canon="usr/lib/${rel#lib64/}" ;;
+    esac
+    case "$canon" in
+        usr/bin/*|usr/sbin/*)
+            _fence_die "$rel" "$layer" \
+                "overlay files may not install under (usr/)bin or (usr/)sbin — executable path"
+            ;;
+        usr/lib/os-release)
+            : ;;  # the one allowed exact file
+        usr/lib/*)
+            # Prefix match is /-anchored so usr/lib/astro/ is allowed but a
+            # sibling like usr/lib/astro-evil/ (which shares the "astro" prefix
+            # but is a DIFFERENT dir) is NOT: entry must equal $sub exactly, or
+            # be a full leading path segment (entry + "/").
+            local sub="${canon#usr/lib/}" allowed="" entry
+            for entry in "${FENCE_USR_LIB_ALLOW[@]}"; do
+                if [ "$sub" = "$entry" ] || [ "${sub#"${entry}"/}" != "$sub" ]; then
+                    allowed=1; break
+                fi
+            done
+            [ -n "$allowed" ] || _fence_die "$rel" "$layer" \
+                "(usr/)lib is fenced; not in a known data/config dir (allowed subtrees: ${FENCE_USR_LIB_ALLOW[*]}; plus the exact file usr/lib/os-release)"
+            ;;
+    esac
+
+    # ---- rule 2: no ELF binaries anywhere -----------------------------------
+    # Regular files only: skip symlinks (a link's first bytes are the target's,
+    # and that target is fence-checked in its own, allowed, location) and skip
+    # anything that is not a plain file (dirs/fifos/devices never reach here
+    # from find's -type f/-l, but guard anyway). LC_ALL=C keeps the 4-byte read
+    # byte-exact regardless of the caller's locale; the ELF magic contains no
+    # NUL/newline so command substitution preserves it verbatim.
+    if [ ! -L "$file" ] && [ -f "$file" ]; then
+        local magic
+        magic=$(LC_ALL=C head -c4 "$file" 2>/dev/null)
+        if [ "$magic" = "$FENCE_ELF_MAGIC" ]; then
+            _fence_die "$rel" "$layer" \
+                "file is an ELF binary (magic 7f 45 4c 46); apps ship as apk, never as overlay files"
+        fi
+    fi
+}
+
+##############################################################################
 # merge_overlays <layers_json> <rootfs_dir>
 #
 # Contract (docs/08 §4, overlays): apply each layer's overlay tree in merge
@@ -148,12 +290,11 @@ merge_overlays() {
         while IFS= read -r -d '' f; do
             rel="${f#"$src"/}"
 
-            # ---- PHASE-1 FENCE SEAM (docs/08 §3, AD-017) --------------------
-            # The M4 phase-1 agent inserts the code/config fence HERE: reject
-            # overlay files under usr/bin, usr/lib (bar os-release.d-style data
-            # dirs) or any ELF, failing the build. Phase 0 applies config-only
-            # overlays verbatim.
-            # -----------------------------------------------------------------
+            # ---- CODE/CONFIG FENCE (docs/08 §3, AD-017) --------------------
+            # Per-incoming-file, EVERY layer. Dies the build if this overlay
+            # file would install executable code (fenced path or ELF). See
+            # fence_check + FENCE_USR_LIB_ALLOW above.
+            fence_check "$f" "$rel" "$name"
 
             prev="${_ov_owner[$rel]:-}"
             [ -n "$prev" ] && \

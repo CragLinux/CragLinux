@@ -16,6 +16,7 @@ const portal = @import("portal.zig");
 const wifi_mod = @import("wifi.zig");
 const provision = @import("provision.zig");
 const fsutil = @import("fsutil.zig");
+const services = @import("services.zig");
 
 /// Only the verbs the API uses (docs/06 §4); parse returns null for others
 /// so dispatch can answer 405 rather than crash on e.g. CONNECT.
@@ -161,6 +162,16 @@ pub const routes: []const Route = &.{
     .{ .method = .GET, .path = "/api/v1/network/wifi/ap", .handler = getWifiAp },
     .{ .method = .PUT, .path = "/api/v1/network/wifi/ap", .handler = putWifiAp },
     .{ .method = .POST, .path = "/api/v1/system/factory-reset", .handler = postFactoryReset },
+    // M4 phase-1 services group (docs/06 §5.4, docs/08 §5): deliberately
+    // narrow — GET lists ONLY api_controllable services; the action verbs are
+    // allowed ONLY for services whose manifest set api_controllable=true, and
+    // an unknown/non-controllable name answers 404 (not 403). All four are
+    // 501 stubs until services.global is wired (services.zig); the interior
+    // {name} param is bound by the segment-wise matchPath above.
+    .{ .method = .GET, .path = "/api/v1/services", .handler = getServices },
+    .{ .method = .POST, .path = "/api/v1/services/{name}/restart", .handler = postServiceRestart },
+    .{ .method = .POST, .path = "/api/v1/services/{name}/stop", .handler = postServiceStop },
+    .{ .method = .POST, .path = "/api/v1/services/{name}/start", .handler = postServiceStart },
 };
 
 /// The AD-014 unauthenticated SUBSET served on the AP provisioning
@@ -200,23 +211,37 @@ pub const portal_routes: []const Route = &.{
     .{ .method = .GET, .path = "/ncsi.txt", .handler = portal.probeRedirect },
 };
 
-/// Match a route path against a request path. Exact match, or — when the
-/// route ends in a "{param}" segment — prefix match binding the request's
-/// final segment (which must be non-empty and contain no further '/').
-/// Returns the bound param (null for exact routes), or null wrapped in
-/// no-match. Deliberately minimal: one trailing parameter only.
+/// Match a route path against a request path, segment by segment. A route
+/// segment written "{param}" binds the corresponding request segment (which
+/// must be non-empty); every other segment must match literally, and the two
+/// paths must have the same number of segments. Returns the bound param (null
+/// when the route has none), or null wrapped in no-match.
+///
+/// Deliberately minimal: at most ONE "{param}" segment per route (every route
+/// in the table has one or none), but it may appear in ANY position — trailing
+/// (operations/{id}, ethernet/{iface}) OR interior (services/{name}/restart).
+/// The single-param behavior is exactly the old trailing-only matcher for the
+/// existing routes: same-segment-count + non-empty binding reproduces the old
+/// "no deeper '/', non-empty final segment" rules.
 fn matchPath(route_path: []const u8, req_path: []const u8) ?(?[]const u8) {
-    if (std.mem.endsWith(u8, route_path, "}")) {
-        const brace = std.mem.lastIndexOfScalar(u8, route_path, '{') orelse return null;
-        const prefix = route_path[0..brace]; // includes the trailing '/'
-        if (!std.mem.startsWith(u8, req_path, prefix)) return null;
-        const rest = req_path[prefix.len..];
-        if (rest.len == 0) return null;
-        if (std.mem.indexOfScalar(u8, rest, '/') != null) return null;
-        return rest;
+    var r_it = std.mem.splitScalar(u8, route_path, '/');
+    var q_it = std.mem.splitScalar(u8, req_path, '/');
+    var param: ?[]const u8 = null;
+    while (true) {
+        const r = r_it.next();
+        const q = q_it.next();
+        if (r == null and q == null) break; // same segment count: matched
+        if (r == null or q == null) return null; // different segment count
+        const rs = r.?;
+        const qs = q.?;
+        if (rs.len >= 2 and rs[0] == '{' and rs[rs.len - 1] == '}') {
+            if (qs.len == 0) return null; // a param segment must be non-empty
+            param = qs;
+        } else if (!std.mem.eql(u8, rs, qs)) {
+            return null;
+        }
     }
-    if (std.mem.eql(u8, route_path, req_path)) return @as(?[]const u8, null);
-    return null;
+    return param;
 }
 
 /// Never returns an error: handler failures become 500 problem+json so the
@@ -488,6 +513,79 @@ fn notImplemented(ctx: *Context) anyerror!Response {
     });
 }
 
+// ---- services group (docs/06 §5.4, docs/08 §5) — M4 phase-1 stubs ---------
+// The narrowness lives in services.zig: list() shows only api_controllable
+// services and the action verbs 404 anything not api_controllable (never 403).
+// While services.global is unwired (unit builds; the fill installs it at
+// startup) every handler answers 501, matching the network/provisioning
+// groups' degradation contract and keeping the conformance gate meaningful.
+
+/// GET /api/v1/services — app-controllable services: name, state, pid,
+/// restart count. 501 until the registry is wired.
+fn getServices(ctx: *Context) anyerror!Response {
+    const reg = services.global orelse return notImplemented(ctx);
+    const list = reg.list(ctx.allocator) catch |err| switch (err) {
+        error.DinitUnavailable => return problemResponse(ctx, .{
+            .type = "urn:astro:problem:dinit-unavailable",
+            .title = "Service Unavailable",
+            .status = 503,
+            .detail = "cannot reach the dinit control socket",
+        }),
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return notImplemented(ctx),
+    };
+    return .{ .status = 200, .body = try std.json.Stringify.valueAlloc(ctx.allocator, list, .{}) };
+}
+
+/// POST /api/v1/services/{name}/restart — allowed only for api_controllable
+/// services; a non-controllable/unknown name is 404 (UnknownService), NOT 403.
+fn postServiceRestart(ctx: *Context) anyerror!Response {
+    return serviceAction(ctx, .restart);
+}
+
+/// POST /api/v1/services/{name}/stop — see postServiceRestart.
+fn postServiceStop(ctx: *Context) anyerror!Response {
+    return serviceAction(ctx, .stop);
+}
+
+/// POST /api/v1/services/{name}/start — see postServiceRestart.
+fn postServiceStart(ctx: *Context) anyerror!Response {
+    return serviceAction(ctx, .start);
+}
+
+const ServiceAction = enum { restart, stop, start };
+
+/// Shared body for the three action verbs. Spine: 501 while unwired. The fill
+/// dispatches on `action` into services.global.?.{restart,stop,start}(name)
+/// and maps the typed errors: UnknownService -> 404 (the 404-not-403 contract,
+/// docs/06 §5.4), DinitUnavailable -> 503, success -> 202/204.
+fn serviceAction(ctx: *Context, action: ServiceAction) anyerror!Response {
+    const reg = services.global orelse return notImplemented(ctx);
+    const name = ctx.param.?;
+    (switch (action) {
+        .restart => reg.restart(name),
+        .stop => reg.stop(name),
+        .start => reg.start(name),
+    }) catch |err| switch (err) {
+        // 404 NOT 403 — a non-api_controllable name is indistinguishable
+        // from a nonexistent one on this narrow surface (docs/06 §5.4).
+        error.UnknownService => return problemResponse(ctx, .{
+            .type = "urn:astro:problem:not-found",
+            .title = "Not Found",
+            .status = 404,
+            .detail = try std.fmt.allocPrint(ctx.allocator, "no api-controllable service {s} (docs/06 \u{a7}5.4)", .{name}),
+        }),
+        error.DinitUnavailable => return problemResponse(ctx, .{
+            .type = "urn:astro:problem:dinit-unavailable",
+            .title = "Service Unavailable",
+            .status = 503,
+            .detail = "cannot reach the dinit control socket",
+        }),
+        else => return notImplemented(ctx),
+    };
+    return .{ .status = 202, .body = "{\"operation\":null}" };
+}
+
 /// GET,PUT /api/v1/network/cellular — 501 BY CONTRACT (docs/06 §5.2
 /// reserved namespace): the problem detail documents the roadmap so
 /// clients can distinguish "reserved" from "not wired yet".
@@ -744,6 +842,43 @@ test "phase-4 routes answer 501 problem+json on default surfaces" {
     var wrong = testCtx(arena.allocator(), &st, .DELETE, "/api/v1/network/wifi/ap");
     try std.testing.expectEqual(@as(u16, 405), dispatch(&wrong).status);
     var wrong2 = testCtx(arena.allocator(), &st, .GET, "/api/v1/system/factory-reset");
+    try std.testing.expectEqual(@as(u16, 405), dispatch(&wrong2).status);
+}
+
+test "services group: unwired routes answer 501; {name} binds; wrong verb 405" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var st = try testStore();
+    defer st.deinit();
+
+    // services.global is null under unit tests, so every route degrades to
+    // 501 not-wired — the same contract the network/provisioning groups use.
+    const cases = [_]struct { m: Method, p: []const u8 }{
+        .{ .m = .GET, .p = "/api/v1/services" },
+        .{ .m = .POST, .p = "/api/v1/services/acme-sensord/restart" },
+        .{ .m = .POST, .p = "/api/v1/services/acme-sensord/stop" },
+        .{ .m = .POST, .p = "/api/v1/services/acme-sensord/start" },
+    };
+    for (cases) |case| {
+        var ctx = testCtx(arena.allocator(), &st, case.m, case.p);
+        const resp = dispatch(&ctx);
+        try std.testing.expectEqual(@as(u16, 501), resp.status);
+        try std.testing.expectEqualStrings(problem.content_type, resp.content_type);
+        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:astro:problem:not-implemented") != null);
+    }
+
+    // The INTERIOR {name} param binds (proves the segment-wise matcher), and
+    // an empty name segment is a 404 (matchPath rejects empty params).
+    var pctx = testCtx(arena.allocator(), &st, .POST, "/api/v1/services/acme-sensord/restart");
+    _ = dispatch(&pctx);
+    try std.testing.expectEqualStrings("acme-sensord", pctx.param.?);
+    var empty = testCtx(arena.allocator(), &st, .POST, "/api/v1/services//restart");
+    try std.testing.expectEqual(@as(u16, 404), dispatch(&empty).status);
+
+    // Wrong verbs on known service paths are 405 (the paths are known).
+    var wrong = testCtx(arena.allocator(), &st, .DELETE, "/api/v1/services");
+    try std.testing.expectEqual(@as(u16, 405), dispatch(&wrong).status);
+    var wrong2 = testCtx(arena.allocator(), &st, .GET, "/api/v1/services/acme-sensord/restart");
     try std.testing.expectEqual(@as(u16, 405), dispatch(&wrong2).status);
 }
 

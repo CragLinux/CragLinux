@@ -53,6 +53,7 @@ const cmd = struct {
     const startservice: u8 = 3;
     const stopservice: u8 = 4;
     const shutdown: u8 = 10; // followed by 1-byte shutdown type
+    const servicestatus5: u8 = 26; // status query, protocol v5+ (dinit 0.19.1)
 };
 
 // control-cmds.h reply bytes (subset we handle).
@@ -68,6 +69,8 @@ const rply = struct {
     const pinnedstopped: u8 = 67;
     const pinnedstarted: u8 = 68;
     const shuttingdown: u8 = 69;
+    /// Reply to SERVICESTATUS{,5,6}: [SERVICESTATUS][u8 reserved=0][status].
+    const servicestatus: u8 = 70;
     const service_desc_err: u8 = 71;
     const service_load_err: u8 = 72;
     /// Pre-acknowledgement, issued before the main reply when the request
@@ -90,6 +93,40 @@ pub const ShutdownType = enum(u8) {
     soft_reboot = 5,
     kexec = 6,
 };
+
+/// One service's runtime status as SERVICESTATUS5 reports it: the dinit
+/// service state (service-constants.h service_state_t) and the running
+/// process pid (present only while the service holds a live process).
+/// dinit's control protocol carries NO automatic-restart counter in any
+/// status buffer — restart counts in astrod's /services surface are the
+/// count of API-initiated restarts, tracked by services.zig, not read here.
+pub const ServiceRuntime = struct {
+    /// srvstate_t: 0 STOPPED, 1 STARTING, 2 STARTED, 3 STOPPING.
+    state: u8,
+    pid: ?i32,
+};
+
+/// Human token for a srvstate_t byte (service-constants.h). Total over u8 so
+/// an unexpected value degrades to "unknown" rather than trapping.
+pub fn stateName(state: u8) []const u8 {
+    return switch (state) {
+        0 => "stopped",
+        1 => "starting",
+        2 => "started",
+        3 => "stopping",
+        else => "unknown",
+    };
+}
+
+/// Fixed size of the v5 status buffer (control.cc STATUS_BUFFER5_SIZE =
+/// 6 + 2*sizeof(int)). int is 4 bytes on every astro target, so this is a
+/// deterministic 14 — unlike the v6 buffer, whose trailing struct timespec
+/// is architecture-sized. We query SERVICESTATUS5 for exactly that reason.
+pub const status_buffer5_len: usize = 14;
+
+/// fill_status_buffer5 flags byte (buffer[2]) bit4: a live process exists,
+/// so buffer[6..10] is a valid pid (else it holds exit info we ignore).
+const status_flag_has_pid: u8 = 16;
 
 pub const ClientError = error{
     ConnectFailed,
@@ -150,6 +187,17 @@ pub fn encodeStopService(buf: *[6]u8, handle: u32, flags: u8) []const u8 {
 
 pub const stop_flags_gentle: u8 = 2;
 pub const restart_flags: u8 = 2 | 4 | 128; // gentle | restart | pre-ack
+
+/// [SERVICESTATUS5][u32 handle LE] — control.cc process_service_status5.
+/// Chosen over SERVICESTATUS6 because the v5 reply is a fixed 14-byte buffer
+/// (status_buffer5_len) on every arch, whereas v6 appends an arch-sized
+/// struct timespec we would have to size at comptime to stay framed. v5
+/// still carries the state + pid /services needs.
+pub fn encodeServiceStatus5(buf: *[5]u8, handle: u32) []const u8 {
+    buf[0] = cmd.servicestatus5;
+    std.mem.writeInt(u32, buf[1..5], handle, .little);
+    return buf[0..5];
+}
 
 /// [SHUTDOWN][shutdown_type] — shutdown.cc.
 pub fn encodeShutdown(t: ShutdownType) [2]u8 {
@@ -261,6 +309,30 @@ pub const Client = struct {
             rply.shuttingdown => return error.ShuttingDown,
             else => return error.ProtocolError,
         }
+    }
+
+    /// Query a loaded handle's runtime status (SERVICESTATUS5). Reply is
+    /// [SERVICESTATUS][u8 reserved=0][14-byte v5 status] — control.cc
+    /// process_service_status5. NAK means the handle is unknown / the record
+    /// vanished (surfaced as NoService). The pid is meaningful only when the
+    /// flags byte's proc-running bit is set; otherwise buffer[6..] holds exit
+    /// info, which we report as "no pid".
+    pub fn serviceStatus(self: *Client, handle: u32) ClientError!ServiceRuntime {
+        var req: [5]u8 = undefined;
+        try self.writeAll(encodeServiceStatus5(&req, handle));
+        switch (try self.readReplyByte()) {
+            rply.servicestatus => {},
+            rply.nak => return error.NoService,
+            else => return error.ProtocolError,
+        }
+        // [reserved][status_buffer5_len]: read both; status starts at index 1.
+        var raw: [1 + status_buffer5_len]u8 = undefined;
+        try self.readExact(&raw);
+        const pid: ?i32 = if (raw[3] & status_flag_has_pid != 0)
+            std.mem.readInt(i32, raw[7..11], .little)
+        else
+            null;
+        return .{ .state = raw[1], .pid = pid };
     }
 
     /// Ask dinit to shut the system down — the actual reboot/poweroff
@@ -417,6 +489,45 @@ test "stop/restart against scripted replies (ack, alreadyss, preack, nak)" {
     // NAK = not started, the restart-or-start fallback cue.
     try feed(server, &.{ 79, 51 });
     try std.testing.expectError(error.NotStarted, client.restartService(2));
+}
+
+test "SERVICESTATUS5 frame matches hand-computed bytes" {
+    var buf: [5]u8 = undefined;
+    // [26][u32 handle LE].
+    try std.testing.expectEqualSlices(u8, &.{ 26, 0x78, 0x56, 0x34, 0x12 }, encodeServiceStatus5(&buf, 0x12345678));
+}
+
+test "serviceStatus decodes state + pid from scripted SERVICESTATUS replies" {
+    var server: posix.fd_t = undefined;
+    var client = try testClientPair(&server);
+    defer client.deinit();
+    defer _ = linux.close(server);
+
+    // [70][reserved=0] then 14-byte v5 status: state=2 (STARTED), target=2,
+    // flags=16 (proc running), stop-reason=0, [4],[5]=0, pid=0xd431 (54321)
+    // at offset 6, exit fields=0. stateName maps 2 -> "started".
+    try feed(server, &.{ 70, 0, 2, 2, 16, 0, 0, 0, 0x31, 0xd4, 0, 0, 0, 0, 0, 0 });
+    const rt = try client.serviceStatus(7);
+    try std.testing.expectEqual(@as(u8, 2), rt.state);
+    try std.testing.expectEqual(@as(?i32, 54321), rt.pid);
+    try std.testing.expectEqualStrings("started", stateName(rt.state));
+
+    // Proc-running bit clear (flags=0): no pid even though bytes 6.. are set.
+    try feed(server, &.{ 70, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 });
+    const rt2 = try client.serviceStatus(7);
+    try std.testing.expectEqual(@as(u8, 0), rt2.state);
+    try std.testing.expectEqual(@as(?i32, null), rt2.pid);
+    try std.testing.expectEqualStrings("stopped", stateName(rt2.state));
+
+    // An interleaved async info packet before the reply is skipped. The
+    // reply is [70][reserved=0] + 14 status bytes (state=3 STOPPING, rest 0).
+    try feed(server, &.{ 100, 7, 0xaa, 0xbb, 0xcc, 0xdd, 0, 70, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+    const rt3 = try client.serviceStatus(7);
+    try std.testing.expectEqualStrings("stopping", stateName(rt3.state));
+
+    // NAK => NoService (unknown handle / record gone).
+    try feed(server, &.{51});
+    try std.testing.expectError(error.NoService, client.serviceStatus(9));
 }
 
 test "SHUTDOWN frames match shutdown_type_t values" {

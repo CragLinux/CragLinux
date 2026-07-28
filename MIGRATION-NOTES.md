@@ -1838,3 +1838,135 @@ highest-priority wins) or LAYER onto an in-tree one.
 - shellcheck clean (repo severity/exclusions) over all touched shell;
   ruff clean on `build/lib`; `test_merge_board_variant.py` 15/15 green
   (now including rpi4 through the merge wrapper).
+
+## 23. M4 phase 1: the code/config fence, service manifests, /services (2026-07-28)
+
+Phase 1 makes the docs/08 contract *mean something*: the fence turns
+AD-017 from prose into a build failure, and the §5 service-manifest
+pipeline turns an app's declared integration (user, data dir, rollback
+participation, API control) into image wiring. Fills the PHASE-1 FENCE
+SEAM left marked in §22. With zero manifests present — every current
+fleet image — all of it is a proven no-op: the image stays
+byte-identical and fleet CI stays green.
+
+### The fence (merge.sh `fence_check`, AD-017, docs/08 §3)
+
+Every incoming overlay file from EVERY layer (core, tree, board,
+variant) is checked at merge time; a violation dies the build with the
+file, the layer, the reason, and the fix (ship it as an apk template).
+Two independent rules:
+
+- **Path**: `usr/bin`/`usr/sbin` always rejected; `usr/lib` rejected
+  unless inside `FENCE_USR_LIB_ALLOW` (astro, dinit.d, tmpfiles.d,
+  sysctl.d, modules-load.d, os-release.d, udev/rules.d, firmware,
+  dhcpcd-hooks) or the exact file `usr/lib/os-release`. **Merged-/usr
+  evasion is closed**: a leading `bin/`, `sbin/`, `lib/`, `lib64/`
+  segment canonicalizes to its `usr/` spelling BEFORE the test (an
+  overlay's `bin/evil` IS `usr/bin/evil` on the live image). The
+  allowlist prefix match is `/`-anchored so `usr/lib/astro-evil/…`
+  cannot ride the `astro` entry.
+- **ELF**: any regular file starting `7f 45 4c 46`, anywhere in the
+  overlay. Symlinks are path-checked but never ELF-probed (the bytes
+  read would be the target's, which passed the fence in its own
+  location).
+
+Audit of the existing fleet: 34 overlay entries (boards/common is the
+only populated overlay tree), ALL pass; zero ELF. One real finding
+recorded in the code: `usr/lib/dhcpcd-hooks/60-astro-lease` is a
+symlink into allowlisted `usr/lib/astro/` — dhcpcd only sources its
+compiled-in hook dir, so the wiring legitimately lives under usr/lib;
+`dhcpcd-hooks` is allowlisted as a platform mechanism dir, not a
+carve-out. Documented gap, NOT actioned: `usr/local/{bin,sbin,lib}` and
+`opt/` are executable-capable but outside AD-017's enumeration; no
+overlay uses them; growing the path set is a future AD decision.
+
+### Service manifests: schema → reader → assembly hook → boot replay
+
+- `schema.py:SERVICE_MANIFEST_SCHEMA` + `service_manifest.py`: the one
+  validated reader (config.py's validate/apply_defaults pipeline, same
+  errors as board/variant configs). Name must be fs-/dinit-safe and
+  match the file stem. CLI: `read <rootfs>` → JSON array, `uid <name>`.
+- **Deterministic app uids**: `400 + sha256(name) % 500` (range
+  400–899: above platform uids 300/301, below human 1000). The reader
+  owns the deterministic STARTING uid; the hook resolves hash
+  collisions by probing upward and owns the FINAL assignment — same
+  app, same uid, every build, regardless of build order.
+- `boards/common/hooks/40-service-manifests.sh` (runs after
+  05-platform-users/10-create-users/20-enable-services) applies the
+  per-manifest effects, each idempotent: (a) system user+group+shadow
+  (shadow-mode dance as 10-create-users); (b) `data_dir=true` recorded
+  in `/etc/astro/app-data-dirs` — /data is a RUNTIME mount, so
+  `data-mount.sh` replays the record right after mounting (`mkdir -p
+  /data/apps/<name>` + chown), which also survives factory-reset wipes;
+  (c) env file `/etc/astro/services/<name>.env` with
+  `ASTRO_API_SOCKET` (+`ASTRO_DATA_DIR` when data_dir) — the app's OWN
+  service description must say `env-file = /etc/astro/services/
+  <name>.env`; the hook never edits service files; (d)
+  `boot_success=true` appends `depends-on: <name>` to the assembled
+  boot-success milestone (AD-011 rollback opt-in; dies if the milestone
+  file is missing); (e) `api_client=true` joins the user to the
+  astro-api group; (f) enablement into boot.d mirroring
+  20-enable-services' symlink shapes; (g) a JSON sidecar per manifest
+  (below). Zero manifests ⇒ the hook exits before touching anything.
+
+### astrod: the /services group (docs/06 §5.4)
+
+- **Sidecars, not TOML**: std has no TOML parser and astrod does not
+  shell out (AD-016), so effect (g) emits
+  `usr/lib/astro/services/<name>.json` (the reader's `to_dict()`,
+  minus `source_path` — a build-host path that would leak into the
+  image). `services.zig` reads the sidecars at startup via raw
+  getdents64 (std.Io avoidance, same as fsutil/netconf), keeping only
+  `name` + `api_controllable`.
+- **Deliberately narrow**: GET /services lists ONLY api_controllable
+  services; the three POST verbs (`restart|stop|start`) are gated on
+  the same set; an unknown OR non-controllable name answers **404, not
+  403** (whether a service exists is itself withheld). No dinitctl
+  passthrough. Per-service query failure degrades that entry to state
+  "unknown"; only an unreachable dinit socket is 503.
+- **dinit protocol**: SERVICESTATUS5 added to dinit.zig — v5 chosen
+  over v6 because its status buffer is a fixed 14 bytes on every arch
+  (v6 trails an arch-sized `struct timespec`). State + pid decode from
+  the flags byte; dinit's protocol carries NO automatic-restart
+  counter, so `restart_count` is astrod's own count of API-initiated
+  restarts this daemon run — the honest reading of docs/06 §5.4.
+- **Router**: `matchPath` generalized from trailing-`{param}`-only to
+  segment-wise matching (single param, any position) for the interior
+  `services/{name}/restart` shape; existing routes' semantics
+  reproduced exactly. openapi.yaml + docs/06 §5.4 document the four
+  endpoints; the conformance test parses the updated spec.
+
+### Verified
+
+- `build/lib/test_fence.sh` **25/25** — both rules, merged-usr aliases,
+  anchored-prefix adversarial (`astro-evil`), symlink handling,
+  non-fenced dirs (usr/share, usr/libexec), plus the live-overlay audit
+  case asserting every existing fleet overlay passes.
+- `build/lib/test_service_manifest.py` **14/14** — schema violations,
+  stem mismatch, uid determinism/range, sorted read, bad-manifest
+  fail-fast.
+- `build/lib/test_service_manifests_hook.sh` **28/28** — full-wiring
+  scenario (user/uid, group, env file, boot-success dep, sidecar,
+  boot.d link, app-data-dirs record), uid-collision probing,
+  idempotent re-run (no duplicate lines), and the no-manifest run
+  asserted **byte-identical** (find|sort|md5 over the whole rootfs).
+- astrod `zig build test` (pinned 0.16.0, astro-builder container):
+  **246 pass / 4 skip** — includes SERVICESTATUS5 frame/decode against
+  scripted replies, registry load/gate/list shaping, router 501/404/405
+  contract for the group, interior-param binding.
+- **CI wiring**: new `build-lib-unit` step in `astro-ci.sh` runs all
+  four build/lib suites (merge engine + the three above) in the
+  container — they existed but nothing ran them in the pr suite.
+  Verified green in-container. The full CI lint pass (shellcheck over
+  every touched hook/lib script, ruff over build/lib, `zig fmt --check
+  astrod/`) is clean on the phase-1 tree.
+- **Full build `qemu-armv7 dev`: PASS** (warm, ~29 s) through rootfs →
+  A/B image → RAUC bundle. Zero fence lines in the 374-line log (the
+  fence only speaks on rejection — every live overlay passes on the
+  real path, not just in the audit test); `40-service-manifests.sh` ran
+  and printed nothing (no-op path); astrod cross-compiled
+  arm-linux-musleabihf ReleaseSafe at 6959 KiB (inside the docs/06 §3
+  8 MiB budget) with the phase-1 sources in.
+- **boot-smoke qemu-armv7 dev: PASS 46 s** — boot-success milestone +
+  login prompt, zero `[FAILED]`, and no `/data/apps` replay lines at
+  boot (the data-mount block is a no-op without the record file).

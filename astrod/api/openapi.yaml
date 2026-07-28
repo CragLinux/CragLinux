@@ -460,6 +460,64 @@
         }
       }
     },
+    "/api/v1/services": {
+      "get": {
+        "operationId": "getServices",
+        "summary": "App-controllable services: name, state, pid, restart count (docs/06 §5.4)",
+        "description": "DELIBERATELY NARROW (docs/06 §5.4, docs/08 §5): lists ONLY the app services whose external-tree manifest set [integration].api_controllable = true; platform/system services are never listed. astrod learns the controllable set by reading the usr/lib/astro/services/*.json manifest sidecars at startup. There is no arbitrary dinitctl passthrough — the API must not become a privilege-escalation bridge to init. 501 while the services subsystem is unwired in the running build.",
+        "responses": {
+          "200": { "description": "App-controllable service list.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServiceList" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "501": { "$ref": "#/components/responses/NotImplemented" },
+          "503": { "$ref": "#/components/responses/DinitUnavailable" }
+        }
+      }
+    },
+    "/api/v1/services/{name}/restart": {
+      "post": {
+        "operationId": "restartService",
+        "summary": "Restart an app-controllable service (docs/06 §5.4)",
+        "description": "Allowed ONLY for a service whose manifest set api_controllable = true (docs/08 §5). A name that is not api_controllable — or does not exist — answers 404, NOT 403: revealing that a service exists is itself information the narrow surface withholds. Restart goes through dinit's control socket (AD-016, no shelling out). 501 while the services subsystem is unwired.",
+        "parameters": [ { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": {
+          "202": { "description": "Restart initiated (dinit settles it asynchronously).", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServiceActionResult" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "501": { "$ref": "#/components/responses/NotImplemented" },
+          "503": { "$ref": "#/components/responses/DinitUnavailable" }
+        }
+      }
+    },
+    "/api/v1/services/{name}/stop": {
+      "post": {
+        "operationId": "stopService",
+        "summary": "Stop an app-controllable service (docs/06 §5.4)",
+        "description": "Allowed ONLY for a service whose manifest set api_controllable = true (docs/08 §5); a non-controllable or unknown name answers 404, not 403. Gentle stop over dinit's control socket. 501 while the services subsystem is unwired.",
+        "parameters": [ { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": {
+          "202": { "description": "Stop initiated.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServiceActionResult" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "501": { "$ref": "#/components/responses/NotImplemented" },
+          "503": { "$ref": "#/components/responses/DinitUnavailable" }
+        }
+      }
+    },
+    "/api/v1/services/{name}/start": {
+      "post": {
+        "operationId": "startService",
+        "summary": "Start an app-controllable service (docs/06 §5.4)",
+        "description": "Allowed ONLY for a service whose manifest set api_controllable = true (docs/08 §5); a non-controllable or unknown name answers 404, not 403. Start over dinit's control socket. 501 while the services subsystem is unwired.",
+        "parameters": [ { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": {
+          "202": { "description": "Start initiated.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServiceActionResult" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "501": { "$ref": "#/components/responses/NotImplemented" },
+          "503": { "$ref": "#/components/responses/DinitUnavailable" }
+        }
+      }
+    },
     "/api/v1/network/wan": {
       "get": {
         "operationId": "getWan",
@@ -877,6 +935,30 @@
         },
         "required": ["order"],
         "additionalProperties": false
+      },
+      "ServiceStatus": {
+        "type": "object",
+        "description": "One app-controllable service (docs/06 §5.4): name, dinit state, pid (null when not running), and restart count. Reported only for services whose manifest set api_controllable = true.",
+        "properties": {
+          "name": { "type": "string", "description": "The dinit service name (matches the manifest [service].name)" },
+          "state": { "type": "string", "enum": ["stopped", "starting", "started", "stopping", "unknown"], "description": "dinit service state (service-constants.h service_state_t). \"unknown\" means the service could not be queried on the control socket (e.g. momentarily unloaded) — the service is still listed because it is api_controllable per its manifest." },
+          "pid": { "type": ["integer", "null"], "description": "Process id while a live process exists; null otherwise (stopped/starting, or a service that runs no long-lived process)" },
+          "restart_count": { "type": "integer", "description": "Number of API-initiated restarts (POST .../restart) this daemon run. dinit's control protocol exposes no automatic-restart counter in any status buffer, so this counts only restarts requested through this API; it resets when astrod restarts." }
+        },
+        "required": ["name", "state", "pid", "restart_count"]
+      },
+      "ServiceList": {
+        "type": "array",
+        "description": "GET /api/v1/services response: every api_controllable service (docs/06 §5.4). Empty when no app opted in.",
+        "items": { "$ref": "#/components/schemas/ServiceStatus" }
+      },
+      "ServiceActionResult": {
+        "type": "object",
+        "description": "202 body of POST /api/v1/services/{name}/{restart,stop,start}: the action was accepted; dinit settles it asynchronously (observe the next GET /api/v1/services). operation is null today (service actions are not operation-tracked) — the field is present for forward-compatibility with the operations model (docs/06 §4).",
+        "properties": {
+          "operation": { "type": ["string", "null"], "description": "Operation resource path when the action is operation-tracked; null otherwise" }
+        },
+        "required": ["operation"]
       },
       "Problem": {
         "type": "object",

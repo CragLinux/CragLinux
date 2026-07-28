@@ -31,6 +31,7 @@ const system = @import("system.zig");
 const update = @import("update.zig");
 const events_mod = @import("events.zig");
 const ops = @import("ops.zig");
+const services = @import("services.zig");
 const bus_mod = @import("bus.zig");
 const netconf = @import("netconf.zig");
 const wifi_mod = @import("wifi.zig");
@@ -214,6 +215,19 @@ fn serve(gpa: std.mem.Allocator, opts: Options, st: *store.Store) !void {
     defer registry.deinit();
     ops.global = &registry;
     defer ops.global = null;
+
+    // M4 phase-1 services registry (docs/06 §5.4, docs/08 §5): reads the
+    // api_controllable set from the JSON manifest sidecars in the rootfs.
+    // Missing dir / no apps => empty set, /services answers [] and 404s.
+    var services_reg = services.Registry.init(gpa);
+    defer {
+        services.global = null;
+        services_reg.deinit();
+    }
+    services_reg.loadManifests("") catch |err|
+        std.log.warn("astrod: service manifests unavailable ({t}); /services degrades", .{err});
+    services.global = &services_reg;
+
     var event_bus = events_mod.EventBus.init(gpa);
     defer event_bus.deinit();
 
@@ -830,6 +844,7 @@ test {
     _ = @import("timekeep.zig");
     _ = @import("mdns.zig");
     _ = @import("portal.zig");
+    _ = @import("services.zig");
     _ = @import("conformance_test.zig");
 }
 

@@ -137,6 +137,22 @@ mkdir -p /data/config \
          /data/keys/seedrng \
          /data/.astro
 
+# App data dirs (docs/08 §5): each app service that declared data_dir=true
+# gets /data/apps/<name> owned by its service user. The list is baked at
+# image assembly (40-service-manifests.sh -> /etc/astro/app-data-dirs);
+# replay it now that /data is mounted (survives a factory-reset wipe). The
+# record file lives in the RO rootfs /etc lower and the app users are in the
+# baked /etc/passwd, so both the file and the chown-by-name resolve here even
+# though the /etc overlay is not mounted until below.
+if [ -f /etc/astro/app-data-dirs ]; then
+    while read -r _app _owner; do
+        [ -n "$_app" ] || continue
+        case "$_app" in \#*) continue ;; esac
+        mkdir -p "/data/apps/$_app"
+        chown "${_owner:-root}:${_owner:-root}" "/data/apps/$_app" 2>/dev/null || :
+    done < /etc/astro/app-data-dirs
+fi
+
 # /etc overlay (docs/02 §4.3): upper/work in /data, RO rootfs /etc as lower
 if ! mountpoint -q /etc; then
     mount -t overlay \

@@ -244,6 +244,44 @@ TREE_SCHEMA = {
     },
 }
 
+# External-tree SERVICE MANIFEST schema (docs/08 §5). An app apk installs
+# usr/lib/astro/services/<name>.toml next to its dinit service file; the image
+# assembly hook (boards/common/hooks/40-service-manifests.sh) reads every
+# manifest in the ASSEMBLED rootfs and wires users / data dirs / env files /
+# boot-success deps / the astro-api group / service enablement. Consumed by
+# build/lib/service_manifest.py (validation reuses config.py:validate_config +
+# apply_defaults, exactly like board/variant/tree configs).
+#
+#   [service]
+#     name            (str,  required) the dinit service name
+#     user            (str,  opt "")   system user created at image assembly;
+#                                       "" => the service runs as root (no
+#                                       dedicated user is created)
+#     data_dir        (bool, opt False) true => /data/apps/<name> owned by the
+#                                       service user, exported as ASTRO_DATA_DIR
+#   [integration]
+#     boot_success    (bool, opt False) opt into rollback participation: the
+#                                       service becomes a depends-on of the
+#                                       boot-success milestone (AD-011)
+#     api_controllable(bool, opt False) allow POST /services/<name>/{restart,
+#                                       stop,start} (docs/06 §5.4)
+#     api_client      (bool, opt False) join the astro-api group => unix-socket
+#                                       access to astrod (docs/02 §7)
+SERVICE_MANIFEST_SCHEMA = {
+    "service": {
+        "_required_section": True,
+        "name": {"type": str, "required": True},
+        "user": {"type": str, "required": False, "default": ""},
+        "data_dir": {"type": bool, "required": False, "default": False},
+    },
+    "integration": {
+        "_required_section": False,
+        "boot_success": {"type": bool, "required": False, "default": False},
+        "api_controllable": {"type": bool, "required": False, "default": False},
+        "api_client": {"type": bool, "required": False, "default": False},
+    },
+}
+
 # User entry schema (for items in users.create list)
 USER_ENTRY_SCHEMA = {
     "name": {"type": str, "required": True},
