@@ -1,0 +1,9 @@
+# Board additions to the seeded U-Boot env (appended after the default
+# env + boards/common/uboot/initial-env.in by the image stage).
+#
+# bootstd: go straight to the script bootmeth (our boot.scr). Without
+# this, U-Boot 2026.07 walks the bootmeths in name order and burns
+# seconds on efi_mgr ("EFI boot manager: Cannot load any image") and
+# repeated probes of the wifi SDIO bus before reaching the script —
+# observed on the first metal boot.
+bootmeths=script

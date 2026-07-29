@@ -2179,3 +2179,128 @@ docs/03 §3 fix item 3, both arches exercised here).
   open; item 3's hosted-CI half needs a cached/prebuilt SDK toolchain.
 - Binary mode deploys the `command=` artifact only; multi-file assets
   would come from the package file list (`apk query -L`) when needed.
+
+## 26. M5 phase 0: the rpi4 image is real (2026-07-29)
+
+First hardware board through the whole pipeline. Recon verdict going
+in: the rpi4 path was ~5% implemented — a schema-valid board.toml, a
+stubbed bootloader stage, zero image-stage support, and one dead hook
+from the pre-M1 direct-firmware-boot model. Coming out: `astro build
+rpi4 dev|prod` produces a flashable SD image with the full A/B layout,
+verified structurally down to the MBR bytes. Awaiting first metal boot
+(the user's bench: rpi4/rpi5/BBB + USB-UART).
+
+### Boot chain implemented (docs/04 §1: EEPROM → start4.elf → U-Boot)
+
+- `bootloader.sh` rpi-boot now BUILDS U-Boot like the u-boot type —
+  **rpi_arm64_defconfig** (the generic AArch64 RPi target: one
+  defconfig serves rpi4 and rpi5) + `boards/rpi4/uboot/env.fragment`
+  (env in FAT on **mmc 0:2**, the qemu fragment's AD-009 deviation
+  carried over; same fw_env.config plumbing works untouched).
+- The image stage prefers `boards/<board>/uboot/boot.script.in` over
+  the QEMU-shaped common template. The rpi flavor boots from mmc 0 and
+  passes the FIRMWARE-PROVIDED DTB (`${fdt_addr}`, fixups applied) —
+  never the copies in boot.<slot>/dtbs; `${fdtcontroladdr}` fallback.
+- New rpi-boot image branch stages the esp: firmware blobs from the
+  rpi-boot apk (via the rootfs /boot — packages.list now lists
+  rpi-boot + firmware-linux-brcm-rpi directly, NOT base-rpi, whose
+  Chimera-shaped config conflicts with A/B), the kernel-built
+  bcm2711-rpi-4-b.dtb BY NAME for the firmware, the board's
+  config.txt (arm_64bit, kernel=u-boot.bin, enable_uart +
+  uart_2ndstage), and u-boot.bin. The dead 50-rpi-firmware.sh is gone.
+
+### Hybrid MBR ([partitions].hybrid_mbr, image_layout.py)
+
+The Pi EEPROM scans the SD's MBR for the first FAT partition and does
+not reliably boot pure-GPT cards; Astro's A/B machinery needs the real
+GPT (root=PARTLABEL, RAUC slots). `stamp_hybrid_mbr` rewrites the
+protective MBR after sfdisk: entry 1 = esp as FAT32-LBA (0x0C,
+bootable), entry 2 = 0xEE covering sectors 1..esp_start-1. Linux
+prefers the intact GPT, so PARTLABEL semantics are untouched.
+Byte-verified in the built image. Schema: [partitions].hybrid_mbr
+(default false), rpi4 sets it.
+
+### Fixes and traps
+
+- **image.sh dtb lookup could never match** vendor-qualified names
+  (`find -name` vs a pattern containing '/') — latent since M1 because
+  no QEMU board sets [kernel].dtb; now `-path "*/$dtb_name"`.
+- **Dev images were console-bricks on hardware**: packaged shadow
+  leaves root with an invalid hash and every created user is locked;
+  QEMU flows never noticed (prompt asserted, access via ssh). New
+  35-dev-console-login.sh unlocks root for SERIAL-CONSOLE login (empty
+  password) on dev images only — guarded by variant name AND
+  rootfs!=squashfs so prod-shaped variants under any name (acme-prod)
+  stay sealed; sshd's PermitEmptyPasswords default keeps remote
+  key-only.
+- `boards/rpi4/kernel/rpi4.fragment`: GENET ethernet, PCIe/xHCI (the
+  VL805 USB path incl. RESET_RASPBERRYPI), clk/cpufreq forced =y per
+  the monolithic principle; **BRCMFMAC stays =m on purpose** (its
+  firmware lives in the rootfs; a built-in driver would probe before
+  /lib/firmware exists).
+- rpi4 prod variant added (source mode, squashfs — was dev-only, so
+  the RO/RAUC story was unbuildable).
+
+### First metal boot (user's Pi 4 Model B, USB-UART): the mmc numbering
+
+The very first flash got all the way to `Astro: trying slot A` — the
+EEPROM read the hybrid-MBR esp, start4.elf loaded u-boot.bin, and
+bootstd found our boot.scr. Every storage access then failed with
+`Card did not respond to voltage select! : -110`: **on rpi_arm64
+U-Boot, mmc 0 is mmc@7e300000 — the SDIO bus wired to the CYW43455
+wifi chip — and the SD slot (emmc2, mmc@7e340000) is mmc 1.** The env
+fragment and boot script said mmc 0; U-Boot's own bootflow line
+(`mmc@7e340000.bootdev.part_1`) named the right device. Fixes:
+`ENV_FAT_DEVICE_AND_PART="1:2"`, `part number/fatload mmc 1`, and two
+collateral hardenings — the U-Boot staleness marker now hashes the
+board fragments (the env edit would otherwise have been silently
+skipped: marker was version:defconfig:compiler only), and boards can
+append to the seeded env via `uboot/initial-env.in`; rpi4 sets
+`bootmeths=script` to skip the observed efi_mgr noise and SDIO probes
+before the script runs. (Observed on the next boot: efi_mgr still ran
+— it is a GLOBAL bootmeth, checked before the ordered list; harmless,
+a few seconds of noise. Left as-is.)
+
+Second metal boot got to `Starting kernel ...` then silence — **the
+Pi 4 console trap**: with enable_uart=1 and Bluetooth active (the
+rpi-boot apk ships no overlays/, so no disable-bt), the GPIO14/15
+header UART is the MINI-UART while the PL011 ttyAMA0 is wired to BT.
+U-Boot follows the firmware's UART choice — header output worked —
+but the kernel's console=ttyAMA0 went to the Bluetooth chip. Round 3
+(console=ttyS0) was STILL silent; the round-4 diagnostic cmdline
+(bare earlycon + keep_bootcon + both uarts) revealed why: **the
+mini-UART registers as ttyS1** on the firmware DTB (fe215040.serial:
+ttyS1 — alias serial1), not the ttyS0 of Raspberry Pi OS lore, and
+with no ttyS0 in existence the preferred console fell to ttyAMA0
+again — userspace (dinit, getty) was on the BT uart while keep_bootcon
+showed kernel messages. Final shape: `earlycon console=tty1
+console=ttyS1,115200` (ttyS1 LAST = /dev/console), [console] ttyS1.
+Bare earlycon stays in the production cmdline: it resolves via the
+firmware's stdout-path, costs nothing, and makes the pre-console
+window visible on every future bring-up.
+
+Fifth boot reached userspace fully but `rauc-mark-good FAILED`:
+**fw_printenv/fw_setenv missing** — RAUC's uboot backend shells out
+to libubootenv's tools, and rpi4's packages.list (predating M2) never
+carried `libubootenv-progs`; qemu-aarch64's list has it with a
+comment saying exactly why. Added. Sixth boot: fully healthy —
+`rauc: boot marked good (slot A)`, `rauc status` shows Activated:
+rootfs.0 (A) and BOTH slots boot status good, zero FAILED services,
+data grown across the 16G card, root shell on ttyS1. **The A/B safety
+loop is closed on real hardware.**
+
+### Verified (build-level; the metal story continues above)
+
+- Full `astro build rpi4 dev`: kernel (defconfig + rpi4.fragment,
+  dtbs), U-Boot 2026.07 rpi_arm64 (912K), binary-mode rootfs, image +
+  RAUC bundle — green first run after one recon-predicted fix.
+- Image forensics: 7-partition GPT with correct PARTLABELs; hybrid
+  MBR bytes exact (0x0C @ LBA 2048 × 524288, 0xEE 1..2047); esp holds
+  17 firmware blobs + bcm2711-rpi-4-b.dtb + config.txt + u-boot.bin +
+  boot.scr (mmc-flavored, fdt_addr logic confirmed via strings);
+  bootenv uboot.env carries BOOT_ORDER="A B", 3 tries; boot.A holds
+  the 40 MB Image + dtbs/; kernel .config has the =y set; rootfs
+  shadow has `root::` (console unlock).
+- docs/12-hardware-bringup.md: flashing (dd), UART wiring, expected
+  first-boot serial sequence, troubleshooting, and the M5 manual
+  release smoke checklist (incl. AD-020-on-metal + power-cut drills).

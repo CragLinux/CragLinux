@@ -1,0 +1,23 @@
+# RPi firmware configuration (docs/04 §1: EEPROM -> start4.elf ->
+# U-Boot -> boot.scr). Staged onto the esp (the firmware boot
+# partition) by the image stage together with start4.elf/fixup4.dat,
+# the board DTB, and u-boot.bin.
+#
+# The firmware loads the DTB matching the detected board from this
+# partition, applies its fixups, and passes it to U-Boot — which hands
+# it on to the kernel (boards/rpi4/uboot/boot.script.in). cmdline.txt
+# is not used: the kernel command line comes from the A/B boot script.
+
+# 64-bit mode, U-Boot as the firmware's "kernel"
+arm_64bit=1
+kernel=u-boot.bin
+
+# PL011 on GPIO14/15 as primary UART (matches console=ttyAMA0 and the
+# bring-up USB-UART); uart_2ndstage echoes firmware+bootloader progress
+# there before the kernel takes over.
+enable_uart=1
+uart_2ndstage=1
+
+# Fast, headless-friendly defaults; HDMI stays functional.
+disable_splash=1
+avoid_warnings=1

@@ -1,0 +1,21 @@
+# bcm2711 (Raspberry Pi 4) drivers the arm64 defconfig leaves =m,
+# forced built-in per the monolithic principle (no initramfs, AD-006;
+# see boards/common/kernel/astro-net.fragment). Wifi (BRCMFMAC) stays a
+# module on purpose: its firmware lives in the rootfs
+# (firmware-linux-brcm-rpi), so a built-in driver would probe before
+# /lib/firmware exists — the module loads post-mount instead.
+#
+# Ethernet (GENET) + the VL805 USB controller path (PCIe + xHCI +
+# firmware-mediated reset) are what first-boot networking and a USB
+# keyboard need.
+CONFIG_BCMGENET=y
+CONFIG_BROADCOM_PHY=y
+CONFIG_PCIE_BRCMSTB=y
+CONFIG_USB_XHCI_PCI=y
+CONFIG_RESET_RASPBERRYPI=y
+CONFIG_CLK_RASPBERRYPI=y
+CONFIG_ARM_RASPBERRYPI_CPUFREQ=y
+CONFIG_RASPBERRYPI_POWER=y
+CONFIG_GPIO_RASPBERRYPI_EXP=y
+# SD/MMC + mailbox/firmware are already =y via ARCH_BCM2835 defaults
+# (MMC_BCM2835, MMC_SDHCI_IPROC, BCM2835_MBOX, RASPBERRYPI_FIRMWARE).

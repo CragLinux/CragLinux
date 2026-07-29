@@ -138,5 +138,5 @@ astro test update qemu-x86_64 \
 
 ## 8. Flashing and provisioning media
 
-- v1: `dd`/`bmaptool copy` of the `.img.zst` to SD/USB/disk; RPi via SD; x86_64 via USB stick dd'd, or PXE later.
+- v1: `dd`/`bmaptool copy` of the `.img.zst` to SD/USB/disk; RPi via SD; x86_64 via USB stick dd'd, or PXE later. Practical instructions, serial-console wiring, and the manual smoke checklist live in [12-hardware-bringup.md](12-hardware-bringup.md).
 - Factory/eMMC mass-flashing (USB gadget, fastboot, etc.): out of scope v1; noted in the deferred register.

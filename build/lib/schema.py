@@ -70,6 +70,12 @@ BOARD_SCHEMA = {
     # entirely. Replaces the prototype's [disk] (see DEPRECATED_DISK_SCHEMA).
     "partitions": {
         "_required_section": False,
+        # hybrid_mbr: stamp a hybrid MBR after partitioning — entry 1 =
+        # the esp as FAT32-LBA, entry 2 = 0xEE protecting the GPT. For
+        # firmware that scans the MBR for a FAT boot partition and does
+        # not read GPT (Raspberry Pi EEPROM); Linux/RAUC keep using the
+        # intact GPT (image_layout.py:stamp_hybrid_mbr).
+        "hybrid_mbr": {"type": bool, "required": False, "default": False},
         "table": {
             "type": str,
             "required": False,

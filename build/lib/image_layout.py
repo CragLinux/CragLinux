@@ -136,10 +136,63 @@ def compute_layout(board_config, source_date_epoch=None):
     }
 
 
+def _mbr_entry(status, ptype, lba_start, num_sectors):
+    """One 16-byte MBR partition entry. CHS fields are pinned to the
+    0xFF sentinel (LBA-only, ignored by every LBA-aware loader)."""
+    return (
+        bytes([status, 0xFF, 0xFF, 0xFF, ptype, 0xFF, 0xFF, 0xFF])
+        + lba_start.to_bytes(4, "little")
+        + num_sectors.to_bytes(4, "little")
+    )
+
+
+def stamp_hybrid_mbr(image_path, layout):
+    """Rewrite the protective MBR as a HYBRID MBR (docs/04 §2, rpi4).
+
+    The Raspberry Pi EEPROM boot ROM scans the SD card's MBR for the
+    first FAT partition and does not reliably boot pure-GPT cards, while
+    Astro's A/B machinery (root=PARTLABEL=..., RAUC slots) needs the
+    real GPT. A hybrid MBR serves both: entry 1 exposes the esp as
+    FAT32-LBA (0x0C) for the firmware; entry 2 is the 0xEE protective
+    entry covering the GPT structures below the esp. Linux partition
+    probing prefers the intact GPT, so PARTLABEL semantics are
+    untouched. sfdisk wrote the standard whole-disk protective MBR just
+    before this; only the four entry slots are rewritten — the GPT
+    itself is never touched.
+    """
+    esp = next(p for p in layout["partitions"] if p["name"] == "esp")
+    esp_start = esp["offset"] // SECTOR
+    esp_sectors = esp["size"] // SECTOR
+
+    table = (
+        _mbr_entry(0x80, 0x0C, esp_start, esp_sectors)
+        + _mbr_entry(0x00, 0xEE, 1, esp_start - 1)
+        + b"\x00" * 32
+    )
+    with open(image_path, "r+b") as f:
+        f.seek(446)
+        f.write(table)
+        f.seek(510)
+        f.write(b"\x55\xaa")
+
+
 def main():
+    # Modes: (default) layout JSON to stdout; `hybrid-mbr <image>` stamps
+    # the hybrid MBR onto an already-partitioned image. Both read the
+    # board config JSON on stdin so the layout is computed exactly once,
+    # the same way.
+    args = sys.argv[1:]
     board_config = json.load(sys.stdin)
     sde = os.environ.get("SOURCE_DATE_EPOCH")
     layout = compute_layout(board_config, sde)
+
+    if args and args[0] == "hybrid-mbr":
+        if len(args) != 2:
+            print("usage: image_layout.py hybrid-mbr <image>", file=sys.stderr)
+            sys.exit(2)
+        stamp_hybrid_mbr(args[1], layout)
+        return
+
     json.dump(layout, sys.stdout, indent=2)
     sys.stdout.write("\n")
 

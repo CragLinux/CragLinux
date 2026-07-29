@@ -93,7 +93,16 @@ build_uboot() {
     local out_dir="${PROJECT_ROOT}/build/state/${board_arch}/bootloader/${board}"
     local version_marker="${build_dir}/.astro-uboot-version"
 
-    if [ -f "$version_marker" ] && [ "$(cat "$version_marker")" = "${version}:${defconfig}:${compiler}" ] && \
+    # Fragment content is part of the staleness key: an edited
+    # env.fragment must reconfigure + rebuild (found when the rpi4 mmc
+    # device fix would otherwise have been silently skipped).
+    local frag_hash="none"
+    if ls "${board_dir}/uboot"/*.fragment >/dev/null 2>&1; then
+        frag_hash=$(cat "${board_dir}/uboot"/*.fragment | sha256sum | cut -c1-16)
+    fi
+    local marker_want="${version}:${defconfig}:${compiler}:${frag_hash}"
+
+    if [ -f "$version_marker" ] && [ "$(cat "$version_marker")" = "$marker_want" ] && \
        [ -f "${out_dir}/u-boot.bin" ]; then
         log_info "U-Boot ${version} (${defconfig}) already built for ${board}, skipping"
         return 0
@@ -168,7 +177,7 @@ build_uboot() {
     "${make_args[@]}" u-boot-initial-env
     cp "${build_dir}/u-boot-initial-env" "${out_dir}/u-boot-initial-env"
 
-    echo "${version}:${defconfig}:${compiler}" > "$version_marker"
+    echo "$marker_want" > "$version_marker"
 
     log_info "U-Boot built: ${out_dir}/u-boot.bin ($(du -h "${out_dir}/u-boot.bin" | cut -f1))"
 }
@@ -223,9 +232,13 @@ build_bootloader() {
             return 0
             ;;
         rpi-boot)
-            # RPi firmware boot chain; returns with the M5 hardware boards
-            log_info "Bootloader type 'rpi-boot' — firmware boot, nothing to build here"
-            return 0
+            # RPi firmware boot chain (docs/04 §1): EEPROM -> start4.elf
+            # -> u-boot.bin -> boot.scr. The firmware blobs come from the
+            # rpi-boot apk (board packages.list) and the image stage
+            # stages them onto the esp — the piece BUILT here is U-Boot,
+            # exactly like the u-boot type (rpi_arm64_defconfig + the
+            # board's uboot/*.fragment env config).
+            build_uboot "$board" "$board_arch" "$board_dir" "$board_config_json"
             ;;
         u-boot)
             build_uboot "$board" "$board_arch" "$board_dir" "$board_config_json"

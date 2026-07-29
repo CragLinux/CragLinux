@@ -128,7 +128,10 @@ create_image() {
     local dtb_name dtb_path=""
     dtb_name=$(echo "$BOARD_CONFIG_JSON" | jq -r '.kernel.dtb // ""')
     if [ -n "$dtb_name" ]; then
-        dtb_path=$(find "${kernel_build}/arch/${KARCH}/boot/dts" -name "$dtb_name" | head -1)
+        # -path, not -name: [kernel].dtb values are vendor-qualified
+        # ("broadcom/bcm2711-rpi-4-b.dtb") and -name only matches the
+        # basename — a pattern with '/' can never hit.
+        dtb_path=$(find "${kernel_build}/arch/${KARCH}/boot/dts" -path "*/${dtb_name}" | head -1)
         [ -n "$dtb_path" ] || die "board dtb ${dtb_name} not found in kernel build"
     fi
 
@@ -197,7 +200,12 @@ create_image() {
                 armv7hf) mkimage_arch="arm";   bootcmd="bootz" ;;
                 *) die "u-boot image assembly not wired for arch ${BOARD_ARCH}" ;;
             esac
-            render_boot_template "${PROJECT_ROOT}/boards/common/uboot/boot.script.in" \
+            # A board's own boot script (storage interface / DTB handoff
+            # differ on hardware) overrides the QEMU-shaped common one.
+            local boot_script_in="${PROJECT_ROOT}/boards/common/uboot/boot.script.in"
+            [ -f "${BOARD_DIR}/uboot/boot.script.in" ] && \
+                boot_script_in="${BOARD_DIR}/uboot/boot.script.in"
+            render_boot_template "$boot_script_in" \
                 "${work}/boot.cmd" "$KERNEL_CMDLINE" "$rootflags" "$kernel_img_name" "$bootcmd"
             mkimage -A "$mkimage_arch" -O linux -T script -C none \
                 -n "Astro A/B boot" -d "${work}/boot.cmd" "${work}/boot.scr" > /dev/null || \
@@ -215,6 +223,10 @@ create_image() {
             {
                 cat "${bl_dir}/u-boot-initial-env"
                 grep -vE '^\s*(#|$)' "${PROJECT_ROOT}/boards/common/uboot/initial-env.in"
+                # Board env additions last (win over common + defaults)
+                if [ -f "${BOARD_DIR}/uboot/initial-env.in" ]; then
+                    grep -vE '^\s*(#|$)' "${BOARD_DIR}/uboot/initial-env.in"
+                fi
             } > "${work}/initial-env.txt"
             mkenvimage -s 0x10000 -o "${work}/uboot.env" "${work}/initial-env.txt" || \
                 die "mkenvimage failed"
@@ -242,6 +254,42 @@ create_image() {
     esac
 
     ####################################################################
+    # RPi firmware boot files (bootloader.type = rpi-boot, docs/04 §1)
+    ####################################################################
+    # The esp doubles as the RPi firmware boot partition: EEPROM ->
+    # start4.elf -> u-boot.bin -> the boot.scr placed above. Firmware
+    # blobs come from the rpi-boot apk already installed in the rootfs
+    # (/boot); the DTB must sit here BY NAME for the firmware to load,
+    # fix up, and hand to U-Boot at ${fdt_addr}; config.txt is the
+    # board's (boards/<board>/rpi/config.txt: arm_64bit, kernel=u-boot.bin,
+    # enable_uart).
+    if [ "$BOOTLOADER_TYPE" = "rpi-boot" ]; then
+        local fw_count=0 fw_f
+        for fw_f in "${rootfs_dir}/boot/"*.elf "${rootfs_dir}/boot/"*.dat \
+                    "${rootfs_dir}/boot/"*.bin; do
+            [ -f "$fw_f" ] || continue
+            mcopy -i "$esp_img" "$fw_f" "::/$(basename "$fw_f")" || \
+                die "mcopy RPi firmware $(basename "$fw_f") failed"
+            fw_count=$((fw_count + 1))
+        done
+        [ "$fw_count" -gt 0 ] || \
+            die "no RPi firmware blobs in ${rootfs_dir}/boot — is 'rpi-boot' in the board packages.list?"
+        [ -n "$dtb_path" ] || \
+            die "bootloader.type=rpi-boot requires [kernel].dtb (the firmware loads it from the esp)"
+        mcopy -i "$esp_img" "$dtb_path" "::/$(basename "$dtb_path")" || \
+            die "mcopy dtb onto esp failed"
+        [ -f "${BOARD_DIR}/rpi/config.txt" ] || \
+            die "missing ${BOARD_DIR}/rpi/config.txt (rpi-boot firmware config)"
+        mcopy -i "$esp_img" "${BOARD_DIR}/rpi/config.txt" ::/config.txt || \
+            die "mcopy config.txt failed"
+        [ -f "${bl_dir}/u-boot.bin" ] || \
+            die "u-boot.bin not found in ${bl_dir} (run --step=bootloader first)"
+        mcopy -i "$esp_img" "${bl_dir}/u-boot.bin" ::/u-boot.bin || \
+            die "mcopy u-boot.bin failed"
+        log_info "RPi esp staged: ${fw_count} firmware blob(s), $(basename "$dtb_path"), config.txt, u-boot.bin"
+    fi
+
+    ####################################################################
     # /data partition (AD-005 §4.1 skeleton; grown on first boot — M2)
     ####################################################################
     log_info "Building data partition (${data_size} B)..."
@@ -263,6 +311,16 @@ create_image() {
     rm -f "$img"
     truncate -s "$total_bytes" "$img"
     sfdisk --quiet "$img" < "${work}/sfdisk.script" || die "sfdisk failed"
+
+    # Hybrid MBR ([partitions].hybrid_mbr, docs/04 §2): expose the esp
+    # in the MBR for firmware that cannot read GPT (RPi EEPROM). Linux
+    # and RAUC keep using the intact GPT.
+    if [ "$(echo "$BOARD_CONFIG_JSON" | jq -r '.partitions.hybrid_mbr // false')" = "true" ]; then
+        echo "$BOARD_CONFIG_JSON" | \
+            python3 "${PROJECT_ROOT}/build/lib/image_layout.py" hybrid-mbr "$img" || \
+            die "hybrid MBR stamp failed"
+        log_info "Hybrid MBR stamped (esp as FAT32-LBA entry 1)"
+    fi
 
     # dd a partition image into the disk at its (MiB-aligned) offset
     write_part() { # $1=partlabel $2=source-image

@@ -6,19 +6,54 @@ arch = "aarch64"
 version = "6.12.95"
 source = "upstream"
 defconfig = "defconfig"
+# bcm2711 drivers the arm64 defconfig leaves =m, forced =y (monolithic
+# principle, boards/common/kernel/*.fragment) — kernel/rpi4.fragment.
+config_fragments = ["rpi4.fragment"]
 # No root= here: the image stage owns root=PARTLABEL=... per A/B slot
 # (docs/03 §6).
-cmdline = "console=ttyAMA0,115200 console=tty1 rootwait"
+#
+# ttyS0, not ttyAMA0 (first-metal-boot finding): with enable_uart=1 and
+# Bluetooth active (no disable-bt overlay — the rpi-boot apk ships no
+# overlays/), the GPIO14/15 header UART is the MINI-UART (ttyS0, stable
+# baud because enable_uart=1 fixes the VPU clock); the PL011 ttyAMA0 is
+# wired to the BT chip. U-Boot follows the firmware's UART choice, so
+# it printed on the header while the kernel went silent to BT.
+# ttyS1 (bring-up-verified, round 4): the GPIO14/15 header mini-UART
+# registers as ttyS1 on the firmware DTB (fe215040.serial: ttyS1 —
+# alias serial1), NOT the ttyS0 of Raspberry Pi OS lore; ttyAMA0 is
+# the Bluetooth PL011. ttyS1 is listed LAST so it becomes /dev/console
+# (dinit + getty land on the header). Bare earlycon resolves the same
+# UART via the firmware's stdout-path for pre-console visibility.
+cmdline = "earlycon console=tty1 console=ttyS1,115200 rootwait"
 dtb = "broadcom/bcm2711-rpi-4-b.dtb"
 lto = "none"
 
+# Boot chain (docs/04 §1): EEPROM -> start4.elf -> u-boot.bin (as the
+# firmware "kernel") -> boot.scr A/B slot logic. The firmware loads the
+# DTB named for the detected board from the esp and hands it to U-Boot
+# at ${fdt_addr} with its fixups applied; the boot script passes THAT to
+# the kernel, never the copy in boot.<slot>/dtbs. rpi_arm64_defconfig
+# (not rpi_4_defconfig): the generic AArch64 RPi target that relies on
+# the prior-stage DTB — one defconfig serves rpi4 and rpi5.
 [bootloader]
 type = "rpi-boot"
+u_boot_version = "2026.07"
+# Same clang/lld self-relocation hang as the QEMU boards
+# (MIGRATION-NOTES §12); Fedora cross-gcc until root-caused.
+u_boot_compiler = "gcc"
+u_boot_defconfig = "rpi_arm64_defconfig"
 
 # AD-007 GPT layout sizes (docs/04 §2). Partition 1 (esp) doubles as the
 # RPi firmware boot partition, hence the larger size.
+#
+# hybrid_mbr: the Pi 4 EEPROM scans the SD's MBR (first FAT partition)
+# and does not reliably boot pure-GPT cards, so the image stage stamps a
+# hybrid MBR — entry 1 = the esp as FAT32-LBA for the firmware, entry 2
+# = 0xEE protecting the GPT structures. Linux and RAUC keep using the
+# real GPT (PARTLABELs) untouched.
 [partitions]
 table = "gpt"
+hybrid_mbr = true
 esp_size = "256M"
 bootenv_size = "1M"
 boot_size = "64M"          # per slot
@@ -42,5 +77,5 @@ lan_exposure = false       # AD-025 default
 packages = ["firmware-linux-brcm-rpi"]
 
 [console]
-device = "ttyAMA0"
+device = "ttyS1"          # header mini-UART (see the cmdline note)
 baud = 115200
