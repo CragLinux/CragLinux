@@ -469,8 +469,35 @@ fn listenUnix(path: []const u8) !posix.fd_t {
     const fd: posix.fd_t = @intCast(try sys(linux.socket(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0)));
     errdefer _ = linux.close(fd);
     _ = try sys(linux.bind(fd, @ptrCast(&addr), @sizeOf(posix.sockaddr.un)));
+    // connect(2) needs WRITE permission on the socket INODE; the access
+    // gate is the parent dir (0750 astrod:astro-api, tmpfiles.d), so the
+    // inode itself is deliberately 0666 — astro-api members connect,
+    // everyone else already failed dir traversal. Without this, bind
+    // under the daemon's umask leaves 0755 and every non-root client
+    // gets EACCES. Latent since M3 (test-api curls as root, which
+    // bypasses DAC); found live by the acme reference app's api_client
+    // probe (M4 phase 2). fchmodat, not chmod: aarch64/riscv64 have no
+    // chmod syscall. Chmod-after-bind is unracy here: the window is
+    // inside the group-gated dir, and a too-early client sees EACCES
+    // once, which every client already tolerates/retries.
+    _ = try sys(linux.fchmodat(linux.AT.FDCWD, &path_z, 0o666));
     _ = try sys(linux.listen(fd, 16));
     return fd;
+}
+
+test "listenUnix: socket inode is 0666 — the parent dir is the gate" {
+    var buf: [128]u8 = undefined;
+    const path = fsutil.testTmpPath(&buf, "astrod-sock-mode");
+    const fd = try listenUnix(path);
+    defer _ = linux.close(fd);
+    defer fsutil.unlink(path) catch {};
+
+    const path_z = try posix.toPosixPath(path);
+    var stx: linux.Statx = undefined;
+    const rc = linux.statx(linux.AT.FDCWD, &path_z, 0, .{ .MODE = true }, &stx);
+    try std.testing.expectEqual(.SUCCESS, linux.errno(rc));
+    // Exactly 0666 whatever the test runner's umask is.
+    try std.testing.expectEqual(@as(u16, 0o666), stx.mode & 0o777);
 }
 
 /// IP_FREEBIND (ip(7), value 15 — stable kernel ABI): `freebind` lets
