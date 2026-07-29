@@ -1,0 +1,34 @@
+# The tree-PROVIDED variant (docs/08 §2, §7): no Astro board defines
+# acme-prod — this file is the whole definition, resolved from the tree
+# by the layer engine (highest-priority tree wins; docs/08 §4). Build:
+#
+#   ./build/astro-build.sh qemu-x86_64 acme-prod \
+#       --external=examples/external-tree-acme
+
+[variant]
+name = "ACME Production"
+description = "ACME gateway reference product (docs/08 §7): prod-shaped image with the acme apps baked in"
+
+[packages]
+# Same DEVIATION as boards/qemu-x86_64 prod (MIGRATION-NOTES §12):
+# binary base packages until CI seeds a persistent package cache. This
+# tree's own templates are ALWAYS source-built regardless of mode
+# (docs/08 §4). On boards with no binary repo (qemu-armv7), pass
+# --packages-mode=source.
+mode = "binary"
+install = [
+    "dhcpcd",
+    "dhcpcd-dinit",    # dinit service file (auto-split subpackage)
+]
+
+[services]
+# acme-sensord needs no entry here: manifest-carrying app services are
+# enabled by the assembly hook (docs/08 §5).
+enable = ["dhcpcd"]
+
+[rootfs]
+# REQUIRED explicitly: the stem-based default only special-cases a
+# variant literally named "prod" (build/lib/config.py); an external
+# tree's prod-shaped variant must declare squashfs itself or it
+# silently gets a rw ext4 root (AD-004 would be violated).
+type = "squashfs"

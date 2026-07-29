@@ -1,0 +1,11 @@
+# ACME default site configuration (docs/08 §2, §3) — shipped via the
+# TREE OVERLAY. Overlays carry NON-EXECUTABLE CONFIGURATION only: the
+# code/config fence (build/lib/merge.sh fence_check) rejects overlay
+# files under (usr/)bin, (usr/)sbin, fenced usr/lib paths, or any ELF
+# anywhere — executable code ships as apk (see ../../cports/main/).
+#
+# Overlay merge is file-level, last-writer-wins across layers, with
+# every override logged with provenance (docs/08 §4).
+[site]
+name = "Plant 7"
+region = "us-east"

@@ -75,6 +75,7 @@ lint_shell() {
         -e SC2155,SC2034,SC1090,SC1091,SC2164 \
         build/*.sh build/lib/*.sh sdk/*.sh container/*.sh \
         boards/common/hooks/*.sh boards/*/hooks/*.sh \
+        examples/*/hooks/*.sh \
         boards/common/overlay/usr/lib/astro/* \
         boards/common/overlay/usr/libexec/astro/* 2>&1' | tail -20
     return "${PIPESTATUS[0]}"
@@ -84,11 +85,20 @@ lint_python() {
     return "${PIPESTATUS[0]}"
 }
 lint_config() {
-    # schema validation over every board + variant TOML
+    # schema validation over every board + variant TOML, plus the
+    # example external trees (tree.toml + tree-provided variants)
     in_container 'rc=0
         for b in boards/*/board.toml; do
             python3 build/lib/config.py board "$b" --format=json > /dev/null || { echo "INVALID: $b"; rc=1; }
             for v in "$(dirname "$b")"/variants/*.toml; do
+                [ -f "$v" ] || continue
+                python3 build/lib/config.py variant "$v" --format=json > /dev/null || { echo "INVALID: $v"; rc=1; }
+            done
+        done
+        for t in examples/*/tree.toml; do
+            [ -f "$t" ] || continue
+            python3 build/lib/config.py tree "$t" --format=json > /dev/null || { echo "INVALID: $t"; rc=1; }
+            for v in "$(dirname "$t")"/variants/*.toml; do
                 [ -f "$v" ] || continue
                 python3 build/lib/config.py variant "$v" --format=json > /dev/null || { echo "INVALID: $v"; rc=1; }
             done
@@ -177,7 +187,19 @@ if [ "${RESULT[build-${API_BOARD}-dev]:-}" = "PASS" ]; then
 else
     skip "astrod-api" "needs a passing ${API_BOARD} dev build in this run"
 fi
-skip "external-tree" "external-tree contract lands at M4"
+# The docs/08 §7 reference tree, kept green here (docs/10 §4 item 6):
+# a full image build with --external (tree templates source-built into
+# the apk world, manifest wiring, fence on the tree overlay), then a
+# boot-smoke of the product image. Uses the API board: its base
+# packages are binary-mode and its kernel is warm when the default
+# board set ran.
+step "external-tree" "${SCRIPT_DIR}/astro-build.sh" "$API_BOARD" acme-prod \
+    --external="${PROJECT_ROOT}/examples/external-tree-acme"
+if [ "${RESULT[external-tree]}" = "PASS" ]; then
+    step "external-tree-smoke" "${SCRIPT_DIR}/test-boot-smoke.sh" "$API_BOARD" acme-prod
+else
+    skip "external-tree-smoke" "build failed"
+fi
 
 ##############################################################################
 # Summary

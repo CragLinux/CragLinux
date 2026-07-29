@@ -1970,3 +1970,118 @@ overlay uses them; growing the path set is a future AD decision.
 - **boot-smoke qemu-armv7 dev: PASS 46 s** — boot-success milestone +
   login prompt, zero `[FAILED]`, and no `/data/apps` replay lines at
   boot (the data-mount block is a no-op without the record file).
+
+## 24. M4 phase 2: examples/external-tree-acme — the contract, proven (2026-07-28)
+
+The docs/08 §7 reference tree exists, builds, boots, and is wired into
+CI. This is the first REAL external tree through the phase-0/1
+machinery (the fixtures were synthetic), and it did its reference-tree
+job immediately: authoring it surfaced four cbuild gates worth
+documenting and one genuine platform bug that had been latent since M3.
+
+### The tree (examples/external-tree-acme)
+
+- `tree.toml` (acme-product, prio 50), `packages.list` (acme-sensord,
+  -dinit, acme-branding), `overlay/etc/acme/defaults.toml`,
+  `hooks/60-acme-branding.sh` (motd branding, interleaves at 60),
+  `variants/acme-prod.toml` (tree-PROVIDED variant), README mapping
+  every docs/08 section to a file.
+- **acme-sensord**: ~200-line C99 daemon exercising every manifest
+  integration — reads/creates its config in `$ASTRO_DATA_DIR`, GETs
+  `/api/v1/network` + `/api/v1/update/status` over `$ASTRO_API_SOCKET`
+  at startup (tolerating unreachable/501/503 — telemetry, not a
+  dependency), clean SIGTERM exit, readings on an interval. Template:
+  local sources from `files/` only, custom `build()` via
+  `cbuild.util.compiler.C` + `install()` (the base-cbuild-progs
+  pattern) — no remote fetch, hermetic in CI. Manifest: `user=acme`,
+  `data_dir=true`, `boot_success=false`, `api_controllable=true`,
+  `api_client=true`.
+- **acme-branding**: config-only package (etc/acme + usr/share/acme) —
+  with the tree overlay it demos both fence-legal transports; code has
+  exactly one (apk).
+- CI: `astro-ci.sh` `external-tree` skip placeholder replaced with a
+  real build of `qemu-x86_64 acme-prod --external=…` + an
+  `external-tree-smoke` boot-smoke of the product image; lint-shell
+  now covers `examples/*/hooks/*.sh`, lint-config validates
+  `examples/*/tree.toml` + tree variants.
+
+### Cbuild gates a tree author hits (now encoded in the tree + README)
+
+1. **pkgdesc must not end in a parenthetical** — `(...)` is reserved
+   for subpackage subdescriptions (template lint).
+2. **`custom:` license ⇒ `self.install_license` required** (pkg lint
+   098) — both templates ship a files/LICENSE and install it.
+3. **Formatter gate**: cbuild checks template formatting before
+   building; with no black on PATH it falls back to `ruff format`
+   (cports/pyproject.toml, line-length 80).
+4. **svc: provider scan**: `depends-on:` targets in shipped dinit
+   files are provider-checked; `astrod`/`data-mount` are Astro overlay
+   services no apk provides, so the EXPLICIT `-dinit` subpackage
+   (nyagetty pattern) sets `options = ["!scanrundeps"]` — the parent
+   keeps full dependency scanning. Related: dinit style lint hard-errors
+   an `=` line after a `:` line; deps go last.
+
+Plus the schema trap the variant encodes: a tree-provided prod-shaped
+variant is NOT stem-named `prod`, so it must declare
+`[rootfs].type = "squashfs"` itself (config.py's stem default).
+
+### The platform bug the reference app caught (fixed here)
+
+**astrod's unix socket was never connectable by astro-api members.**
+`listenUnix` bound under the daemon's umask → socket inode 0755;
+connect(2) needs WRITE on the inode, so every non-root client got
+EACCES. Latent since M3: test-api.sh curls as root (DAC override), so
+the whole api_client contract had never actually been exercised until
+acme-sensord ran `id acme` = `groups 530(acme), 301(astro-api)` and
+still couldn't connect. Fix in `listenUnix`: `fchmodat(..., 0o666)`
+after bind — the ACCESS GATE remains the tmpfiles-created 0750
+astrod:astro-api parent dir; the inode is deliberately open. (fchmodat
+not chmod: aarch64/riscv64 have no chmod syscall. Zig 0.16 statx mask
+is a typed packed struct — see the new unit test.) This is exactly the
+docs/08 §7 rationale for keeping a real consumer of every contract
+surface green in CI.
+
+### Traps / decisions (recorded)
+
+- A repo-internal tree is bind-mounted a second time at `/external-0`
+  in the container; provenance logs show that path. Harmless.
+- `run-qemu.sh` resolves variant TOML only from the BOARD dir; a
+  tree-provided variant falls back to defaults there. Irrelevant for
+  `--image` boots (boot-smoke path) — the rootfs-type default only
+  affects the direct-boot dev flow. Recorded as a known limitation.
+- Deterministic uid worked end to end: reader predicted 530 for
+  "acme-sensord" pre-build; the assembled /etc/passwd and the booted
+  system agree.
+- The failed-build path resets the cports fork tree cleanly
+  (checkout + clean); tree templates never leak into the pin.
+
+### Verified
+
+- Pre-flight: config.py validates tree.toml + acme-prod; the manifest
+  reader parses the manifest (uid 530); shellcheck + ruff format clean;
+  daemon compiles host-side `-Wall -Wextra -Werror` and behaves
+  (degrades without astrod, SIGTERM-clean).
+- **Build `qemu-x86_64 acme-prod --external=…`: PASS** — both tree
+  templates overlaid onto the fork, source-built under binary mode
+  (full hardening + LTO flags visible in the cbuild log), all six
+  manifest effects logged (user acme uid 530, data-dir record, env
+  file, astro-api join, sidecar, boot.d enablement), tree hook branded
+  motd, A/B image + RAUC bundle produced.
+- **boot-smoke qemu-x86_64 acme-prod: PASS 31 s** — GRUB boot,
+  `[  OK  ] acme-sensord` on console, boot-success + login
+  (hostname qemu-x86_64-acme-production), zero [FAILED].
+- **Live e2e on the dev+tree image (ssh)**: `id acme` shows
+  astro-api; `/data/apps/acme-sensord` owned acme with the
+  daemon-written config; `GET /api/v1/services` →
+  `[{"name":"acme-sensord","state":"started","pid":…,"restart_count":0}]`;
+  `POST …/restart` → 202, new pid, restart_count 1; POST for a
+  non-controllable service (iwd) → 404 (the 404-not-403 contract,
+  live); daemon log shows clean SIGTERM + re-read of the persisted
+  config on restart. Post-socket-fix, the api_client pattern runs AS
+  THE ACME USER: startup `GET /network → 200` (real interface JSON);
+  `GET /update/status → 502` on first boot while RAUC's D-Bus was
+  still settling — the daemon's tolerate-non-2xx design proving
+  itself — then `→ 200` with full slot status after restart; a direct
+  `su acme` curl over the socket returns 200.
+- astrod unit suite after the socket fix: **247 pass / 4 skip**
+  (new test: socket inode is exactly 0666 regardless of umask).

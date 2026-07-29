@@ -1,0 +1,10 @@
+# Packages added to EVERY image built with this tree (docs/08 §2).
+# Additive only: there is no removal syntax — masking base packages
+# would fork the tested base (docs/08 §4; the docs/02 tiers are the
+# supported way to ship less).
+#
+# The templates live in this tree's cports/main/ collection and are
+# always source-built (docs/08 §4), whatever [packages].mode says.
+acme-sensord
+acme-sensord-dinit
+acme-branding
