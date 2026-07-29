@@ -361,6 +361,17 @@ if should_run_step "bundle"; then
 fi
 
 ##############################################################################
+# Step: SDK app sysroot (docs/03 §3 sdk stage — EXPLICIT ONLY)
+##############################################################################
+# Not part of a plain image build ("optional for image builds", docs/03
+# §3): staged only via --step=sdk, after the image it derives from is
+# built. Idempotent (content stamp), so re-runs are cheap.
+
+if [ "$STEP" = "sdk" ]; then
+    "${PROJECT_ROOT}/sdk/stage-sysroot.sh" "$BOARD" "$VARIANT"
+fi
+
+##############################################################################
 # Done
 ##############################################################################
 

@@ -2085,3 +2085,97 @@ surface green in CI.
   `su acme` curl over the socket returns 200.
 - astrod unit suite after the socket fix: **247 pass / 4 skip**
   (new test: socket inode is exactly 0666 regardless of umask).
+
+## 25. M4 phase 3: image-derived app sysroot + the AD-026 deploy loop (2026-07-29)
+
+The last M4 scope: docs/08 §6's inner loop is real. An app developer
+sources one file, rebuilds, and `astro deploy` puts the new binary on
+a running dev VM in under 5 seconds. M4's roadmap line is now fully
+delivered.
+
+### sdk/stage-sysroot.sh — the AD-002 sysroot, per image
+
+- Input is the image's INSTALLED apk DB (`rootfs/lib/apk/db/installed`,
+  ~125 packages), not `packages.manifest` (~27 listed names): AD-002
+  says "everything in the image", and the DB is the resolved closure.
+- For every installed package P: take the `P-devel` template if the
+  cports tree has one (subpackage symlink dirs make `-e
+  cports/main/P-devel` an O(1) offline test), else — the coverage
+  gap found on the first live run — a `-libs`-suffixed P falls back
+  to `${P%-libs}-devel` (curl-libs→curl-devel, openssl3-libs→…),
+  deduped. `linux-headers` always added. x86_64-dev: 61 devel
+  packages, 169 total in the sysroot.
+- Trust mirrors the rootfs binary mode exactly: pinned Chimera keys +
+  cbuild dev keys, local repo first with `name=ver` PINS from the
+  local apk filenames (aarch64-dev, source-built: 59/61 pinned; the
+  sysroot cannot drift from the image even as the repo moves), no
+  --allow-untrusted, armv7 local-only. Idempotent via a content stamp.
+- The sysroot is MERGED-/usr and deliberately SEPARATE from the SDK's
+  flat bootstrap sysroot: clang's header search is layout-conditional
+  (`<sysroot>/include` drops out the moment `usr/include` exists), so
+  mixing apk packages into the flat sysroot would hide the SDK's own
+  musl headers. Two sysroots, two jobs.
+- Output per image: `sysroot/` + `sdk/{environment,bin/<triple>-clang*,
+  <arch>-toolchain.cmake}` (docs/08 §6: SYSROOT, CC, CXX,
+  CMAKE_TOOLCHAIN_FILE). The per-image wrappers chain the arch SDK
+  wrappers with a trailing `--sysroot` (clang last-one-wins inherits
+  every cross flag). New `--step=sdk` build stage runs it explicitly
+  (docs/03 §3: "optional for image builds" — not part of plain builds).
+
+### sdk/astro-deploy.sh — the sideload loop
+
+- **binary** (default): finds the install path from the service
+  description's own `command=` line, scp + rename-then-replace (a
+  running binary can be renamed, never overwritten — ETXTBSY),
+  `dinitctl restart`, drift recorded in `/etc/astro/deploy-drift`,
+  then log streaming (`logfile=` from the description). Measured
+  round-trip **2.9 s** on qemu-x86_64.
+- **--pkg**: scp the apk + TODAY'S cbuild pubkeys (the image's baked
+  keys can predate the current signing key — cbuild mints dev keys
+  over time; explicit trust, never --allow-untrusted), `apk add`,
+  restart. ~6 s; heals binary-mode drift, apk stays authoritative.
+- **--watch**: mtime-poll redeploy loop (no inotify dependency).
+- **Prod is sealed twice**: no ssh path exists to prod images at all,
+  and the tool independently refuses any target whose rootfs is not
+  writable (AD-004/AD-026).
+- Device-side trap encoded in the script: the device's awk exits on a
+  missing first file instead of continuing, so service-description
+  lookup picks the existing file before awking it.
+
+### build/test-deploy.sh + CI
+
+4-case junit suite (testlib): sysroot stages + app SDK compiles the
+acme daemon; boot; binary deploy (< scaled 10 s bound, marker lands in
+the service log, drift recorded); package deploy (latest start line
+marker-free, apk still owns the package). astro-ci.sh grows
+`deploy-build` (dev+tree image) → `deploy-loop` (the suite) →
+`deploy-restore` (rebuilds the no-tree dev image so later runs never
+inherit acme state), all three skipped cleanly when the SDK toolchain
+is absent (hosted CI does not cache build/state; local runs cover it —
+docs/03 §3 fix item 3, both arches exercised here).
+
+### Verified
+
+- x86_64-dev sysroot: 61 devel / 169 packages, signature-verified;
+  acme-sensord.c compiles via `. sdk/environment` into a musl PIE;
+  a `<curl/curl.h>` + `-lcurl` consumer proves the -libs fallback.
+- aarch64-dev sysroot: 61 devel, 59 pinned local; the daemon
+  cross-compiles to an aarch64 musl PIE via the same environment.
+- **test-deploy qemu-x86_64: PASS 4/4 (48 s)** — live VM, binary
+  round-trip 2.9 s (docs/08 §6 target < 5 s), marker observed in
+  /var/log/acme-sensord.log, drift record present, package deploy
+  restores the packaged daemon (6 s) with apk ownership intact.
+- shellcheck clean (repo severity/exclusions) on all new/modified
+  shell; the acme e2e + boot-smoke unaffected.
+
+### Follow-ups (recorded, deliberately not done here)
+
+- SDK TARBALL packaging (`astro-sdk-<arch>/environment` shipped
+  layout, docs/08 §6): package-toolchain.sh still ships the flat
+  bootstrap sysroot squashfs with arch auto-detected from stray root
+  cmake files — needs an explicit arch arg + the per-image sdk/ dir +
+  astro-deploy.sh aboard. Nothing consumes the tarball yet.
+- docs/03 §3 fix item 1 (drop riscv64 from the SDK arch case) still
+  open; item 3's hosted-CI half needs a cached/prebuilt SDK toolchain.
+- Binary mode deploys the `command=` artifact only; multi-file assets
+  would come from the package file list (`apk query -L`) when needed.

@@ -15,7 +15,9 @@ set -e
 # Options:
 #   --external=<path>   Path to external board/package tree (like BR2_EXTERNAL)
 #   --step=<step>       Run only a specific step: toolchain, kernel, bootloader,
-#                       packages, rootfs, image, bundle
+#                       packages, rootfs, image, bundle, sdk (the image-derived
+#                       app sysroot + environment, docs/03 §3 — needs the
+#                       image built first)
 #   --packages-mode=<m> binary|source. binary: build only Astro-touched
 #                       templates, install the rest from Chimera's signed
 #                       binary repo (dev/PR default via variant TOML).

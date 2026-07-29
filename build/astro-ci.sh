@@ -202,6 +202,31 @@ else
 fi
 
 ##############################################################################
+# 7. AD-026 deploy loop + image-derived app sysroot (M4 phase 3)
+##############################################################################
+# Needs the arch SDK toolchain (a build/state artifact hosted CI does
+# not cache — skipped cleanly there; local runs cover it, docs/03 §3
+# fix item 3). test-deploy.sh stages the sysroot, compiles the acme
+# daemon against it, then proves binary+package sideloads against a
+# booted dev VM. The final rebuild restores the no-tree dev image so
+# later runs never inherit acme state.
+if ls "${PROJECT_ROOT}/build/state/x86_64/bin/"*-clang >/dev/null 2>&1; then
+    step "deploy-build" "${SCRIPT_DIR}/astro-build.sh" "$API_BOARD" dev \
+        --external="${PROJECT_ROOT}/examples/external-tree-acme"
+    if [ "${RESULT[deploy-build]}" = "PASS" ]; then
+        step "deploy-loop" "${SCRIPT_DIR}/test-deploy.sh" "$API_BOARD"
+        step "deploy-restore" "${SCRIPT_DIR}/astro-build.sh" "$API_BOARD" dev
+    else
+        skip "deploy-loop" "dev+tree build failed"
+        skip "deploy-restore" "dev+tree build failed"
+    fi
+else
+    skip "deploy-build" "SDK toolchain not built (./sdk/build-toolchain.sh x86_64)"
+    skip "deploy-loop" "SDK toolchain not built"
+    skip "deploy-restore" "SDK toolchain not built"
+fi
+
+##############################################################################
 # Summary
 ##############################################################################
 echo ""
