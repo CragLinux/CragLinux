@@ -566,6 +566,20 @@ stamp_os_release() {
         echo "ASTRO_RELEASE=${ASTRO_VERSION:-0.0.0-dev}"
     } >> "$osr"
     log_info "os-release stamped: ASTRO_BOARD=${board} ASTRO_VARIANT=${variant} ASTRO_RELEASE=${ASTRO_VERSION:-0.0.0-dev}"
+
+    # The pre-login banner (agetty /etc/issue) still said "Chimera"
+    # (first-metal-boot polish note). Same trap family as os-release:
+    # base-files' tmpfiles has `C /etc/issue <- /usr/share/base-files/
+    # issue`, so a factory-reset /etc wipe would resurrect whatever the
+    # package copy says — stamp BOTH the baked /etc/issue and the
+    # tmpfiles source. agetty escapes: \r kernel release, \n hostname,
+    # \l tty line.
+    local issue_text="Astro ${ASTRO_VERSION:-0.0.0-dev} (\\n) (\\l) — kernel \\r"
+    printf '%s\n\n' "$issue_text" > "${rootfs_dir}/etc/issue"
+    if [ -f "${rootfs_dir}/usr/share/base-files/issue" ]; then
+        printf '%s\n\n' "$issue_text" > "${rootfs_dir}/usr/share/base-files/issue"
+    fi
+    log_info "issue banner stamped: Astro ${ASTRO_VERSION:-0.0.0-dev}"
 }
 
 # Baked network defaults (docs/07 §2 rendering model; M3 phase 3).
