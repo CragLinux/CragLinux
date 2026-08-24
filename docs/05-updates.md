@@ -16,14 +16,14 @@ RAUC baseline: v1.15+; target-side dependencies (GLib, OpenSSL, libdbus, libcurl
 
 ## 2. `system.conf`
 
-Generated per board at image build (package `astro-rauc-conf`, template + board TOML values). Annotated example for `qemu-x86_64` / `x86_64-efi`:
+Generated per board at image build (package `crag-rauc-conf`, template + board TOML values). Annotated example for `qemu-x86_64` / `x86_64-efi`:
 
 ```ini
 [system]
-compatible=astro-x86_64-efi        # per board family (§6); bundles must match
+compatible=crag-x86_64-efi        # per board family (§6); bundles must match
 bootloader=grub                    # uboot on aarch64 boards
 grubenv=/dev/disk/by-partlabel/bootenv   # (uboot boards: /etc/fw_env.config instead)
-statusfile=/data/.astro/rauc.status      # slot status must persist: /data, not RO rootfs
+statusfile=/data/.crag/rauc.status      # slot status must persist: /data, not RO rootfs
 bundle-formats=verity              # AD-010: plain not accepted
 
 [keyring]
@@ -65,7 +65,7 @@ Notes:
 
 ## 4. AD-011 — Boot confirmation: the dinit integration we own
 
-RAUC's documentation assumes systemd units. Astro owns this glue; it ships in `astro-base-update`.
+RAUC's documentation assumes systemd units. Crag owns this glue; it ships in `crag-base-update`.
 
 > **AD-011 — The rauc daemon is dinit-supervised; a `rauc-mark-good` oneshot gated on the `boot-success` milestone confirms boots. Boot success is explicitly defined and app participation in it is opt-in.** *(Recommended)*
 
@@ -80,26 +80,26 @@ restart = true
 
 # boot-success            (definition of a good boot — see below)
 type = internal
-depends-on = astrod
+depends-on = cragd
 depends-on = data.mount
 # + generated depends-on lines for each opt-in app service
 
 # rauc-mark-good
 type = scripted
-command = /usr/libexec/astro/mark-good   # rauc status mark-good; retries w/ backoff
+command = /usr/libexec/crag/mark-good   # rauc status mark-good; retries w/ backoff
 depends-on = boot-success
 ```
 
-- **Boot success =** dinit reached `boot-success`: `/data` mounted, astrod up and passing its own health check, and every *rollback-participating* app service started. Apps opt in via their external-tree service manifest ([08-external-trees.md §5](08-external-trees.md)); participation means **a crashing app can trigger rollback** — powerful, and explicitly a product decision, not a default.
+- **Boot success =** dinit reached `boot-success`: `/data` mounted, cragd up and passing its own health check, and every *rollback-participating* app service started. Apps opt in via their external-tree service manifest ([08-external-trees.md §5](08-external-trees.md)); participation means **a crashing app can trigger rollback** — powerful, and explicitly a product decision, not a default.
 - **Failure path:** if `rauc-mark-good` never runs, the bootloader's attempt counters (`BOOT_x_LEFT` / `TRY`) decrement on each boot; after 3 failed attempts the bootloader falls back to the previous slot. A kernel that never reaches dinit is caught by the same counters; a hang after dinit start is caught by a watchdog timeout on the `boot-success` milestone (dinit-monitored timer that forces reboot — value board-configurable, default 5 min).
-- `rauc.service` D-Bus activation was considered and rejected: dinit supervision is simpler to reason about, and astrod talks to RAUC early in boot anyway.
+- `rauc.service` D-Bus activation was considered and rejected: dinit supervision is simpler to reason about, and cragd talks to RAUC early in boot anyway.
 
 ## 5. Update workflows
 
-### 5.1 API-driven (primary) — via astrod
+### 5.1 API-driven (primary) — via cragd
 
 ```
-app / operator                astrod                      rauc (D-Bus)
+app / operator                cragd                      rauc (D-Bus)
      │  POST /api/v1/update       │                            │
      │  {url: https://…/N.raucb}  │                            │
      │─────────────────────────►  │  policy checks (§6, AD-021)│
@@ -111,42 +111,42 @@ app / operator                astrod                      rauc (D-Bus)
      │  POST /api/v1/update/apply │                            │
      │─────────────────────────►  │  reboot via sys-reboot     │
                     … device boots new slot; boot-success → mark-good;
-                      astrod emits update.confirmed on next connect …
+                      cragd emits update.confirmed on next connect …
 ```
 
 - Reboot is **never automatic** by default; `POST /update` accepts `"apply": "auto"` for products that want install-and-reboot in one call.
-- `POST /update` also accepts a multipart upload for air-gapped/local pushes; astrod stages it under `/data/.astro/staging` (size-checked against free space) and hands RAUC a local path.
+- `POST /update` also accepts a multipart upload for air-gapped/local pushes; cragd stages it under `/data/.crag/staging` (size-checked against free space) and hands RAUC a local path.
 - `POST /update/rollback`: `rauc status mark-bad` + make the other slot primary + reboot — only valid while the previous slot still holds the prior release.
 
 ### 5.2 USB / offline
 
-A dinit-triggered udev hook (opt-in per product, off by default) detects a vfat volume containing `astro-update.raucb`, and calls the same astrod endpoint locally — one code path, same signature checks, same policy. Progress on whatever HMI the product has (via SSE).
+A dinit-triggered udev hook (opt-in per product, off by default) detects a vfat volume containing `crag-update.raucb`, and calls the same cragd endpoint locally — one code path, same signature checks, same policy. Progress on whatever HMI the product has (via SSE).
 
 ### 5.3 Fleet (deferred, designed-for)
 
-`rauc-hawkbit-updater` packaged in the fork as an optional add-on (post-v1): bridges RAUC's D-Bus API to a hawkBit server's DDI API. It coexists with astrod untouched — both are D-Bus clients of RAUC; astrod remains the status surface. No Astro-hosted fleet server, ever ([00-overview.md §4](00-overview.md)).
+`rauc-hawkbit-updater` packaged in the fork as an optional add-on (post-v1): bridges RAUC's D-Bus API to a hawkBit server's DDI API. It coexists with cragd untouched — both are D-Bus clients of RAUC; cragd remains the status surface. No Crag-hosted fleet server, ever ([00-overview.md §4](00-overview.md)).
 
 ## 6. Signing and PKI
 
 | Item | Dev | Prod |
 |---|---|---|
-| CA | `keys/dev/rauc-ca.pem` — **committed to the repo**, generated by `astro keys init-dev`, CN literally `ASTRO DEV — DO NOT SHIP` | offline/HSM-held root CA, never in the repo or CI |
+| CA | `keys/dev/rauc-ca.pem` — **committed to the repo**, generated by `crag keys init-dev`, CN literally `CRAG DEV — DO NOT SHIP` | offline/HSM-held root CA, never in the repo or CI |
 | Signing cert | dev cert signed by dev CA, in-repo | release signing certs (1-year), issued by prod root, held in CI secret store; PKCS#11 path supported by `rauc bundle` |
 | Device keyring | dev CA (dev + CI images) | prod CA chain (release images) |
 | Rotation | regenerate at will | new release-signing certs issued under the same root; root rotation via keyring containing old+new during a transition release |
 | Resigning | — | `rauc resign` supported for promoting a tested bundle from testing to stable **without rebuilding** (channel = repo URL, not key — AD-019) |
 
-Bundle `compatible` string: `astro-<board-family>` (e.g. `astro-rpi`, covering rpi4/rpi5 if and only if one image serves both). Prevents cross-flashing a gateway with a pi image at the RAUC layer regardless of operator error.
+Bundle `compatible` string: `crag-<board-family>` (e.g. `crag-rpi`, covering rpi4/rpi5 if and only if one image serves both). Prevents cross-flashing a gateway with a pi image at the RAUC layer regardless of operator error.
 
-> **AD-021 — astrod enforces monotonic update versions.** *(Recommended)*
-> RAUC itself doesn't refuse downgrades. astrod compares the bundle's version (from `rauc info` pre-install) against the running release and rejects lower versions unless the request carries `"force": true` (logged, and surfaced in `GET /update/status.history`). Rationale: downgrade attacks and accidental stale-artifact pushes are both real; the override keeps field recovery possible. Verification is signature-first: `rauc info` runs with the keyring, so even the version check only trusts signed metadata.
+> **AD-021 — cragd enforces monotonic update versions.** *(Recommended)*
+> RAUC itself doesn't refuse downgrades. cragd compares the bundle's version (from `rauc info` pre-install) against the running release and rejects lower versions unless the request carries `"force": true` (logged, and surfaced in `GET /update/status.history`). Rationale: downgrade attacks and accidental stale-artifact pushes are both real; the override keeps field recovery possible. Verification is signature-first: `rauc info` runs with the keyring, so even the version check only trusts signed metadata.
 
 ## 7. `/data` compatibility across updates
 
-- `/data/.astro/schema-version` records the data-layout generation.
-- **Migration runs in astrod at startup** (forward-only, idempotent, before the API binds): astrod knows its own config format and owns `/data/config`. Bundle-embedded RAUC hooks were rejected for this: they run in the *pre-reboot* context against a *not-yet-running* new system — the wrong side of the boundary to reason about.
-- App state under `/data/apps/<name>` is each app's responsibility; the external-tree contract documents the same forward-only pattern and provides `ASTRO_PREV_VERSION` in the service environment on first boot after an update.
-- Breaking `/data` changes across a release require a migration in astrod **and** a release-notes flag; the roadmap reserves "compatibility floor" bumps (oldest release you can update *from*) as an explicit release-notes item.
+- `/data/.crag/schema-version` records the data-layout generation.
+- **Migration runs in cragd at startup** (forward-only, idempotent, before the API binds): cragd knows its own config format and owns `/data/config`. Bundle-embedded RAUC hooks were rejected for this: they run in the *pre-reboot* context against a *not-yet-running* new system — the wrong side of the boundary to reason about.
+- App state under `/data/apps/<name>` is each app's responsibility; the external-tree contract documents the same forward-only pattern and provides `CRAG_PREV_VERSION` in the service environment on first boot after an update.
+- Breaking `/data` changes across a release require a migration in cragd **and** a release-notes flag; the roadmap reserves "compatibility floor" bumps (oldest release you can update *from*) as an explicit release-notes item.
 
 ## 8. Deferred (designed-for, not in v1)
 

@@ -1,3 +1,5 @@
+> **Note:** this project was later renamed to **Crag Linux** (Astro → Crag, AD-028); the document below is preserved verbatim as Astro-era history.
+
 # M0 Migration Notes — clang-cross → Astro
 
 Migration of the `../clang-cross` prototype into this monorepo per

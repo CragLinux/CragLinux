@@ -6,9 +6,9 @@
 
 ## 1. Two architectures
 
-Astro is two cleanly separated systems:
+Crag is two cleanly separated systems:
 
-1. **The build architecture** — a containerized pipeline that turns source + configuration into images, update bundles, package repositories, and an SDK. It runs on developer machines and CI, always inside the `astro-builder` container.
+1. **The build architecture** — a containerized pipeline that turns source + configuration into images, update bundles, package repositories, and an SDK. It runs on developer machines and CI, always inside the `crag-builder` container.
 2. **The runtime architecture** — what actually runs on a device: bootloader, kernel, dinit, the system daemons, and the team's applications.
 
 The contract between them is the **image**: the build side produces immutable, signed artifacts; the runtime side never modifies itself except through whole-slot RAUC updates and the `/data` partition.
@@ -24,15 +24,15 @@ The contract between them is the **image**: the build side produces immutable, s
 └──────────────┬──────────────────────────────────────────────────┘
                ▼
 ┌──────────────────────────┐   ┌──────────────────────────────────┐
-│         astrod           │   │  provisioning UI (captive portal │
-│  config API + reconciler │   │  page, served by astrod in AP    │
+│         cragd            │   │  provisioning UI (captive portal │
+│  config API + reconciler │   │  page, served by cragd in AP     │
 │  desired state: /data    │   │  mode only)                      │
 └─────┬──────┬──────┬──────┘   └──────────────────────────────────┘
       │      │      │  D-Bus (system bus)          direct config
       ▼      ▼      ▼                                    │
 ┌────────┐ ┌──────┐ ┌───────┐  ┌─────────┐  ┌──────────┐ ▼
 │  iwd   │ │ rauc │ │ dinit │  │ dhcpcd  │  │ mdns     │ files in
-│ (WiFi) │ │(OTA) │ │(ctl   │  │ (DHCP)  │  │ (_astro. │ /data,
+│ (WiFi) │ │(OTA) │ │(ctl   │  │ (DHCP)  │  │ (_crag.  │ /data,
 │        │ │      │ │ sock) │  │         │  │  _tcp)   │ /etc ovl
 └────────┘ └──────┘ └───────┘  └─────────┘  └──────────┘
       ▲      ▲      ▲      supervision & dependency ordering
@@ -50,16 +50,16 @@ The contract between them is the **image**: the build side produces immutable, s
 
 Key structural rules:
 
-- **D-Bus is the internal spine; HTTP is the external surface** (AD-016). System daemons (iwd, RAUC) already require D-Bus; astrod is a D-Bus *client* and never shells out to CLI tools for state-changing operations. Team apps use HTTP only — D-Bus is not part of the supported app contract.
-- **astrod is control plane, not data plane.** If astrod dies, packets keep flowing, updates in progress continue in RAUC, services keep running; dinit restarts astrod and it re-reads desired state from `/data`.
-- **One policy brain.** astrod owns network policy (which interface is WAN, when AP mode is active). iwd, dhcpcd, RAUC are mechanisms. This is why ConnMan/NetworkManager were rejected (AD-015, [07-networking-provisioning.md](07-networking-provisioning.md)).
+- **D-Bus is the internal spine; HTTP is the external surface** (AD-016). System daemons (iwd, RAUC) already require D-Bus; cragd is a D-Bus *client* and never shells out to CLI tools for state-changing operations. Team apps use HTTP only — D-Bus is not part of the supported app contract.
+- **cragd is control plane, not data plane.** If cragd dies, packets keep flowing, updates in progress continue in RAUC, services keep running; dinit restarts cragd and it re-reads desired state from `/data`.
+- **One policy brain.** cragd owns network policy (which interface is WAN, when AP mode is active). iwd, dhcpcd, RAUC are mechanisms. This is why ConnMan/NetworkManager were rejected (AD-015, [07-networking-provisioning.md](07-networking-provisioning.md)).
 
 ## 3. Build architecture
 
 ```
  host (developer laptop / CI runner)
- └── podman (rootless)  ── astro-builder container (Fedora, pinned digest)
-      └── astro CLI  (build/ orchestrator, imported from clang-cross)
+ └── podman (rootless)  ── crag-builder container (Fedora, pinned digest)
+      └── crag CLI  (build/ orchestrator, imported from clang-cross)
            │  reads: boards/<board>/board.toml + variants/<v>.toml
            │         + external trees (--external), merged & schema-validated
            │
@@ -109,17 +109,17 @@ v1 has **no verified boot**: the boot chain is not attested. This is stated, not
 
 ## 6. Component ownership matrix
 
-| Component | Upstream | Astro's role | Lives in |
+| Component | Upstream | Crag's role | Lives in |
 |---|---|---|---|
 | musl, chimerautils, dinit, apk-tools, LLVM | Chimera cports | consume pinned templates | `cports/` (Harbormaster-pinned checkout) |
 | kernel | kernel.org LTS | config fragments, Clang build, per-board | `boards/`, `build/` |
 | U-Boot / GRUB | upstream | defconfigs, env layout, boot scripts | `boards/`, fork |
 | RAUC | rauc.io | package template + dinit services + system.conf per board | fork `main/rauc*`, `boards/` |
 | iwd, dhcpcd, dbus | upstream/cports | fork templates + dinit services + D-Bus policy | fork, `boards/` |
-| mdns responder | — | built into astrod (announce-only) | `astrod/` |
-| **astrod** | — | 100 % Astro (Zig) | `astrod/` |
-| **astroctl** CLI | — | 100 % Astro | `astrod/` |
-| orchestrator (`astro` CLI) | clang-cross prototype | import, extend | `build/` |
+| mdns responder | — | built into cragd (announce-only) | `cragd/` |
+| **cragd** | — | 100 % Crag (Zig) | `cragd/` |
+| **cragctl** CLI | — | 100 % Crag | `cragd/` |
+| orchestrator (`crag` CLI) | clang-cross prototype | import, extend | `build/` |
 | SDK toolchain | clang-cross `build-toolchain.sh` | import, fix, repurpose | `sdk/` |
 | board/variant schema | clang-cross `scripts/lib/{config,schema}.py` | import, extend | `build/lib/` |
 | external-tree engine | clang-cross | import, harden contract | `build/`, spec in doc 08 |
@@ -134,43 +134,60 @@ Status: **Accepted** = confirmed by project owner · **Recommended** = design's 
 | AD-002 | Toolchain roles | cbuild's toolchain builds the distro; standalone LLVM toolchain becomes the app SDK | Recommended | [03](03-build-system.md) |
 | AD-003 | Repo structure | Monorepo; companion repos (cports) via Harbormaster lock; external trees separate repos | Recommended | [10](10-release-ci.md) |
 | AD-004 | Rootfs mutability | RO squashfs in prod, package set frozen at image time; rw dev variant | Recommended | [02](02-base-system.md) |
-| AD-005 | Mutable state | Single `/data` ext4; `/etc` overlay with astrod-write-only policy; factory reset = wipe `/data` | Recommended | [02](02-base-system.md) |
+| AD-005 | Mutable state | Single `/data` ext4; `/etc` overlay with cragd-write-only policy; factory reset = wipe `/data` | Recommended | [02](02-base-system.md) |
 | AD-006 | Initramfs | None in v1; direct squashfs root; tiny custom initramfs reserved for verity | Recommended | [04](04-boards-images-boot.md) |
 | AD-007 | Partition layout | GPT, PARTLABEL-addressed: esp/bootenv/boot.A/rootfs.A/boot.B/rootfs.B/data | Recommended | [04](04-boards-images-boot.md) |
 | AD-008 | x86_64 boot | GRUB-on-EFI + grub-editenv; dual-ESP+UKI documented as secure-boot end-state | Recommended | [04](04-boards-images-boot.md) |
 | AD-009 | ARM boot (aarch64 + armv7) | U-Boot + redundant env + BOOT_ORDER script; QEMU uses real bootloaders | Recommended | [04](04-boards-images-boot.md) |
 | AD-010 | Bundle format | RAUC verity bundles + adaptive updates; plain rejected, crypt deferred | Recommended | [05](05-updates.md) |
 | AD-011 | Boot confirmation | dinit-supervised rauc + `rauc-mark-good` gated on boot-success milestone; opt-in app participation | Recommended | [05](05-updates.md) |
-| AD-012 | astrod language | **Zig** (static musl binaries, C interop for D-Bus, pinned compiler) | Accepted | [06](06-config-api.md) |
+| AD-012 | cragd language | **Zig** (static musl binaries, C interop for D-Bus, pinned compiler) | Accepted | [06](06-config-api.md) |
 | AD-013 | API style | REST/JSON, `/api/v1`, OpenAPI 3.1 as source of truth, operations + SSE | Recommended | [06](06-config-api.md) |
 | AD-014 | API auth & exposure | Unix socket group + localhost bearer token; LAN opt-in; unauthenticated subset only in AP provisioning mode | Recommended | [06](06-config-api.md) |
-| AD-015 | Network stack | **iwd + dhcpcd**; astrod owns policy; ConnMan/NM rejected | Accepted | [07](07-networking-provisioning.md) |
-| AD-016 | Internal bus | D-Bus is the internal spine; astrod is a D-Bus client, never shells out | Recommended | [06](06-config-api.md) |
+| AD-015 | Network stack | **iwd + dhcpcd**; cragd owns policy; ConnMan/NM rejected | Accepted | [07](07-networking-provisioning.md) |
+| AD-016 | Internal bus | D-Bus is the internal spine; cragd is a D-Bus client, never shells out | Recommended | [06](06-config-api.md) |
 | AD-017 | App delivery | External-tree apps ship as apk packages (cbuild templates); overlays for config only | Recommended | [08](08-external-trees.md) |
 | AD-018 | Secure boot posture | v1 = signed updates only; staged roadmap to verity + UKI/FIT; layout is verity-ready now | Recommended | [09](09-security.md) |
 | AD-019 | Versioning | Calendar `YYYY.MM.patch`; API versioned independently; channel = repo URL, not key | Recommended | [10](10-release-ci.md) |
 | AD-020 | CI gate | QEMU full A/B update+rollback test required on every PR | Recommended | [10](10-release-ci.md) |
-| AD-021 | Downgrade policy | astrod enforces monotonic bundle versions (explicit force override); compatible string per board family | Recommended | [05](05-updates.md) |
-| AD-022 | License | Apache-2.0 for all original Astro work | Accepted | [00](00-overview.md) |
-| AD-023 | cports tracking | Re-pin during development; lock the pin for each Astro release | Accepted | [03](03-build-system.md) |
+| AD-021 | Downgrade policy | cragd enforces monotonic bundle versions (explicit force override); compatible string per board family | Recommended | [05](05-updates.md) |
+| AD-022 | License | Apache-2.0 for all original Crag work | Accepted | [00](00-overview.md) |
+| AD-023 | cports tracking | Re-pin during development; lock the pin for each Crag release | Accepted | [03](03-build-system.md) |
 | AD-024 | CI infrastructure | Podman container-based, local-first; hosted CI is a thin wrapper added later | Accepted | [10](10-release-ci.md) |
 | AD-025 | LAN API exposure | Default **off** after provisioning; unix socket + localhost token are the default surface | Accepted | [06](06-config-api.md) |
-| AD-026 | Developer sideload | `astro deploy` pushes app binaries/packages to dev-variant devices in seconds; prod images never accept sideloads | Recommended | [08](08-external-trees.md) |
-| <a id="ad-027"></a>AD-027 | cports fork (supersedes AD-001) | Astro maintains a **fork** of cports (`aka-mj/astro-cports`, branch `astro`), Harbormaster-pinned; Astro changes are ordinary in-fork commits, not an overlay collection; a scheduled update-report tracks currency | Accepted | [03](03-build-system.md) |
+| AD-026 | Developer sideload | `crag deploy` pushes app binaries/packages to dev-variant devices in seconds; prod images never accept sideloads | Recommended | [08](08-external-trees.md) |
+| <a id="ad-027"></a>AD-027 | cports fork (supersedes AD-001) | Crag maintains a **fork** of cports (`aka-mj/astro-cports`, branch `astro`), Harbormaster-pinned; Crag changes are ordinary in-fork commits, not an overlay collection; a scheduled update-report tracks currency | Accepted | [03](03-build-system.md) |
+| <a id="ad-028"></a>AD-028 | Project rename | Project renamed Astro → **Crag** ("Crag Linux", mascot: ibex): distro, `crag` CLI, cragd/cragctl, `crag-base-*` metapackages, `crag-<board>` compatible strings, `CRAG_*` env vars, `/etc/crag` · `/usr/lib/crag` · `/data/.crag` paths, `_crag._tcp` mDNS; the cports fork repo stays `aka-mj/astro-cports` until it moves (AD-027) | Accepted | [00](00-overview.md) |
 
 Amendment process: ADs change via PR to the owning doc plus this index; a "Recommended" AD becomes "Accepted" when the project owner signs off in review ([10-release-ci.md §6](10-release-ci.md)).
 
 > **AD-027 rationale (supersedes AD-001).** AD-001 chose to pin upstream
-> cports and carry Astro's changes as out-of-tree patches + an
+> cports and carry Crag's changes as out-of-tree patches + an
 > `astro-cports` overlay, explicitly avoiding a fork. Experience reversed
 > that: our cross-build and new-package changes were declined upstream,
-> upstream does not accept AI-assisted contributions (which Astro uses),
+> upstream does not accept AI-assisted contributions (which Crag uses),
 > and an independent review flagged that upstream changes to pinned
 > templates could silently break our reproducible builds. Forking removes
 > that coupling and lets us set our own contribution policy. The cost —
 > owning version and security currency for the tree — is mitigated by the
-> scheduled `astro update-report` sweep and its CI job. We fork at the
+> scheduled `crag update-report` sweep and its CI job. We fork at the
 > AD-001 pin (`e3c9e1a0`), so no build behavior changes at the cutover;
 > re-pins remain deliberate lock diffs (AD-023 unchanged). Fork provenance,
 > attribution, and the AI-contribution policy live in `cports/README.md`
 > and `cports/CONTRIBUTING.md`; Chimera's BSD license is retained verbatim.
+
+> **AD-028 rationale (project rename).** The project owner renamed the
+> distro from Astro to **Crag** ("Crag Linux"; mascot: ibex). The rename
+> is applied comprehensively so no identifier mixes old and new names:
+> orchestrator CLI (`crag`), daemon and control tool (`cragd`/`cragctl`),
+> metapackages (`crag-base-*`), RAUC compatible strings (`crag-<board>`),
+> env vars (`CRAG_*`), runtime paths (`/etc/crag`, `/usr/lib/crag`,
+> `/data/.crag`), the mDNS service type (`_crag._tcp`), and the
+> os-release/`/etc/issue` banners (Chimera attribution retained).
+> Deliberately unchanged: the cports fork repo stays `aka-mj/astro-cports`
+> (branch `astro`) until that repo moves itself — Harbormaster URLs and
+> every reference to the fork keep the old name (AD-027) — and
+> MIGRATION-NOTES.md is preserved verbatim as Astro-era history. The
+> rename is branding and identifiers only: no build behavior changes,
+> and pre-1.0 device state under the old `/data/.astro` paths is not
+> migrated (dev devices; factory reset applies).

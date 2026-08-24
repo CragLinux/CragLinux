@@ -7,15 +7,15 @@
 
 ## 1. Philosophy
 
-Astro's core is fixed; **everything product-specific lives in external trees.** A product is fully described by:
+Crag's core is fixed; **everything product-specific lives in external trees.** A product is fully described by:
 
 ```
-product = Astro @ pinned release  +  external tree(s) @ pinned commit  +  signing keys
+product = Crag @ pinned release  +  external tree(s) @ pinned commit  +  signing keys
 ```
 
 The mechanism descends from Buildroot's `BR2_EXTERNAL` as prototyped in clang-cross (`--external <path>`), hardened into a versioned contract (§8). Multiple trees compose (e.g. a company-common tree + a product tree), ordered by explicit priority.
 
-Teams **never** fork Astro, patch cports, or hand-edit images. If a product needs something the contract can't express, that's a gap to fix in Astro — file it, don't fork it.
+Teams **never** fork Crag, patch cports, or hand-edit images. If a product needs something the contract can't express, that's a gap to fix in Crag — file it, don't fork it.
 
 ## 2. Tree layout
 
@@ -26,7 +26,7 @@ acme-product-tree/
 │   └── main/
 │       ├── acme-sensord/template.py
 │       └── acme-branding/template.py
-├── boards/                      # new boards, or additions to Astro boards
+├── boards/                      # new boards, or additions to Crag boards
 │   └── acme-gateway-v2/…        # (board.toml, fragments, overlays, hooks)
 ├── variants/
 │   └── acme-prod.toml
@@ -43,8 +43,8 @@ acme-product-tree/
 [tree]
 name = "acme-product"
 priority = 50                    # merge order among trees; lower merges first
-astro_min = "2026.10"            # build fails fast on incompatible Astro
-astro_max = ""                   # optional ceiling
+crag_min = "2026.10"            # build fails fast on incompatible Crag
+crag_max = ""                   # optional ceiling
 ```
 
 ## 3. AD-017 — Apps ship as apk packages, not overlay files
@@ -78,7 +78,7 @@ source = f"git+https://git.acme.example/sensord#v{pkgver}"
 def post_install(self):
     self.install_service(self.files_path / "acme-sensord")   # → usr/lib/dinit.d/, auto -dinit split
     self.install_file(self.files_path / "acme-sensord.manifest",
-                      "usr/lib/astro/services", name="acme-sensord.toml")
+                      "usr/lib/crag/services", name="acme-sensord.toml")
 ```
 
 ## 4. Layering and precedence
@@ -97,63 +97,63 @@ Worked conflict example (documented in the tree author guide): two trees both pr
 
 ## 5. dinit service integration
 
-Each app package may install a **service manifest** (`usr/lib/astro/services/<name>.toml`) alongside its dinit service file:
+Each app package may install a **service manifest** (`usr/lib/crag/services/<name>.toml`) alongside its dinit service file:
 
 ```toml
 [service]
 name = "acme-sensord"
 user = "acme"                  # system user, created at image assembly from this declaration
-data_dir = true                # → /data/apps/acme-sensord, owned by 'acme', $ASTRO_DATA_DIR
+data_dir = true                # → /data/apps/acme-sensord, owned by 'acme', $CRAG_DATA_DIR
 
 [integration]
 boot_success = true            # opt-in: rollback participation (AD-011)
 api_controllable = true        # opt-in: POST /services/acme-sensord/restart allowed (06 §5.4)
-api_client = true              # join astro-api group → unix socket access
+api_client = true              # join crag-api group → unix socket access
 ```
 
 - **`boot_success = true` is powerful and explicit**: the service becomes a dependency of the `boot-success` milestone, so if it fails to start after an update, `rauc-mark-good` never runs and the device rolls back ([05 §4](05-updates.md)). Default **false** — a crashing app should usually page someone, not revert the OS.
-- Service files use plain dinit syntax (`type = process`, `restart = true`, `logfile = /data/var/log/…`); the image assembly hook reads manifests to: create users, create data dirs, wire `boot-success` dependencies, emit the env file (`ASTRO_DATA_DIR`, `ASTRO_API_SOCKET`), and enable the service (or the tree's hook enables conditionally).
+- Service files use plain dinit syntax (`type = process`, `restart = true`, `logfile = /data/var/log/…`); the image assembly hook reads manifests to: create users, create data dirs, wire `boot-success` dependencies, emit the env file (`CRAG_DATA_DIR`, `CRAG_API_SOCKET`), and enable the service (or the tree's hook enables conditionally).
 
 ## 6. App developer workflow and sideloading
 
-> **AD-026 — Developer sideloading is a first-class, tooled flow: `astro deploy` pushes a rebuilt app (binary or package) to a running dev-variant device and restarts its service in seconds. Production images never accept sideloads.** *(Recommended)*
+> **AD-026 — Developer sideloading is a first-class, tooled flow: `crag deploy` pushes a rebuilt app (binary or package) to a running dev-variant device and restarts its service in seconds. Production images never accept sideloads.** *(Recommended)*
 
-Fast app iteration on a live target is a make-or-break developer experience (prior art: AvocadoOS's dev-mode app sideload on Yocto). Astro tools it explicitly rather than leaving developers to hand-roll scp incantations. Three loops, fastest first:
+Fast app iteration on a live target is a make-or-break developer experience (prior art: AvocadoOS's dev-mode app sideload on Yocto). Crag tools it explicitly rather than leaving developers to hand-roll scp incantations. Three loops, fastest first:
 
 **Sideload loop (seconds):** rebuild against the **SDK** ([03 §3](03-build-system.md)) — cross clang + sysroot generated from the exact target image — and deploy in one step:
 
 ```
-. astro-sdk-aarch64/environment          # CC, CMAKE_TOOLCHAIN_FILE, SYSROOT
+. crag-sdk-aarch64/environment          # CC, CMAKE_TOOLCHAIN_FILE, SYSROOT
 ninja -C build
-astro deploy acme-sensord --to dev-device        # or --to qemu (default port-forwarded local VM)
+crag deploy acme-sensord --to dev-device        # or --to qemu (default port-forwarded local VM)
 ```
 
-`astro deploy` (SDK-shipped, also usable from an external-tree checkout) does, over ssh to a **dev-variant** device:
+`crag deploy` (SDK-shipped, also usable from an external-tree checkout) does, over ssh to a **dev-variant** device:
 1. **Binary mode** (default when given a built artifact): copy the new binary/assets over the installed paths (it knows them from the package's file list), `dinitctl restart <service>`, then stream the service log back to the terminal until Ctrl-C. Round-trip target: **< 5 s** on QEMU.
 2. **Package mode** (`--pkg`): build the app's cbuild template into an apk (warm bldroot), push it, `apk add` it on the device (dev variant runs full apk against a rw rootfs), restart the service. Slower, but exercises the real packaging — recommended before pushing a PR.
 3. `--watch`: re-run the deploy on local file change, for tight edit-compile-run cycles.
 
 **Why this works and where it stops:** the dev variant has a rw ext4 rootfs, ssh, and full apk ([02 §3](02-base-system.md)) — sideloading is ordinary file replacement there, and `apk query` still tells the truth in package mode (binary mode marks the package as locally-modified so drift is visible). **Prod images are read-only squashfs with no ssh — there is no sideload path to them, by design** (AD-004; the update bundle is the only way software reaches production). A field-debug "dev mode" toggle on prod-shaped images is explicitly deferred, not designed-in casually — it would puncture the immutability story and needs its own security review ([11 §3](11-roadmap-migration.md)).
 
-**Outer loop (CI, ~tens of minutes warm):** template + `astro build acme-gateway-v2 acme-prod --external ../acme-product-tree` → image + bundle with the app baked in → `astro test update` against it. The sideload loop never replaces this: what ships is always the image-built package.
+**Outer loop (CI, ~tens of minutes warm):** template + `crag build acme-gateway-v2 acme-prod --external ../acme-product-tree` → image + bundle with the app baked in → `crag test update` against it. The sideload loop never replaces this: what ships is always the image-built package.
 
-**Product repo CI shape** (documented example in `examples/`): the tree is its own git repo; its CI pins an Astro release (container image + git tag), runs `astro build/test`, publishes signed bundles with the *product's* RAUC keys.
+**Product repo CI shape** (documented example in `examples/`): the tree is its own git repo; its CI pins an Crag release (container image + git tag), runs `crag build/test`, publishes signed bundles with the *product's* RAUC keys.
 
 ## 7. Worked example: `acme-sensord`
 
-`examples/external-tree-acme/` in the Astro repo is a **complete, buildable** reference tree kept green in CI ([10 §4](10-release-ci.md)): a ~200-line C sensor daemon that (a) reads its config from `$ASTRO_DATA_DIR`, (b) calls `GET /network` and `GET /update/status` over the unix socket at startup (demonstrating the API-client pattern), (c) ships a dinit service + manifest with `boot_success = false`, `api_controllable = true`, and (d) an `acme-branding` overlay-only package counterpart showing the config-vs-code fence. The tree also adds a `variants/acme-prod.toml` enabling it. Every section of this document points at a file in that tree.
+`examples/external-tree-acme/` in the Crag repo is a **complete, buildable** reference tree kept green in CI ([10 §4](10-release-ci.md)): a ~200-line C sensor daemon that (a) reads its config from `$CRAG_DATA_DIR`, (b) calls `GET /network` and `GET /update/status` over the unix socket at startup (demonstrating the API-client pattern), (c) ships a dinit service + manifest with `boot_success = false`, `api_controllable = true`, and (d) an `acme-branding` overlay-only package counterpart showing the config-vs-code fence. The tree also adds a `variants/acme-prod.toml` enabling it. Every section of this document points at a file in that tree.
 
 ## 8. Stability contract
 
-What Astro guarantees to external trees, per major direction ([10 §2](10-release-ci.md) versioning):
+What Crag guarantees to external trees, per major direction ([10 §2](10-release-ci.md) versioning):
 
 **Stable within a release line, deprecation-cycled across lines:**
 - `tree.toml` schema; tree directory layout
 - board/variant TOML schema (additive evolution; removals go through deprecation warnings for one release)
-- hook execution env: documented variables (`ASTRO_ROOTFS`, `ASTRO_BOARD`, `ASTRO_VARIANT`, layer paths), execution order semantics
+- hook execution env: documented variables (`CRAG_ROOTFS`, `CRAG_BOARD`, `CRAG_VARIANT`, layer paths), execution order semantics
 - overlay semantics + the code/config fence rule
-- service manifest schema; env vars `ASTRO_DATA_DIR`, `ASTRO_API_SOCKET`, `ASTRO_PREV_VERSION`
-- astrod `/api/v1` (frozen once shipped — [06 §4](06-config-api.md))
+- service manifest schema; env vars `CRAG_DATA_DIR`, `CRAG_API_SOCKET`, `CRAG_PREV_VERSION`
+- cragd `/api/v1` (frozen once shipped — [06 §4](06-config-api.md))
 - `/data` path conventions (`/data/apps/<name>`)
 
 **Explicitly not stable:** cports/cbuild internals, base package *set* composition (only the tier metapackage names are contract), kernel config beyond the documented fragments, anything under `build/` not named above. Trees reaching into non-contract surfaces get to keep both pieces.
