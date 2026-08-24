@@ -6,7 +6,7 @@
 # listed in [firmware].packages). Deliberately NOT base-rpi: its
 # Chimera-shaped config (single-root cmdline, /boot/config.txt
 # tmpfiles, linux-version kernel.d hook) conflicts with the A/B
-# PARTLABEL model — Astro generates its own config.txt
+# PARTLABEL model — Crag generates its own config.txt
 # (boards/rpi4/rpi/config.txt).
 rpi-boot
 firmware-linux-brcm-rpi

@@ -8,7 +8,7 @@
 #   * a fixture file under an unlisted usr/lib dir => die
 #   * a config file (etc/...)           => pass
 #   * a dinit service TEXT file (usr/lib/dinit.d/...) => pass
-#   * a usr/lib/astro script            => pass
+#   * a usr/lib/crag script            => pass
 #   * usr/lib/os-release (exact)        => pass
 #   * a symlink into an allowed dir under an allowed hook dir => pass
 #   * an ELF is rejected even under an ALLOWED path (rule 2 is path-independent)
@@ -17,7 +17,7 @@
 # boards/*/overlay must pass the fence (the M4-phase-1 requirement that the
 # fence runs on existing overlays and the no-app path stays byte-identical).
 #
-# Run (host or astro-builder container), from the repo root:
+# Run (host or crag-builder container), from the repo root:
 #   ./build/lib/test_fence.sh
 
 set -u
@@ -64,12 +64,12 @@ printf '\x7fELF\x02\x01\x01' > "$TMP/elf.bin"            # ELF magic + a few byt
 printf '#!/bin/sh\necho hi\n' > "$TMP/script.sh"          # a shell script (NOT elf)
 printf 'KEY=value\n' > "$TMP/plain.conf"                  # config text
 printf 'type = process\nrestart = true\n' > "$TMP/svc"    # dinit service text
-printf 'NAME=Astro\n' > "$TMP/os-release"
-ln -s ../astro/hook.sh "$TMP/hooklink"                    # a symlink
+printf 'NAME=Crag\n' > "$TMP/os-release"
+ln -s ../crag/hook.sh "$TMP/hooklink"                    # a symlink
 
 echo "== fence rejections (die) =="
 expect_fail "ELF under etc (rule 2 anywhere)"     "$TMP/elf.bin"    "etc/acme/agent"
-expect_fail "ELF under an ALLOWED usr/lib/astro"  "$TMP/elf.bin"    "usr/lib/astro/agent"
+expect_fail "ELF under an ALLOWED usr/lib/crag"  "$TMP/elf.bin"    "usr/lib/crag/agent"
 expect_fail "plain file under usr/bin"            "$TMP/script.sh"  "usr/bin/acme-tool"
 expect_fail "plain file under usr/sbin"           "$TMP/script.sh"  "usr/sbin/acme-tool"
 expect_fail "file under unlisted usr/lib dir"     "$TMP/plain.conf" "usr/lib/acme/whatever.conf"
@@ -80,9 +80,9 @@ expect_fail "merged-usr bin/ alias"               "$TMP/script.sh"  "bin/acme-to
 expect_fail "merged-usr sbin/ alias"              "$TMP/script.sh"  "sbin/acme-tool"
 expect_fail "merged-usr lib/ unlisted alias"      "$TMP/plain.conf" "lib/acme/x.conf"
 expect_fail "merged-usr lib64/ alias"             "$TMP/plain.conf" "lib64/acme/x.conf"
-# /-anchored prefix: usr/lib/astro-evil shares the "astro" text but is a
-# DIFFERENT dir than the allowlisted usr/lib/astro/ — must NOT be allowed.
-expect_fail "prefix-lookalike usr/lib/astro-evil" "$TMP/script.sh"  "usr/lib/astro-evil/x"
+# /-anchored prefix: usr/lib/crag-evil shares the "crag" text but is a
+# DIFFERENT dir than the allowlisted usr/lib/crag/ — must NOT be allowed.
+expect_fail "prefix-lookalike usr/lib/crag-evil" "$TMP/script.sh"  "usr/lib/crag-evil/x"
 # a symlink is path-checked (rule 1) even though it is never ELF-probed.
 expect_fail "symlink under fenced usr/bin"        "$TMP/hooklink"   "usr/bin/acme-link"
 
@@ -90,14 +90,14 @@ echo "== fence passes =="
 expect_pass "config under etc"                    "$TMP/plain.conf" "etc/acme/defaults.toml"
 expect_pass "cert-ish file under etc"             "$TMP/plain.conf" "etc/ssl/certs/acme.pem"
 expect_pass "dinit service TEXT under usr/lib"    "$TMP/svc"        "usr/lib/dinit.d/acme-sensord"
-expect_pass "astro platform script (allowed)"     "$TMP/script.sh"  "usr/lib/astro/x.sh"
+expect_pass "crag platform script (allowed)"     "$TMP/script.sh"  "usr/lib/crag/x.sh"
 expect_pass "tmpfiles.d config"                   "$TMP/plain.conf" "usr/lib/tmpfiles.d/acme.conf"
 expect_pass "udev rule (text)"                    "$TMP/plain.conf" "usr/lib/udev/rules.d/70-acme.rules"
 expect_pass "os-release exact file"               "$TMP/os-release" "usr/lib/os-release"
 expect_pass "os-release drop-in"                  "$TMP/plain.conf" "usr/lib/os-release.d/acme.conf"
-expect_pass "dhcpcd hook symlink"                 "$TMP/hooklink"   "usr/lib/dhcpcd-hooks/60-astro-lease"
+expect_pass "dhcpcd hook symlink"                 "$TMP/hooklink"   "usr/lib/dhcpcd-hooks/60-crag-lease"
 expect_pass "usr/share is not fenced"             "$TMP/plain.conf" "usr/share/dbus-1/system.d/x.conf"
-expect_pass "usr/libexec is not fenced"           "$TMP/script.sh"  "usr/libexec/astro/mark-good"
+expect_pass "usr/libexec is not fenced"           "$TMP/script.sh"  "usr/libexec/crag/mark-good"
 # merged-usr alias landing in an ALLOWED usr/lib subtree still passes.
 expect_pass "merged-usr lib/dinit.d alias"        "$TMP/svc"        "lib/dinit.d/acme-sensord"
 

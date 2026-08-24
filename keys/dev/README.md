@@ -6,7 +6,7 @@ Everything in this directory is part of the **development-only PKI**
 - **Loudly fake.** They exist so that dev builds, QEMU boots, and CI can
   exercise the full signing/verification path (RAUC bundles, apk repos)
   without touching real key material.
-- **Generated**, not hand-crafted: run `astro keys init-dev` to (re)create
+- **Generated**, not hand-crafted: run `crag keys init-dev` to (re)create
   them. Committed dev keys are a convenience for reproducible dev/CI builds;
   regenerating them at any time is safe.
 - **Worthless as secrets.** Anyone with a checkout has them, by design.

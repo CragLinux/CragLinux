@@ -1,4 +1,4 @@
-# Templates Astro maintains in the cports fork (fork delta vs the
+# Templates Crag maintains in the cports fork (fork delta vs the
 # fork point in build/cports-fork-point). Second field:
 #   new = not in Chimera's repo -> always built from source
 #   mod = exists upstream, we differ -> source-built only when installed

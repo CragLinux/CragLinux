@@ -1,4 +1,4 @@
-//! astroctl: operator CLI, a thin client over astrod's API via the unix
+//! cragctl: operator CLI, a thin client over cragd's API via the unix
 //! socket (docs/06 §3, §8). Multi-call: same binary, selected by argv[0]
 //! basename or a leading "ctl" arg (main.zig dispatches here).
 //!
@@ -28,10 +28,10 @@ const wifi = @import("wifi.zig");
 const timekeep = @import("timekeep.zig");
 const fsutil = @import("fsutil.zig");
 
-pub const default_socket_path = "/run/astro/astrod.sock";
+pub const default_socket_path = "/run/crag/cragd.sock";
 
-// astrod responses are small JSON documents; anything larger means we are
-// not actually talking to astrod.
+// cragd responses are small JSON documents; anything larger means we are
+// not actually talking to cragd.
 const max_response_len = 256 * 1024;
 
 /// Interval between GET /operations/{id} polls while waiting for an
@@ -46,9 +46,9 @@ pub const events_quiet_ms: i32 = 2000;
 pub const default_connect_timeout_s: u32 = 60;
 
 const usage_text =
-    \\astroctl — Astro device control (thin client over astrod's API)
+    \\cragctl — Crag device control (thin client over cragd's API)
     \\
-    \\Usage: astroctl [--socket=PATH] <command>
+    \\Usage: cragctl [--socket=PATH] <command>
     \\
     \\Commands:
     \\  system                     Show system summary (GET /api/v1/system)
@@ -94,7 +94,7 @@ const usage_text =
     \\  ("system reboot" / "system poweroff" are accepted aliases)
     \\
     \\Options:
-    \\  --socket=PATH     astrod unix socket (default /run/astro/astrod.sock)
+    \\  --socket=PATH     cragd unix socket (default /run/crag/cragd.sock)
     \\  --force           update install: bypass the AD-021 downgrade gate
     \\  --follow          events: keep the stream open (live tail) instead of
     \\                    exiting at the first quiet period
@@ -169,7 +169,7 @@ pub const Invocation = struct {
 pub const Parsed = union(enum) { help, usage_error, invoke: Invocation };
 
 /// `args` excludes the program name (and the "ctl" selector when invoked
-/// as `astrod ctl ...`). Flags may appear before or after command words.
+/// as `cragd ctl ...`). Flags may appear before or after command words.
 pub fn parseCommand(args: []const []const u8) Parsed {
     var socket_path: []const u8 = default_socket_path;
     var follow = false;
@@ -216,7 +216,7 @@ pub fn parseCommand(args: []const []const u8) Parsed {
     }
     var target: []const u8 = "";
     const action: Action = switch (nwords) {
-        // Bare `astroctl` prints usage as help (exit 0), not as an error:
+        // Bare `cragctl` prints usage as help (exit 0), not as an error:
         // the discovery path for operators.
         0 => return .help,
         1 => if (std.mem.eql(u8, words[0], "system"))
@@ -398,11 +398,11 @@ fn simpleRequest(arena: std.mem.Allocator, inv: Invocation) u8 {
     const raw = exchange(arena, inv.socket_path, requestFor(inv.action)) catch |err|
         return transportFail(arena, inv.socket_path, err);
     const resp = parseResponse(raw) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
         return 1;
     };
     if (resp.status >= 400) {
-        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: request failed\n";
+        const msg = formatProblem(arena, resp.status, resp.body) catch "cragctl: request failed\n";
         writeAll(posix.STDERR_FILENO, msg);
         return 1;
     }
@@ -448,7 +448,7 @@ fn requestFor(action: Action) []const u8 {
 fn updateInstall(arena: std.mem.Allocator, inv: Invocation) u8 {
     const raw = blk: {
         if (isUrl(inv.target)) {
-            // JSON form: astrod hands the URL to RAUC, which streams the
+            // JSON form: cragd hands the URL to RAUC, which streams the
             // verity bundle itself (docs/05 §3) — nothing to upload.
             const body = std.json.Stringify.valueAlloc(arena, .{ .url = inv.target, .force = inv.force }, .{}) catch return oom();
             const req = std.fmt.allocPrint(
@@ -461,7 +461,7 @@ fn updateInstall(arena: std.mem.Allocator, inv: Invocation) u8 {
         }
         break :blk uploadBundle(arena, inv) catch |err| switch (err) {
             error.BundleNotFound => {
-                const msg = std.fmt.allocPrint(arena, "astroctl: cannot open bundle {s}\n", .{inv.target}) catch "astroctl: cannot open bundle\n";
+                const msg = std.fmt.allocPrint(arena, "cragctl: cannot open bundle {s}\n", .{inv.target}) catch "cragctl: cannot open bundle\n";
                 writeAll(posix.STDERR_FILENO, msg);
                 return 1;
             },
@@ -469,16 +469,16 @@ fn updateInstall(arena: std.mem.Allocator, inv: Invocation) u8 {
         };
     };
     const resp = parseResponse(raw) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
         return 1;
     };
     if (resp.status != 202) {
-        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: install request failed\n";
+        const msg = formatProblem(arena, resp.status, resp.body) catch "cragctl: install request failed\n";
         writeAll(posix.STDERR_FILENO, msg);
         return 1;
     }
     const op_url = parseOperationRef(arena, resp.body) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: 202 response without an operation URL\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: 202 response without an operation URL\n");
         return 1;
     };
     const started = std.fmt.allocPrint(arena, "installing; operation {s}\n", .{op_url}) catch return oom();
@@ -558,16 +558,16 @@ fn pollOperation(arena: std.mem.Allocator, socket_path: []const u8, op_url: []co
         const raw = exchange(arena, socket_path, req) catch |err|
             return transportFail(arena, socket_path, err);
         const resp = parseResponse(raw) catch {
-            writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
             return 1;
         };
         if (resp.status != 200) {
-            const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: operation poll failed\n";
+            const msg = formatProblem(arena, resp.status, resp.body) catch "cragctl: operation poll failed\n";
             writeAll(posix.STDERR_FILENO, msg);
             return 1;
         }
         const op = parseOperation(arena, resp.body) catch {
-            writeAll(posix.STDERR_FILENO, "astroctl: malformed operation document\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: malformed operation document\n");
             return 1;
         };
         if (op.progress != last_progress or !std.mem.eql(u8, op.message, last_message)) {
@@ -599,16 +599,16 @@ fn wifiScan(arena: std.mem.Allocator, inv: Invocation) u8 {
     const raw = exchange(arena, inv.socket_path, req) catch |err|
         return transportFail(arena, inv.socket_path, err);
     const resp = parseResponse(raw) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
         return 1;
     };
     if (resp.status != 202) {
-        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: scan request failed\n";
+        const msg = formatProblem(arena, resp.status, resp.body) catch "cragctl: scan request failed\n";
         writeAll(posix.STDERR_FILENO, msg);
         return 1;
     }
     const op_url = parseOperationRef(arena, resp.body) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: 202 response without an operation URL\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: 202 response without an operation URL\n");
         return 1;
     };
     const started = std.fmt.allocPrint(arena, "scanning; operation {s}\n", .{op_url}) catch return oom();
@@ -619,11 +619,11 @@ fn wifiScan(arena: std.mem.Allocator, inv: Invocation) u8 {
     const raw2 = exchange(arena, inv.socket_path, requestFor(.wifi_networks)) catch |err|
         return transportFail(arena, inv.socket_path, err);
     const resp2 = parseResponse(raw2) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
         return 1;
     };
     if (resp2.status >= 400) {
-        const msg = formatProblem(arena, resp2.status, resp2.body) catch "astroctl: fetching scan results failed\n";
+        const msg = formatProblem(arena, resp2.status, resp2.body) catch "cragctl: fetching scan results failed\n";
         writeAll(posix.STDERR_FILENO, msg);
         return 1;
     }
@@ -638,11 +638,11 @@ fn wifiScan(arena: std.mem.Allocator, inv: Invocation) u8 {
 fn wifiConnect(arena: std.mem.Allocator, inv: Invocation) u8 {
     const psk = if (inv.psk) |p| p else readPskStdin(arena) catch |err| switch (err) {
         error.EmptyPassphrase => {
-            writeAll(posix.STDERR_FILENO, "astroctl: empty passphrase on stdin (pass --psk= or pipe the passphrase)\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: empty passphrase on stdin (pass --psk= or pipe the passphrase)\n");
             return 2;
         },
         error.InputOutput => {
-            writeAll(posix.STDERR_FILENO, "astroctl: cannot read the passphrase from stdin\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: cannot read the passphrase from stdin\n");
             return 1;
         },
         error.OutOfMemory => return oom(),
@@ -656,11 +656,11 @@ fn wifiConnect(arena: std.mem.Allocator, inv: Invocation) u8 {
     const raw = exchange(arena, inv.socket_path, req) catch |err|
         return transportFail(arena, inv.socket_path, err);
     const resp = parseResponse(raw) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
         return 1;
     };
     if (resp.status >= 300) {
-        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: connect request failed\n";
+        const msg = formatProblem(arena, resp.status, resp.body) catch "cragctl: connect request failed\n";
         writeAll(posix.STDERR_FILENO, msg);
         return 1;
     }
@@ -674,16 +674,16 @@ fn wifiConnect(arena: std.mem.Allocator, inv: Invocation) u8 {
         const raw2 = exchange(arena, inv.socket_path, state_req) catch |err|
             return transportFail(arena, inv.socket_path, err);
         const resp2 = parseResponse(raw2) catch {
-            writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
             return 1;
         };
         if (resp2.status != 200) {
-            const msg = formatProblem(arena, resp2.status, resp2.body) catch "astroctl: wifi state poll failed\n";
+            const msg = formatProblem(arena, resp2.status, resp2.body) catch "cragctl: wifi state poll failed\n";
             writeAll(posix.STDERR_FILENO, msg);
             return 1;
         }
         const view = parseWifiStateView(arena, resp2.body) catch {
-            writeAll(posix.STDERR_FILENO, "astroctl: malformed wifi state document\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: malformed wifi state document\n");
             return 1;
         };
         if (!std.mem.eql(u8, view.state, last_state)) {
@@ -710,7 +710,7 @@ fn wifiConnect(arena: std.mem.Allocator, inv: Invocation) u8 {
 fn wanSet(arena: std.mem.Allocator, inv: Invocation) u8 {
     const body = buildWanBody(arena, inv.target) catch |err| switch (err) {
         error.BadOrder => {
-            writeAll(posix.STDERR_FILENO, "astroctl: bad wan order (comma-separated interface classes, e.g. ethernet,wifi)\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: bad wan order (comma-separated interface classes, e.g. ethernet,wifi)\n");
             return 2;
         },
         error.OutOfMemory => return oom(),
@@ -723,11 +723,11 @@ fn wanSet(arena: std.mem.Allocator, inv: Invocation) u8 {
     const raw = exchange(arena, inv.socket_path, req) catch |err|
         return transportFail(arena, inv.socket_path, err);
     const resp = parseResponse(raw) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
         return 1;
     };
     if (resp.status >= 400) {
-        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: wan set failed\n";
+        const msg = formatProblem(arena, resp.status, resp.body) catch "cragctl: wan set failed\n";
         writeAll(posix.STDERR_FILENO, msg);
         return 1;
     }
@@ -744,7 +744,7 @@ fn ethernetCommand(arena: std.mem.Allocator, inv: Invocation) u8 {
         // parseCommand already validated the spec/mode flags.
         const body = buildEthernetBody(arena, inv.static_spec, inv.dhcp) catch |err| switch (err) {
             error.BadSpec => {
-                writeAll(posix.STDERR_FILENO, "astroctl: bad --static spec (ADDR/PREFIX[,GW])\n");
+                writeAll(posix.STDERR_FILENO, "cragctl: bad --static spec (ADDR/PREFIX[,GW])\n");
                 return 2;
             },
             error.OutOfMemory => return oom(),
@@ -758,11 +758,11 @@ fn ethernetCommand(arena: std.mem.Allocator, inv: Invocation) u8 {
     const raw = exchange(arena, inv.socket_path, req) catch |err|
         return transportFail(arena, inv.socket_path, err);
     const resp = parseResponse(raw) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
         return 1;
     };
     if (resp.status >= 400) {
-        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: ethernet request failed\n";
+        const msg = formatProblem(arena, resp.status, resp.body) catch "cragctl: ethernet request failed\n";
         writeAll(posix.STDERR_FILENO, msg);
         return 1;
     }
@@ -781,11 +781,11 @@ fn provisionStatus(arena: std.mem.Allocator, inv: Invocation) u8 {
     const raw = exchange(arena, inv.socket_path, requestFor(.show_system)) catch |err|
         return transportFail(arena, inv.socket_path, err);
     const resp = parseResponse(raw) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
         return 1;
     };
     if (resp.status >= 400) {
-        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: provision status failed\n";
+        const msg = formatProblem(arena, resp.status, resp.body) catch "cragctl: provision status failed\n";
         writeAll(posix.STDERR_FILENO, msg);
         return 1;
     }
@@ -815,11 +815,11 @@ fn wifiApShow(arena: std.mem.Allocator, inv: Invocation) u8 {
     const raw = exchange(arena, inv.socket_path, req) catch |err|
         return transportFail(arena, inv.socket_path, err);
     const resp = parseResponse(raw) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
         return 1;
     };
     if (resp.status >= 400) {
-        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: wifi ap show failed\n";
+        const msg = formatProblem(arena, resp.status, resp.body) catch "cragctl: wifi ap show failed\n";
         writeAll(posix.STDERR_FILENO, msg);
         return 1;
     }
@@ -862,11 +862,11 @@ fn wifiApSet(arena: std.mem.Allocator, inv: Invocation) u8 {
     const raw = exchange(arena, inv.socket_path, req) catch |err|
         return transportFail(arena, inv.socket_path, err);
     const resp = parseResponse(raw) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
         return 1;
     };
     if (resp.status >= 400) {
-        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: wifi ap request failed\n";
+        const msg = formatProblem(arena, resp.status, resp.body) catch "cragctl: wifi ap request failed\n";
         writeAll(posix.STDERR_FILENO, msg);
         return 1;
     }
@@ -885,16 +885,16 @@ fn factoryReset(arena: std.mem.Allocator, inv: Invocation) u8 {
         const raw = exchange(arena, inv.socket_path, requestFor(.show_system)) catch |err|
             return transportFail(arena, inv.socket_path, err);
         const resp = parseResponse(raw) catch {
-            writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
             return 1;
         };
         if (resp.status >= 400) {
-            const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: cannot fetch the machine-id\n";
+            const msg = formatProblem(arena, resp.status, resp.body) catch "cragctl: cannot fetch the machine-id\n";
             writeAll(posix.STDERR_FILENO, msg);
             return 1;
         }
         const mid = parseMachineId(arena, resp.body) catch {
-            writeAll(posix.STDERR_FILENO, "astroctl: system document without a machine_id\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: system document without a machine_id\n");
             return 1;
         };
         const prompt = std.fmt.allocPrint(arena,
@@ -906,11 +906,11 @@ fn factoryReset(arena: std.mem.Allocator, inv: Invocation) u8 {
         writeAll(posix.STDOUT_FILENO, prompt);
         const line = readLineStdin(arena) catch |err| switch (err) {
             error.EmptyLine => {
-                writeAll(posix.STDERR_FILENO, "astroctl: aborted (nothing entered)\n");
+                writeAll(posix.STDERR_FILENO, "cragctl: aborted (nothing entered)\n");
                 return 2;
             },
             error.InputOutput => {
-                writeAll(posix.STDERR_FILENO, "astroctl: cannot read the confirmation from stdin\n");
+                writeAll(posix.STDERR_FILENO, "cragctl: cannot read the confirmation from stdin\n");
                 return 1;
             },
             error.OutOfMemory => return oom(),
@@ -926,11 +926,11 @@ fn factoryReset(arena: std.mem.Allocator, inv: Invocation) u8 {
     const raw = exchange(arena, inv.socket_path, req) catch |err|
         return transportFail(arena, inv.socket_path, err);
     const resp = parseResponse(raw) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
         return 1;
     };
     if (resp.status >= 400) {
-        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: factory reset refused\n";
+        const msg = formatProblem(arena, resp.status, resp.body) catch "cragctl: factory reset refused\n";
         writeAll(posix.STDERR_FILENO, msg);
         return 1;
     }
@@ -939,17 +939,17 @@ fn factoryReset(arena: std.mem.Allocator, inv: Invocation) u8 {
 }
 
 /// `time`: the daemon's synced view (GET /system time_synced — adjtimex
-/// STA_UNSYNC via astrod, docs/07 §6) plus the LOCAL floor context read
-/// the same way astrod reads it (build-epoch + last-known-time files).
+/// STA_UNSYNC via cragd, docs/07 §6) plus the LOCAL floor context read
+/// the same way cragd reads it (build-epoch + last-known-time files).
 fn timeStatus(arena: std.mem.Allocator, inv: Invocation) u8 {
     const raw = exchange(arena, inv.socket_path, requestFor(.show_system)) catch |err|
         return transportFail(arena, inv.socket_path, err);
     const resp = parseResponse(raw) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
         return 1;
     };
     if (resp.status >= 400) {
-        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: time status failed\n";
+        const msg = formatProblem(arena, resp.status, resp.body) catch "cragctl: time status failed\n";
         writeAll(posix.STDERR_FILENO, msg);
         return 1;
     }
@@ -990,7 +990,7 @@ fn readLineStdin(arena: std.mem.Allocator) error{ EmptyLine, InputOutput, OutOfM
 
 // ---- events: SSE reader -----------------------------------------------------
 
-// Design choice (documented): `astroctl events` always requests a FULL
+// Design choice (documented): `cragctl events` always requests a FULL
 // ring replay (Last-Event-ID: 0) so recently published events are visible
 // without having subscribed beforehand. The default mode then exits once
 // the stream is quiet for events_quiet_ms — that makes it usable from
@@ -1010,22 +1010,22 @@ fn eventsCommand(arena: std.mem.Allocator, inv: Invocation) u8 {
     var head: std.ArrayList(u8) = .empty;
     const head_end = while (true) {
         const n = posix.read(fd, &buf) catch {
-            writeAll(posix.STDERR_FILENO, "astroctl: read error on event stream\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: read error on event stream\n");
             return 1;
         };
         if (n == 0) {
-            writeAll(posix.STDERR_FILENO, "astroctl: connection closed before a response arrived\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: connection closed before a response arrived\n");
             return 1;
         }
         head.appendSlice(arena, buf[0..n]) catch return oom();
         if (std.mem.indexOf(u8, head.items, "\r\n\r\n")) |i| break i + 4;
         if (head.items.len > max_response_len) {
-            writeAll(posix.STDERR_FILENO, "astroctl: oversized response head\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: oversized response head\n");
             return 1;
         }
     };
     const status = statusOf(head.items) catch {
-        writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+        writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
         return 1;
     };
     if (status != 200) {
@@ -1036,10 +1036,10 @@ fn eventsCommand(arena: std.mem.Allocator, inv: Invocation) u8 {
             head.appendSlice(arena, buf[0..n]) catch return oom();
         }
         const resp = parseResponse(head.items) catch {
-            writeAll(posix.STDERR_FILENO, "astroctl: malformed HTTP response from astrod\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: malformed HTTP response from cragd\n");
             return 1;
         };
-        const msg = formatProblem(arena, resp.status, resp.body) catch "astroctl: event stream refused\n";
+        const msg = formatProblem(arena, resp.status, resp.body) catch "cragctl: event stream refused\n";
         writeAll(posix.STDERR_FILENO, msg);
         return 1;
     }
@@ -1054,12 +1054,12 @@ fn eventsCommand(arena: std.mem.Allocator, inv: Invocation) u8 {
         var pfds = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
         const timeout: i32 = if (inv.follow) -1 else events_quiet_ms;
         const ready = posix.poll(&pfds, timeout) catch {
-            writeAll(posix.STDERR_FILENO, "astroctl: poll error on event stream\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: poll error on event stream\n");
             return 1;
         };
         if (ready == 0) return 0; // drain mode: quiet period reached
         const n = posix.read(fd, &buf) catch {
-            writeAll(posix.STDERR_FILENO, "astroctl: read error on event stream\n");
+            writeAll(posix.STDERR_FILENO, "cragctl: read error on event stream\n");
             return 1;
         };
         if (n == 0) return 0; // server closed (shutdown, or overflow drop)
@@ -1079,7 +1079,7 @@ pub const ClientResponse = struct {
 
 pub const ResponseError = error{BadResponse};
 
-/// Parse a complete HTTP/1.1 response. astrod always closes after one
+/// Parse a complete HTTP/1.1 response. cragd always closes after one
 /// response, so `buf` is the whole stream: body runs to EOF, bounded by
 /// Content-Length when present (a shorter stream than promised is an error).
 pub fn parseResponse(buf: []const u8) ResponseError!ClientResponse {
@@ -1471,7 +1471,7 @@ pub fn formatWifiNetworks(allocator: std.mem.Allocator, body: []const u8) ![]u8 
     if (parsed.value != .array) return error.BadResponse;
     const nets = parsed.value.array.items;
     if (nets.len == 0)
-        return allocator.dupe(u8, "no networks seen; run 'astroctl wifi scan'\n");
+        return allocator.dupe(u8, "no networks seen; run 'cragctl wifi scan'\n");
 
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
@@ -1777,7 +1777,7 @@ const TransportError = error{ FileNotFound, ConnectionRefused, AccessDenied, Nam
 const UploadError = TransportError || error{BundleNotFound};
 
 // The errno cases an operator can act on get their own names for the
-// "cannot reach astrod" message; the rest collapse to Unexpected.
+// "cannot reach cragd" message; the rest collapse to Unexpected.
 fn check(rc: usize) TransportError!usize {
     return switch (linux.errno(rc)) {
         .SUCCESS => rc,
@@ -1827,17 +1827,17 @@ fn exchange(allocator: std.mem.Allocator, socket_path: []const u8, request: []co
 }
 
 fn transportFail(arena: std.mem.Allocator, socket_path: []const u8, err: anyerror) u8 {
-    const msg = std.fmt.allocPrint(arena, "astroctl: cannot reach astrod at {s} ({t}) — is astrod running?\n", .{ socket_path, err }) catch "astroctl: cannot reach astrod\n";
+    const msg = std.fmt.allocPrint(arena, "cragctl: cannot reach cragd at {s} ({t}) — is cragd running?\n", .{ socket_path, err }) catch "cragctl: cannot reach cragd\n";
     writeAll(posix.STDERR_FILENO, msg);
     return 1;
 }
 
 fn oom() u8 {
-    writeAll(posix.STDERR_FILENO, "astroctl: out of memory\n");
+    writeAll(posix.STDERR_FILENO, "cragctl: out of memory\n");
     return 1;
 }
 
-// Raw write(2): stable across the std.Io churn and astroctl output is
+// Raw write(2): stable across the std.Io churn and cragctl output is
 // tiny/unbuffered anyway.
 fn writeAll(fd: posix.fd_t, bytes: []const u8) void {
     var off: usize = 0;
@@ -1888,9 +1888,9 @@ test "parseCommand: update command group" {
     try std.testing.expect(!inst.invoke.force);
 
     // --force is free-order and install-only.
-    const forced = parseCommand(&.{ "update", "install", "--force", "https://example.com/astro.raucb" });
+    const forced = parseCommand(&.{ "update", "install", "--force", "https://example.com/crag.raucb" });
     try std.testing.expectEqual(Action.update_install, forced.invoke.action);
-    try std.testing.expectEqualStrings("https://example.com/astro.raucb", forced.invoke.target);
+    try std.testing.expectEqualStrings("https://example.com/crag.raucb", forced.invoke.target);
     try std.testing.expect(forced.invoke.force);
 
     // install without a target is a usage error, not a partial command.
@@ -1971,11 +1971,11 @@ test "formatSystemInfo renders aligned key-value lines in document order" {
 test "formatProblem prefers title and detail, falls back to HTTP status" {
     const a = std.testing.allocator;
 
-    const with_detail = try formatProblem(a, 501, "{\"type\":\"urn:astro:problem:not-implemented\",\"title\":\"Not Implemented\",\"status\":501,\"detail\":\"dinit client not wired\"}");
+    const with_detail = try formatProblem(a, 501, "{\"type\":\"urn:crag:problem:not-implemented\",\"title\":\"Not Implemented\",\"status\":501,\"detail\":\"dinit client not wired\"}");
     defer a.free(with_detail);
     try std.testing.expectEqualStrings("error: Not Implemented: dinit client not wired\n", with_detail);
 
-    const no_detail = try formatProblem(a, 404, "{\"type\":\"urn:astro:problem:not-found\",\"title\":\"Not Found\",\"status\":404}");
+    const no_detail = try formatProblem(a, 404, "{\"type\":\"urn:crag:problem:not-found\",\"title\":\"Not Found\",\"status\":404}");
     defer a.free(no_detail);
     try std.testing.expectEqualStrings("error: Not Found\n", no_detail);
 
@@ -2042,7 +2042,7 @@ test "formatUpdateStatus renders scalars and an aligned slot table" {
     const arena = arena_state.allocator();
 
     const body =
-        \\{"boot_slot":"A","primary":"rootfs.1","operation":"idle","last_error":"","compatible":"astro-virt",
+        \\{"boot_slot":"A","primary":"rootfs.1","operation":"idle","last_error":"","compatible":"crag-virt",
         \\ "slots":[
         \\  {"name":"rootfs.0","state":"booted","bundle_version":"0.0.0-dev","boot_status":"good","boot_attempts_left":3,"device":"/dev/vda5"},
         \\  {"name":"rootfs.1","state":"inactive","bundle_version":"","boot_status":"good","boot_attempts_left":null,"device":"/dev/vda6"}]}
@@ -2052,7 +2052,7 @@ test "formatUpdateStatus renders scalars and an aligned slot table" {
         "boot_slot    A\n" ++
         "primary      rootfs.1\n" ++
         "operation    idle\n" ++
-        "compatible   astro-virt\n" ++
+        "compatible   crag-virt\n" ++
         "last_error   -\n" ++
         "\n" ++
         "SLOT      STATE     VERSION    BOOT  ATTEMPTS  DEVICE\n" ++
@@ -2205,18 +2205,18 @@ test "formatWifiNetworks renders the scan table and the empty case" {
     const arena = arena_state.allocator();
 
     const body =
-        \\[{"ssid":"astro-test","signal_dbm":-42,"security":"psk","known":true,"connected":false},
+        \\[{"ssid":"crag-test","signal_dbm":-42,"security":"psk","known":true,"connected":false},
         \\ {"ssid":"cafe","signal_dbm":-70,"security":"open","known":false,"connected":false}]
     ;
     const out = try formatWifiNetworks(arena, body);
     const expected =
-        "SSID        SIGNAL  SECURITY  KNOWN  CONNECTED\n" ++
-        "astro-test  -42     psk       yes    -\n" ++
-        "cafe        -70     open      -      -\n";
+        "SSID       SIGNAL  SECURITY  KNOWN  CONNECTED\n" ++
+        "crag-test  -42     psk       yes    -\n" ++
+        "cafe       -70     open      -      -\n";
     try std.testing.expectEqualStrings(expected, out);
 
     const empty = try formatWifiNetworks(arena, "[]");
-    try std.testing.expectEqualStrings("no networks seen; run 'astroctl wifi scan'\n", empty);
+    try std.testing.expectEqualStrings("no networks seen; run 'cragctl wifi scan'\n", empty);
     try std.testing.expectError(error.BadResponse, formatWifiNetworks(arena, "{}"));
 }
 
@@ -2256,10 +2256,10 @@ test "parseWifiStateView extracts state and connected ssid" {
     const arena = arena_state.allocator();
 
     const connected = try parseWifiStateView(arena,
-        \\{"radio_present":true,"powered":true,"mode":"station","state":"connected","connected_ssid":"astro-test","rssi_dbm":-40}
+        \\{"radio_present":true,"powered":true,"mode":"station","state":"connected","connected_ssid":"crag-test","rssi_dbm":-40}
     );
     try std.testing.expectEqualStrings("connected", connected.state);
-    try std.testing.expectEqualStrings("astro-test", connected.connected_ssid.?);
+    try std.testing.expectEqualStrings("crag-test", connected.connected_ssid.?);
 
     const idle = try parseWifiStateView(arena,
         \\{"radio_present":true,"powered":true,"mode":"station","state":"disconnected","connected_ssid":null,"rssi_dbm":null}
@@ -2415,16 +2415,16 @@ test "formatWifiApState renders the state and only show appends the psk" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const body = "{\"enabled\":true,\"ssid\":\"astro-4e5f67\",\"subnet\":\"192.168.223.0/24\"}";
+    const body = "{\"enabled\":true,\"ssid\":\"crag-4e5f67\",\"subnet\":\"192.168.223.0/24\"}";
     const with_psk = try formatWifiApState(arena, body, "0123456789abcdef");
     const expected =
         "enabled  yes\n" ++
-        "ssid     astro-4e5f67\n" ++
+        "ssid     crag-4e5f67\n" ++
         "subnet   192.168.223.0/24\n" ++
         "psk      0123456789abcdef\n";
     try std.testing.expectEqualStrings(expected, with_psk);
 
-    const without = try formatWifiApState(arena, "{\"enabled\":false,\"ssid\":\"astro-4e5f67\",\"subnet\":\"192.168.223.0/24\"}", null);
+    const without = try formatWifiApState(arena, "{\"enabled\":false,\"ssid\":\"crag-4e5f67\",\"subnet\":\"192.168.223.0/24\"}", null);
     try std.testing.expect(std.mem.indexOf(u8, without, "psk") == null);
     try std.testing.expect(std.mem.indexOf(u8, without, "enabled  no\n") != null);
 
@@ -2438,7 +2438,7 @@ test "wifi ap show derivation matches the daemon's (one identity everywhere)" {
     var psk_buf: [16]u8 = undefined;
     const mid = "8007a5c25ff34ce3a1a9e64e5f670000\n";
     const ssid = wifi.deriveApSsid(&ssid_buf, mid);
-    try std.testing.expectEqualStrings("astro-670000", ssid);
+    try std.testing.expectEqualStrings("crag-670000", ssid);
     const psk = wifi.deriveApPsk(&psk_buf, mid);
     try std.testing.expectEqual(@as(usize, 16), psk.len);
     for (psk) |c| try std.testing.expect(std.ascii.isHex(c) and !std.ascii.isUpper(c));

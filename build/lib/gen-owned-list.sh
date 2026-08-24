@@ -3,8 +3,8 @@ set -euo pipefail
 # Regenerate build/cports-owned.list from the fork delta. Needs the FULL
 # fork history (not a shallow CI checkout); run it after every re-pin.
 #
-# new = template added by Astro (not in Chimera's repo) -> always source-built
-# mod = template Astro modified (exists upstream, differs) -> source-built
+# new = template added by Crag (not in Chimera's repo) -> always source-built
+# mod = template Crag modified (exists upstream, differs) -> source-built
 #       only when an image installs it (binary packages-mode)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,7 +14,7 @@ FORK_POINT="$(cat "${ROOT}/build/cports-fork-point")"
 OUT="${ROOT}/build/cports-owned.list"
 
 {
-    echo "# Templates Astro maintains in the cports fork (fork delta vs the"
+    echo "# Templates Crag maintains in the cports fork (fork delta vs the"
     echo "# fork point in build/cports-fork-point). Second field:"
     echo "#   new = not in Chimera's repo -> always built from source"
     echo "#   mod = exists upstream, we differ -> source-built only when installed"

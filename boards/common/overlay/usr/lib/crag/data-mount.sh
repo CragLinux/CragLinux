@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Astro data-mount early service (docs/02 §4, AD-005; docs/02 §5.1 graph
+# Crag data-mount early service (docs/02 §4, AD-005; docs/02 §5.1 graph
 # node "data.mount"): mounts the shared mutable-state partition
 # (PARTLABEL=data, ext4) on /data and wires every mutable path of the
 # read-only rootfs into it:
@@ -105,7 +105,7 @@ if ! mountpoint -q /data; then
 fi
 
 # --- factory reset executor (docs/07 §5, M3 phase 4) ---------------------
-# The flag is left by the astro-factory-reset oneshot (API path: astrod
+# The flag is left by the crag-factory-reset oneshot (API path: cragd
 # verifies {"confirm": "<machine-id>"} then dispatches it, syncs,
 # reboots) or by a board's reset-button hook. Running HERE — right after
 # the mount, before any other service reads /data — is the docs/07 §5
@@ -116,7 +116,7 @@ fi
 # not implemented. Boot then continues on the fresh /data: the skeleton
 # below is recreated and firstboot reruns by construction (its
 # done-stamp lived on /data). Slots are untouched.
-if [ -e /data/.astro/factory-reset-request ]; then
+if [ -e /data/.crag/factory-reset-request ]; then
     # To the console: rare + significant (same convention as grow_data).
     echo "data-mount: factory-reset flag found, wiping /data" > /dev/console 2>/dev/null || \
         echo "data-mount: factory-reset flag found, wiping /data"
@@ -135,22 +135,22 @@ mkdir -p /data/config \
          /data/var/log \
          /data/apps \
          /data/keys/seedrng \
-         /data/.astro
+         /data/.crag
 
 # App data dirs (docs/08 §5): each app service that declared data_dir=true
 # gets /data/apps/<name> owned by its service user. The list is baked at
-# image assembly (40-service-manifests.sh -> /etc/astro/app-data-dirs);
+# image assembly (40-service-manifests.sh -> /etc/crag/app-data-dirs);
 # replay it now that /data is mounted (survives a factory-reset wipe). The
 # record file lives in the RO rootfs /etc lower and the app users are in the
 # baked /etc/passwd, so both the file and the chown-by-name resolve here even
 # though the /etc overlay is not mounted until below.
-if [ -f /etc/astro/app-data-dirs ]; then
+if [ -f /etc/crag/app-data-dirs ]; then
     while read -r _app _owner; do
         [ -n "$_app" ] || continue
         case "$_app" in \#*) continue ;; esac
         mkdir -p "/data/apps/$_app"
         chown "${_owner:-root}:${_owner:-root}" "/data/apps/$_app" 2>/dev/null || :
-    done < /etc/astro/app-data-dirs
+    done < /etc/crag/app-data-dirs
 fi
 
 # /etc overlay (docs/02 §4.3): upper/work in /data, RO rootfs /etc as lower

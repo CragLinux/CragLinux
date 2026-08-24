@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Astro Linux - shared test-harness plumbing (docs/03 §5, docs/10 §4).
+# Crag Linux - shared test-harness plumbing (docs/03 §5, docs/10 §4).
 #
 # Sourced by the QEMU suites (test-boot-smoke.sh, test-api.sh,
 # test-update-rollback.sh) after they parse BOARD/VARIANT/TIMEOUT.
@@ -46,7 +46,7 @@
 
 # tl_containerize <repo-relative-script> [args...]
 # No-op inside a container; on the host, re-exec the script in the
-# astro-builder image with the given args (%q-quoted verbatim).
+# crag-builder image with the given args (%q-quoted verbatim).
 tl_containerize() {
     if [ -f /run/.containerenv ] || [ -f /.dockerenv ]; then
         return 0
@@ -54,7 +54,7 @@ tl_containerize() {
     local script="$1" engine image argv=""
     shift
     engine="${CONTAINER_ENGINE:-$(command -v podman >/dev/null && echo podman || echo docker)}"
-    image="${CONTAINER_IMAGE:-astro-builder}"
+    image="${CONTAINER_IMAGE:-crag-builder}"
     local a
     for a in "$@"; do
         argv+=" $(printf '%q' "$a")"
@@ -124,7 +124,7 @@ tl_scale() { echo $(( ($1 * TL_MULT_PCT + 99) / 100 )); }
 # checks the dev key and builds the SSH command array.
 tl_ssh_init() {
     SSH_KEY="${PROJECT_ROOT}/keys/dev/ssh-test"
-    [ -f "$SSH_KEY" ] || { echo "ERROR: dev SSH key missing — run ./build/astro-keys.sh init-dev"; exit 1; }
+    [ -f "$SSH_KEY" ] || { echo "ERROR: dev SSH key missing — run ./build/crag-keys.sh init-dev"; exit 1; }
     SSH=(ssh -i "$SSH_KEY" -p "$SSH_PORT" -o StrictHostKeyChecking=no
          -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
          -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=3
@@ -143,7 +143,7 @@ tl_ssh_init() {
 tl_qemu_lock_check() {
     local f
     for f in "${TL_OUT}/scratch.qcow2" "${TL_OUT}/OVMF_VARS.fd" \
-             "${TL_OUT}"/astro-"${TL_BOARD}"-*.qcow2; do
+             "${TL_OUT}"/crag-"${TL_BOARD}"-*.qcow2; do
         [ -f "$f" ] || continue
         if ! qemu-img info "$f" >/dev/null 2>&1; then
             echo "ERROR: $(basename "$f") is write-locked by another QEMU process."

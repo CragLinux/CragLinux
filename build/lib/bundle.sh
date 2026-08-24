@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Astro Linux - RAUC bundle stage (docs/05 §3, AD-010; M2)
+# Crag Linux - RAUC bundle stage (docs/05 §3, AD-010; M2)
 #
 # Packs the built slot images into a signed RAUC bundle:
 #
@@ -14,7 +14,7 @@
 # PKI (keys/dev, docs/05 §6; release signing swaps the cert/key via
 # RAUC_SIGN_CERT/RAUC_SIGN_KEY when the release pipeline lands).
 #
-# Output: <out>/astro-<board>-<version>.raucb + .raucb.info (rauc info
+# Output: <out>/crag-<board>-<version>.raucb + .raucb.info (rauc info
 # dump, verified against the device keyring).
 
 create_bundle() {
@@ -25,7 +25,7 @@ create_bundle() {
 
     local out_dir="${PROJECT_ROOT}/build/state/images/${board}-${variant}"
     local work="${out_dir}/image-work"
-    local version="${ASTRO_VERSION:-0.0.0-dev}"
+    local version="${CRAG_VERSION:-0.0.0-dev}"
 
     local compatible
     compatible=$(echo "$board_config_json" | jq -r '.rauc.compatible')
@@ -50,7 +50,7 @@ create_bundle() {
     local key="${RAUC_SIGN_KEY:-${PROJECT_ROOT}/keys/dev/rauc-signing.key.pem}"
     local keyring="${RAUC_KEYRING:-${PROJECT_ROOT}/keys/dev/rauc-ca.pem}"
     [ -f "$cert" ] && [ -f "$key" ] || \
-        die "RAUC signing cert/key not found (${cert}).\n  Run: ./build/astro-keys.sh init-dev"
+        die "RAUC signing cert/key not found (${cert}).\n  Run: ./build/crag-keys.sh init-dev"
 
     # Assemble the bundle input dir
     local bdl_work="${work}/bundle"
@@ -75,7 +75,7 @@ adaptive=block-hash-index
 filename=boot.vfat
 EOF
 
-    local bundle_out="${out_dir}/astro-${board}-${version}.raucb"
+    local bundle_out="${out_dir}/crag-${board}-${version}.raucb"
     rm -f "$bundle_out"
     rauc bundle \
         --cert="$cert" \

@@ -1,8 +1,8 @@
-# Astro Linux — source-build overrides for binary packages-mode
+# Crag Linux — source-build overrides for binary packages-mode
 #
 # In binary packages-mode (docs/03 §1 "Binary consumption for dev builds"),
 # the packages stage builds from source ONLY:
-#   1. templates present in astro-cports/ (Astro's own collection),
+#   1. templates present in astro-cports/ (Crag's own collection),
 #   2. cports templates shadowed/patched via build/patches/cports/*.patch
 #      (detected automatically from the patch file paths),
 #   3. anything listed here.

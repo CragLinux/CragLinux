@@ -1,5 +1,5 @@
 """
-Astro Linux board and variant configuration schemas.
+Crag Linux board and variant configuration schemas.
 
 Defines the expected structure, types, and constraints for board.toml
 and variant.toml configuration files.
@@ -94,7 +94,7 @@ BOARD_SCHEMA = {
         "data_min_size": {"type": str, "required": False, "default": "64M"},
     },
     # RAUC update configuration (docs/04, docs/05). Defaults are derived in
-    # config.py: compatible -> "astro-<board-dir-name>", bootloader -> from
+    # config.py: compatible -> "crag-<board-dir-name>", bootloader -> from
     # [bootloader].type (grub-efi -> "grub", everything else -> "uboot").
     "rauc": {
         "_required_section": False,
@@ -116,8 +116,8 @@ BOARD_SCHEMA = {
             "item_choices": ["img", "qcow2"],
         },
     },
-    # astrod feature flags baked into image defaults (docs/03 §6).
-    # Schema-only for now — consumed by later astrod/image work.
+    # cragd feature flags baked into image defaults (docs/03 §6).
+    # Schema-only for now — consumed by later cragd/image work.
     "api": {
         "_required_section": False,
         "wifi": {"type": bool, "required": False, "default": True},
@@ -199,7 +199,7 @@ VARIANT_SCHEMA = {
         "install": {"type": list, "required": False, "default": []},
         # Packages-mode: "source" builds the full manifest from the pinned
         # cports templates (release/nightly path); "binary" builds only the
-        # Astro-touched set and consumes Chimera's signed binary repo for the
+        # Crag-touched set and consumes Chimera's signed binary repo for the
         # rest (dev/PR path). Overridable per-invocation via
         # --packages-mode=binary|source.
         "mode": {
@@ -237,24 +237,24 @@ VARIANT_SCHEMA = {
 
 # External-tree identity schema (docs/08 §2). One [tree] section at the root
 # of every external tree's tree.toml. `priority` orders trees among each
-# other (lower merges first, higher wins — docs/08 §4). `astro_min`/`astro_max`
+# other (lower merges first, higher wins — docs/08 §4). `crag_min`/`crag_max`
 # are inclusive calver bounds ("2026.10"); an empty string means unbounded.
-# The version gate is enforced in config.py (check_astro_version).
+# The version gate is enforced in config.py (check_crag_version).
 TREE_SCHEMA = {
     "tree": {
         "_required_section": True,
         "name": {"type": str, "required": True},
         "priority": {"type": int, "required": False, "default": 50},
-        "astro_min": {"type": str, "required": False, "default": ""},
-        "astro_max": {"type": str, "required": False, "default": ""},
+        "crag_min": {"type": str, "required": False, "default": ""},
+        "crag_max": {"type": str, "required": False, "default": ""},
     },
 }
 
 # External-tree SERVICE MANIFEST schema (docs/08 §5). An app apk installs
-# usr/lib/astro/services/<name>.toml next to its dinit service file; the image
+# usr/lib/crag/services/<name>.toml next to its dinit service file; the image
 # assembly hook (boards/common/hooks/40-service-manifests.sh) reads every
 # manifest in the ASSEMBLED rootfs and wires users / data dirs / env files /
-# boot-success deps / the astro-api group / service enablement. Consumed by
+# boot-success deps / the crag-api group / service enablement. Consumed by
 # build/lib/service_manifest.py (validation reuses config.py:validate_config +
 # apply_defaults, exactly like board/variant/tree configs).
 #
@@ -264,15 +264,15 @@ TREE_SCHEMA = {
 #                                       "" => the service runs as root (no
 #                                       dedicated user is created)
 #     data_dir        (bool, opt False) true => /data/apps/<name> owned by the
-#                                       service user, exported as ASTRO_DATA_DIR
+#                                       service user, exported as CRAG_DATA_DIR
 #   [integration]
 #     boot_success    (bool, opt False) opt into rollback participation: the
 #                                       service becomes a depends-on of the
 #                                       boot-success milestone (AD-011)
 #     api_controllable(bool, opt False) allow POST /services/<name>/{restart,
 #                                       stop,start} (docs/06 §5.4)
-#     api_client      (bool, opt False) join the astro-api group => unix-socket
-#                                       access to astrod (docs/02 §7)
+#     api_client      (bool, opt False) join the crag-api group => unix-socket
+#                                       access to cragd (docs/02 §7)
 SERVICE_MANIFEST_SCHEMA = {
     "service": {
         "_required_section": True,

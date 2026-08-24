@@ -1,17 +1,17 @@
-# Astro SHADOW that NEUTRALIZES the packaged 'chrony' waitsync gate
+# Crag SHADOW that NEUTRALIZES the packaged 'chrony' waitsync gate
 # (cports/main/chrony/files/chrony, shipped ENABLED by chrony-dinit:
 # chronyc waitsync 180 … before time-sync.target). On an appliance that
 # may legitimately live offline, that gate holds boot — and the
-# boot-smoke budget — for up to 180 s every single boot. Astro's
+# boot-smoke budget — for up to 180 s every single boot. Crag's
 # time story does not need it (docs/07 §6): the build-epoch floor makes
-# the clock sane before NTP, astrod exposes time.synced for anyone who
+# the clock sane before NTP, cragd exposes time.synced for anyone who
 # must wait, and TLS-gated work checks synced-or-past-floor itself.
 #
 # Kept as a service (not just disabled) because the packaged enable
 # symlink lives in chrony-dinit's boot.d; shadowing the NAME is the
 # reliable override, exactly like the iwd shadow. time-sync.target is
 # therefore reached immediately — services that truly need synced time
-# must consult astrod, not the target.
+# must consult cragd, not the target.
 
 type = scripted
 command = /usr/bin/true

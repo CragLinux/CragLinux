@@ -3,7 +3,7 @@
 # DEV variants only: install the committed dev SSH test key as root's
 # authorized_keys (docs/02 §3: dev images are loudly unsealed; sshd is in
 # the dev package set). This is what lets the AD-020 update/rollback test
-# harness and (at M4) `astro deploy` drive a dev guest. sshd's default
+# harness and (at M4) `crag deploy` drive a dev guest. sshd's default
 # PermitRootLogin=prohibit-password means key-only root access.
 # Prod variants: skipped — prod ships no SSH daemon and no interactive
 # users (docs/02 §7).
@@ -15,7 +15,7 @@ install_dev_ssh_key() {
 
     local pubkey="${PROJECT_ROOT}/keys/dev/ssh-test.pub"
     if [ ! -f "$pubkey" ]; then
-        log_warn "dev SSH test key missing (${pubkey}) — run ./build/astro-keys.sh init-dev; skipping"
+        log_warn "dev SSH test key missing (${pubkey}) — run ./build/crag-keys.sh init-dev; skipping"
         return 0
     fi
     # Only meaningful when the image actually ships sshd

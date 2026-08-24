@@ -13,7 +13,7 @@ pkgver = "1.0.0"
 pkgrel = 0
 pkgdesc = "ACME plant-floor sensor daemon"
 license = "custom:example"
-url = "https://example.org/astro/external-tree-acme"
+url = "https://example.org/crag/external-tree-acme"
 
 
 def build(self):
@@ -30,9 +30,9 @@ def install(self):
     # NOT enable=True: enablement is driven by the service manifest at
     # image assembly (docs/08 §5), not by the package.
     self.install_service(self.files_path / "acme-sensord")
-    # service manifest -> usr/lib/astro/services/ (docs/08 §5)
+    # service manifest -> usr/lib/crag/services/ (docs/08 §5)
     self.install_file(
-        self.files_path / "acme-sensord.toml", "usr/lib/astro/services"
+        self.files_path / "acme-sensord.toml", "usr/lib/crag/services"
     )
     # a custom: license id requires the text installed (pkg lint 098)
     self.install_license(self.files_path / "LICENSE")
@@ -43,7 +43,7 @@ def _(self):
     self.subdesc = "dinit service"
     self.depends = [self.parent, "dinit-chimera"]
     self.install_if = [self.parent, "dinit-chimera"]
-    # The service file depends-on astrod + data-mount, which are Astro
+    # The service file depends-on cragd + data-mount, which are Crag
     # OVERLAY services (etc/dinit.d) that no apk provides — the svc:
     # provider scan cannot resolve them, so it is off for this
     # text-only subpackage. The parent keeps full dependency scanning.

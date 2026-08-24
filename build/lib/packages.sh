@@ -1,5 +1,5 @@
 #!/bin/bash
-# Astro Linux - Package list resolution and building
+# Crag Linux - Package list resolution and building
 # Sourced by build-inner.sh, not executed directly.
 
 # NOTE: the former resolve_package_list() (common + board + firmware + variant
@@ -8,7 +8,7 @@
 # ordered layer list so external-tree packages.list entries fold in additively.
 # The no-tree output is diff-identical to the old function.
 
-# Astro-owned fork templates of a given class ("new" or "mod") from
+# Crag-owned fork templates of a given class ("new" or "mod") from
 # build/cports-owned.list. "new" = not in Chimera's binary repo (always
 # source-built); "mod" = we differ from upstream (source-built only when
 # an image installs it). One name per line.
@@ -73,12 +73,12 @@ resolve_source_package_list() {
 # Enable cbuild's transparent ccache support (cports Usage.md "Ccache").
 # The cache lives in cports/cbuild_cache/ccache (cbuild's cbuild_cache_path),
 # which sits inside the /workspace bind mount, so it persists across container
-# runs alongside the other build caches. Knob: set ASTRO_CCACHE=0 to disable
+# runs alongside the other build caches. Knob: set CRAG_CCACHE=0 to disable
 # (the config is rewritten idempotently on every packages run).
 ensure_cbuild_ccache() {
     local cbuild_dir="${PROJECT_ROOT}/cports"
     local config="${cbuild_dir}/etc/config.ini"
-    local want="${ASTRO_CCACHE:-1}"
+    local want="${CRAG_CCACHE:-1}"
     local value="yes"
     [ "$want" = "0" ] && value="no"
 
@@ -121,9 +121,9 @@ EOF
 prepare_cports_tree() {
     local cbuild_dir="${PROJECT_ROOT}/cports"
     [ -d "${cbuild_dir}/.git" ] || \
-        die "cports checkout not found (or not a git checkout) at ${cbuild_dir}.\n  cports is Astro's fork, managed by Harbormaster; run 'hm sync --locked' to materialize it."
+        die "cports checkout not found (or not a git checkout) at ${cbuild_dir}.\n  cports is Crag's fork, managed by Harbormaster; run 'hm sync --locked' to materialize it."
 
-    # Astro's patches/overrides/new packages now live IN the fork (see
+    # Crag's patches/overrides/new packages now live IN the fork (see
     # cports/README.md). Nothing to overlay at build time. The escape
     # hatch below still applies any locally-dropped patch/shadow so an
     # experiment doesn't require a fork commit; normally there are none.
@@ -331,7 +331,7 @@ build_packages() {
 
     # Check for apk-tools (required by cbuild)
     if ! command -v apk &>/dev/null; then
-        die "apk-tools not found. cbuild has not been bootstrapped.\n  Run: ./build/astro-build.sh <board> <variant> --shell\n  Then inside the container: ./build/setup-cbuild.sh"
+        die "apk-tools not found. cbuild has not been bootstrapped.\n  Run: ./build/crag-build.sh <board> <variant> --shell\n  Then inside the container: ./build/setup-cbuild.sh"
     fi
 
     # Source architecture profile
@@ -400,7 +400,7 @@ build_packages() {
 refresh_local_index() {
     local arch="$1"
     local cbuild_dir="${PROJECT_ROOT}/cports"
-    # NOTE: deliberately not ASTRO_LOCAL_REPO — 'cbuild index' only manages
+    # NOTE: deliberately not CRAG_LOCAL_REPO — 'cbuild index' only manages
     # the repos under cports/packages; an override repo (filtered CI copy)
     # brings its own index and is left untouched.
     local repo="${cbuild_dir}/packages/main/${arch}"
@@ -420,7 +420,7 @@ refresh_local_index() {
 # Best-effort: prints the dump path, or nothing when unavailable.
 chimera_index_dump() {
     local arch="$1"
-    local chimera_repo="${ASTRO_CHIMERA_REPO:-https://repo.chimera-linux.org/current/main}"
+    local chimera_repo="${CRAG_CHIMERA_REPO:-https://repo.chimera-linux.org/current/main}"
     local cache_dir="${PROJECT_ROOT}/build/state/cache"
     mkdir -p "$cache_dir"
     local ndx="${cache_dir}/chimera-Packages-${arch}.adb"
@@ -442,8 +442,8 @@ resolve_dependency_closure() {
     local arch="$1" manifest_file="$2" mode="$3"
     local cbuild_dir="${PROJECT_ROOT}/cports"
     local logs_dir="${PROJECT_ROOT}/build/state/logs"
-    local pkg_repo_base="${ASTRO_LOCAL_REPO:-${cbuild_dir}/packages/main}"
-    local chimera_repo="${ASTRO_CHIMERA_REPO:-https://repo.chimera-linux.org/current/main}"
+    local pkg_repo_base="${CRAG_LOCAL_REPO:-${cbuild_dir}/packages/main}"
+    local chimera_repo="${CRAG_CHIMERA_REPO:-https://repo.chimera-linux.org/current/main}"
     mkdir -p "$logs_dir"
 
     log_step "Resolving runtime dependency closure (${mode} packages-mode)..."

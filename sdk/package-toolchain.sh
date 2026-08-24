@@ -10,20 +10,20 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # This script lives in sdk/; toolchain artifacts are rooted at the repo root
-ASTRO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CRAG_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Auto-detect architecture from existing toolchain files
 # Look for *-toolchain.cmake files to determine what was built
-if [ -f "${ASTRO_ROOT}/armv7hf-toolchain.cmake" ]; then
+if [ -f "${CRAG_ROOT}/armv7hf-toolchain.cmake" ]; then
     ARCH="armv7hf"
     TOOLCHAIN_NAME="armv7hf-clang22-musl-toolchain"
-elif [ -f "${ASTRO_ROOT}/aarch64-toolchain.cmake" ]; then
+elif [ -f "${CRAG_ROOT}/aarch64-toolchain.cmake" ]; then
     ARCH="aarch64"
     TOOLCHAIN_NAME="aarch64-clang22-musl-toolchain"
-elif [ -f "${ASTRO_ROOT}/x86_64-toolchain.cmake" ]; then
+elif [ -f "${CRAG_ROOT}/x86_64-toolchain.cmake" ]; then
     ARCH="x86_64"
     TOOLCHAIN_NAME="x86_64-clang22-musl-toolchain"
-elif [ -f "${ASTRO_ROOT}/riscv64-toolchain.cmake" ]; then
+elif [ -f "${CRAG_ROOT}/riscv64-toolchain.cmake" ]; then
     ARCH="riscv64"
     TOOLCHAIN_NAME="riscv64-clang22-musl-toolchain"
 else
@@ -32,7 +32,7 @@ else
     TOOLCHAIN_NAME="${ARCH}-clang22-musl-toolchain"
 fi
 
-OUTPUT_DIR="${ASTRO_ROOT}/dist"
+OUTPUT_DIR="${CRAG_ROOT}/dist"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 VERSION="1.0.0"
 
@@ -94,11 +94,11 @@ display_size_info() {
     log_info "Toolchain size analysis:"
     echo "" >&2
 
-    du -sh "${ASTRO_ROOT}/toolchain" 2>/dev/null && echo "  Native LLVM/Clang: $(du -sh ${ASTRO_ROOT}/toolchain | cut -f1)" >&2
-    du -sh "${ASTRO_ROOT}/build/state/${ARCH}/sysroot" 2>/dev/null && echo "  Sysroot (musl + libc++): $(du -sh ${ASTRO_ROOT}/build/state/${ARCH}/sysroot | cut -f1)" >&2
-    du -sh "${ASTRO_ROOT}/build/state/${ARCH}/bin" 2>/dev/null && echo "  Wrapper scripts: $(du -sh ${ASTRO_ROOT}/build/state/${ARCH}/bin | cut -f1)" >&2
+    du -sh "${CRAG_ROOT}/toolchain" 2>/dev/null && echo "  Native LLVM/Clang: $(du -sh ${CRAG_ROOT}/toolchain | cut -f1)" >&2
+    du -sh "${CRAG_ROOT}/build/state/${ARCH}/sysroot" 2>/dev/null && echo "  Sysroot (musl + libc++): $(du -sh ${CRAG_ROOT}/build/state/${ARCH}/sysroot | cut -f1)" >&2
+    du -sh "${CRAG_ROOT}/build/state/${ARCH}/bin" 2>/dev/null && echo "  Wrapper scripts: $(du -sh ${CRAG_ROOT}/build/state/${ARCH}/bin | cut -f1)" >&2
 
-    local total=$(du -sh "${ASTRO_ROOT}/toolchain" "${ASTRO_ROOT}/build/state/${ARCH}" 2>/dev/null | tail -1 | cut -f1)
+    local total=$(du -sh "${CRAG_ROOT}/toolchain" "${CRAG_ROOT}/build/state/${ARCH}" 2>/dev/null | tail -1 | cut -f1)
     echo "" >&2
     echo "  Total uncompressed: $total" >&2
     echo "" >&2
@@ -123,7 +123,7 @@ create_squashfs() {
     # Check which items exist
     local existing_items=()
     for item in "${include_items[@]}"; do
-        if [ -e "${ASTRO_ROOT}/${item}" ]; then
+        if [ -e "${CRAG_ROOT}/${item}" ]; then
             existing_items+=("${item}")
         fi
     done
@@ -134,12 +134,12 @@ create_squashfs() {
 
     log_info "Copying files to staging directory..."
     for item in "${existing_items[@]}"; do
-        cp -a "${ASTRO_ROOT}/${item}" "${staging_dir}/"
+        cp -a "${CRAG_ROOT}/${item}" "${staging_dir}/"
     done
 
     # Determine target triple from bin directory
     local TARGET_TRIPLE=""
-    for compiler in "${ASTRO_ROOT}"/build/state/${ARCH}/bin/*-clang; do
+    for compiler in "${CRAG_ROOT}"/build/state/${ARCH}/bin/*-clang; do
         if [ -f "$compiler" ]; then
             TARGET_TRIPLE=$(basename "$compiler" | sed 's/-clang$//')
             break

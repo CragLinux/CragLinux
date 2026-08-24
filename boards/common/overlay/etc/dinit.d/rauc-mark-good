@@ -1,4 +1,4 @@
-# Astro: confirm this boot to the bootloader (docs/05 §4, AD-011).
+# Crag: confirm this boot to the bootloader (docs/05 §4, AD-011).
 # Runs `rauc status mark-good` (with retries) once the boot-success
 # milestone is reached, resetting the attempt counters
 # (BOOT_x_LEFT / x_TRY). If boot-success is never reached, this never
@@ -17,7 +17,7 @@
 before: login.target
 
 type = scripted
-command = /usr/libexec/astro/mark-good
+command = /usr/libexec/crag/mark-good
 depends-on: boot-success
 depends-on: bootenv-mount
 waits-for: rauc

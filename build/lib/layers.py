@@ -1,5 +1,5 @@
 """
-Astro external-tree discovery and layer ordering (docs/08 §2, §4).
+Crag external-tree discovery and layer ordering (docs/08 §2, §4).
 
 THE CONTRACT. This module is the single source of truth for the order in which
 every build stage composes its inputs. Given the board, the variant, and zero
@@ -26,7 +26,7 @@ Layer object shape (every element):
     }
 
 `path` per kind:
-    core     -> <astro-root>/boards/common          (directory)
+    core     -> <crag-root>/boards/common          (directory)
     tree     -> the tree root (the dir holding tree.toml)
     board    -> the resolved board directory (the dir holding board.toml)
     variant  -> the resolved variant .toml FILE
@@ -37,13 +37,13 @@ second resolver:
     variant_file = (.[] | select(.kind=="variant")).path
 
 Tree band ordering (docs/08 §4): ascending tree.toml `priority` (lower merges
-first); ties broken by input order (ASTRO_EXTERNAL entries first in colon order,
+first); ties broken by input order (CRAG_EXTERNAL entries first in colon order,
 then --external in CLI order), then by path. `priority` is informational on the
 emitted layers — the array order is authoritative.
 
 Board / variant resolution (docs/08 §2, §4):
     * a board may be provided by a tree (<tree>/boards/<board>/board.toml) or
-      in-tree (<astro-root>/boards/<board>/board.toml). When several trees
+      in-tree (<crag-root>/boards/<board>/board.toml). When several trees
       provide it, the HIGHEST-priority tree wins (tie -> later input order); a
       tree provider outranks the in-tree board. Trees may also LAYER onto the
       resolved board (fragments/overlay/hooks under <tree>/boards/<board>/) —
@@ -58,7 +58,7 @@ Usage:
     python3 build/lib/layers.py --board my-gw --variant prod \\
         --external /trees/acme-common --external /trees/acme-product
 
-$ASTRO_EXTERNAL (colon-separated) is honored in addition to --external.
+$CRAG_EXTERNAL (colon-separated) is honored in addition to --external.
 """
 
 import argparse
@@ -73,7 +73,7 @@ import config as _config  # noqa: E402  (path insert must precede import)
 ConfigError = _config.ConfigError
 
 
-def astro_root():
+def crag_root():
     """Repo root = build/lib/layers.py -> parents[2]."""
     return Path(__file__).resolve().parents[2]
 
@@ -81,12 +81,12 @@ def astro_root():
 def _collect_externals(cli_externals):
     """Ordered, de-duplicated external tree paths.
 
-    Order: $ASTRO_EXTERNAL entries (colon-separated) first, then --external in
+    Order: $CRAG_EXTERNAL entries (colon-separated) first, then --external in
     CLI order. De-dup is by resolved absolute path, keeping first occurrence
     (so the earliest input index — the tie-break key — is stable).
     """
     raw = []
-    env = os.environ.get("ASTRO_EXTERNAL", "")
+    env = os.environ.get("CRAG_EXTERNAL", "")
     if env:
         raw.extend(p for p in env.split(":") if p)
     raw.extend(cli_externals or [])
@@ -105,7 +105,7 @@ def _collect_externals(cli_externals):
 def _load_tree(path):
     """Validate a tree root and return (name, priority). Fails fast (docs/08 §2).
 
-    The version gate (astro_min/astro_max) is enforced inside config.load_config.
+    The version gate (crag_min/crag_max) is enforced inside config.load_config.
     """
     root = Path(path)
     tree_toml = root / "tree.toml"
@@ -123,7 +123,7 @@ def _load_tree(path):
 
 def build_layers(board, variant, cli_externals):
     """Produce the ordered layer list (see module docstring)."""
-    root = astro_root()
+    root = crag_root()
 
     # --- tree band: ascending priority, ties by input order then path --------
     tree_layers = []
@@ -205,13 +205,13 @@ def _resolve_variant_file(board_dir, board, variant, tree_layers):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Astro external-tree layer ordering (docs/08 §4)"
+        description="Crag external-tree layer ordering (docs/08 §4)"
     )
     parser.add_argument("--board", required=True)
     parser.add_argument("--variant", required=True)
     parser.add_argument(
         "--external", action="append", default=[],
-        help="External tree root (repeatable). $ASTRO_EXTERNAL is also honored.",
+        help="External tree root (repeatable). $CRAG_EXTERNAL is also honored.",
     )
     args = parser.parse_args()
 

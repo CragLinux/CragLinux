@@ -99,7 +99,7 @@ pub const Source = union(enum) {
 
 pub const InstallOptions = struct {
     /// AD-021: set when the client sent {"force": true} — bypasses
-    /// astrod's monotonic-version gate (logged + surfaced in
+    /// cragd's monotonic-version gate (logged + surfaced in
     /// status.history). RAUC itself has no version gate, so this never
     /// reaches the wire; it rides along so call sites carry the policy
     /// decision explicitly.
@@ -108,7 +108,7 @@ pub const InstallOptions = struct {
 
 // ---- argument builders (XML-derived shapes, unit-tested) --------------------
 
-/// InstallBundle(s source, a{sv} args) — args empty: astrod's policy runs
+/// InstallBundle(s source, a{sv} args) — args empty: cragd's policy runs
 /// before the call, and rauc's own options (ignore-compatible, tls-*) are
 /// deliberately not exposed through the v1 API.
 pub fn installArgs(source: [:0]const u8) [2]bus_mod.Arg {
@@ -432,13 +432,13 @@ test "constants match the pinned interface XML" {
 
 test "argument builders match the XML method signatures" {
     // InstallBundle(s, a{sv}) / InspectBundle(s, a{sv}): source string +
-    // EMPTY option dict (astrod exposes none of rauc's install options).
-    const install = installArgs("/data/.astro/staging/upload-1.raucb");
-    try std.testing.expectEqualStrings("/data/.astro/staging/upload-1.raucb", install[0].s);
+    // EMPTY option dict (cragd exposes none of rauc's install options).
+    const install = installArgs("/data/.crag/staging/upload-1.raucb");
+    try std.testing.expectEqualStrings("/data/.crag/staging/upload-1.raucb", install[0].s);
     try std.testing.expectEqual(@as(usize, 0), install[1].dict.len);
 
-    const inspct = inspectArgs("/data/.astro/staging/upload-2.raucb");
-    try std.testing.expectEqualStrings("/data/.astro/staging/upload-2.raucb", inspct[0].s);
+    const inspct = inspectArgs("/data/.crag/staging/upload-2.raucb");
+    try std.testing.expectEqualStrings("/data/.crag/staging/upload-2.raucb", inspct[0].s);
     try std.testing.expectEqual(@as(usize, 0), inspct[1].dict.len);
 
     // Mark(s state, s slot_identifier) with the XML-documented values.
@@ -554,7 +554,7 @@ test "parseBundleInfo extracts update.compatible/version, skips the rest" {
             .{ .enter = .{ .kind = 'e', .contents = "sv", .result = true } },
             .{ .str = "compatible" },
             .{ .enter = .{ .kind = 'v', .contents = "s", .result = true } },
-            .{ .str = "astro-qemu-x86_64" },
+            .{ .str = "crag-qemu-x86_64" },
             .exit,
             .exit,
             .{ .enter = .{ .kind = 'e', .contents = "sv", .result = true } },
@@ -583,7 +583,7 @@ test "parseBundleInfo extracts update.compatible/version, skips the rest" {
 
     const info = try parseBundleInfo(arena.allocator(), &msg);
     try std.testing.expect(msg.exhausted());
-    try std.testing.expectEqualStrings("astro-qemu-x86_64", info.compatible);
+    try std.testing.expectEqualStrings("crag-qemu-x86_64", info.compatible);
     try std.testing.expectEqualStrings("0.2.0", info.version);
 }
 

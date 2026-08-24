@@ -1,5 +1,5 @@
 """
-Astro Linux configuration loader and validator.
+Crag Linux configuration loader and validator.
 
 Loads TOML board/variant configs, validates against schemas,
 and exports as JSON or shell-sourceable environment variables.
@@ -31,9 +31,9 @@ from schema import (
 )
 
 # The dev/unversioned sentinel (docs/10 §2 — the same fallback image.sh,
-# bundle.sh and os-release stamping use for ASTRO_VERSION). A working-tree
+# bundle.sh and os-release stamping use for CRAG_VERSION). A working-tree
 # build reports this; it is treated as "not a release" and bypasses the
-# external-tree version gate (see check_astro_version).
+# external-tree version gate (see check_crag_version).
 DEV_VERSION = "0.0.0-dev"
 
 # Partition sizes: integer + K/M/G suffix (docs/04 §2)
@@ -305,7 +305,7 @@ def migrate_deprecated_disk(config, config_path):
 def derive_board_defaults(config, raw_config, config_path):
     """Post-defaults derivations + cross-section validation for boards.
 
-    - [rauc].compatible defaults to "astro-<board-dir-name>"
+    - [rauc].compatible defaults to "crag-<board-dir-name>"
     - [rauc].bootloader defaults from [bootloader].type and, when explicit,
       must be consistent with it (docs/03 §6)
     - [image].formats gains "qcow2" for boards that declare [qemu]
@@ -314,7 +314,7 @@ def derive_board_defaults(config, raw_config, config_path):
 
     rauc = config.setdefault("rauc", {})
     if not rauc.get("compatible"):
-        rauc["compatible"] = f"astro-{board_id}"
+        rauc["compatible"] = f"crag-{board_id}"
 
     bl_type = config.get("bootloader", {}).get("type", "")
     expected = RAUC_BOOTLOADER_FOR_TYPE.get(bl_type)
@@ -341,7 +341,7 @@ def derive_board_defaults(config, raw_config, config_path):
 # ---------------------------------------------------------------------------
 # Version comparison for the external-tree compatibility gate (docs/08 §2/§4)
 #
-# Algorithm (a faithful Python port of astrod/src/version.zig so the build-time
+# Algorithm (a faithful Python port of cragd/src/version.zig so the build-time
 # gate and the on-device AD-021 update gate order versions identically):
 #   1. Split off an optional suffix at the FIRST '-'. The base is compared as
 #      '.'-separated segments; a segment pair is compared NUMERICALLY when both
@@ -399,16 +399,16 @@ def compare_versions(a, b):
     return _cmp(suffix_a, suffix_b)
 
 
-def astro_version():
-    """The running Astro release version, from $ASTRO_VERSION (docs/10 §2).
+def crag_version():
+    """The running Crag release version, from $CRAG_VERSION (docs/10 §2).
 
     Falls back to the dev sentinel, exactly like image.sh/bundle.sh.
     """
-    return os.environ.get("ASTRO_VERSION") or DEV_VERSION
+    return os.environ.get("CRAG_VERSION") or DEV_VERSION
 
 
-def check_astro_version(version, astro_min, astro_max, tree_name, config_path):
-    """Fail fast when the running Astro version is outside [min, max] (docs/08 §2).
+def check_crag_version(version, crag_min, crag_max, tree_name, config_path):
+    """Fail fast when the running Crag version is outside [min, max] (docs/08 §2).
 
     Bounds are inclusive; an empty bound means unbounded. A dev/unversioned
     build (version == DEV_VERSION) bypasses the gate: a working-tree build is
@@ -417,17 +417,17 @@ def check_astro_version(version, astro_min, astro_max, tree_name, config_path):
     """
     if version == DEV_VERSION:
         return
-    if astro_min and compare_versions(version, astro_min) < 0:
+    if crag_min and compare_versions(version, crag_min) < 0:
         raise ConfigError(
             f"Configuration errors in {config_path}:\n"
-            f"  [tree] '{tree_name}' requires Astro >= {astro_min}, "
-            f"but this is Astro {version} (astro_min gate, docs/08 §2)"
+            f"  [tree] '{tree_name}' requires Crag >= {crag_min}, "
+            f"but this is Crag {version} (crag_min gate, docs/08 §2)"
         )
-    if astro_max and compare_versions(version, astro_max) > 0:
+    if crag_max and compare_versions(version, crag_max) > 0:
         raise ConfigError(
             f"Configuration errors in {config_path}:\n"
-            f"  [tree] '{tree_name}' requires Astro <= {astro_max}, "
-            f"but this is Astro {version} (astro_max gate, docs/08 §2)"
+            f"  [tree] '{tree_name}' requires Crag <= {crag_max}, "
+            f"but this is Crag {version} (crag_max gate, docs/08 §2)"
         )
 
 
@@ -489,8 +489,8 @@ def load_config(config_path, config_type):
         validate_config(raw_config, TREE_SCHEMA, config_path)
         config = apply_defaults(raw_config, TREE_SCHEMA)
         tree = config["tree"]
-        check_astro_version(
-            astro_version(), tree["astro_min"], tree["astro_max"],
+        check_crag_version(
+            crag_version(), tree["crag_min"], tree["crag_max"],
             tree["name"], config_path,
         )
     else:
@@ -501,7 +501,7 @@ def load_config(config_path, config_type):
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Astro Linux config loader")
+    parser = argparse.ArgumentParser(description="Crag Linux config loader")
     parser.add_argument("type", choices=["board", "variant", "tree"], help="Config type")
     parser.add_argument("path", help="Path to .toml config file")
     parser.add_argument(

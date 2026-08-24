@@ -2,7 +2,7 @@
 //!
 //! Zig 0.16 moved std filesystem access behind the std.Io interface; the
 //! store/auth interfaces in this skeleton are deliberately path-based and
-//! synchronous (astrod is Linux-only, files are tiny), so these ~few
+//! synchronous (cragd is Linux-only, files are tiny), so these ~few
 //! wrappers keep std.Io out of the module signatures. If a fill agent
 //! later threads std.Io through the daemon, this module is the only
 //! place to swap.
@@ -133,7 +133,7 @@ pub fn testTmpPath(buf: []u8, comptime suffix: []const u8) []const u8 {
     var rand: [8]u8 = undefined;
     _ = linux.getrandom(&rand, rand.len, 0);
     const n = std.mem.readInt(u64, &rand, .little);
-    return std.fmt.bufPrint(buf, "/tmp/astrod-test-{x}-" ++ suffix, .{n}) catch unreachable;
+    return std.fmt.bufPrint(buf, "/tmp/cragd-test-{x}-" ++ suffix, .{n}) catch unreachable;
 }
 
 test "write, read back, rename, unlink round-trip" {

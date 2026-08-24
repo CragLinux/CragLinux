@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Astro Linux - QEMU Test Launcher
+# Crag Linux - QEMU Test Launcher
 #
 # Two modes (docs/04 §7):
 #
@@ -135,15 +135,15 @@ if [ "$IMAGE_MODE" = true ]; then
     # Full-image boot through the real bootloader (docs/04 §1/§7)
     ##########################################################################
     # Prefer qcow2 (exercises the converted artifact), fall back to raw.
-    IMAGE_FILE=$(ls -t "${BUILD_OUTPUT}"/astro-"${BOARD}"-*.qcow2 2>/dev/null | head -1 || true)
+    IMAGE_FILE=$(ls -t "${BUILD_OUTPUT}"/crag-"${BOARD}"-*.qcow2 2>/dev/null | head -1 || true)
     IMAGE_FORMAT="qcow2"
     if [ -z "$IMAGE_FILE" ]; then
-        IMAGE_FILE=$(ls -t "${BUILD_OUTPUT}"/astro-"${BOARD}"-*.img 2>/dev/null | head -1 || true)
+        IMAGE_FILE=$(ls -t "${BUILD_OUTPUT}"/crag-"${BOARD}"-*.img 2>/dev/null | head -1 || true)
         IMAGE_FORMAT="raw"
     fi
     if [ -z "$IMAGE_FILE" ]; then
         echo "ERROR: no image found in ${BUILD_OUTPUT}. Build it first:"
-        echo "  ./build/astro-build.sh ${BOARD} ${VARIANT}"
+        echo "  ./build/crag-build.sh ${BOARD} ${VARIANT}"
         exit 1
     fi
 
@@ -152,7 +152,7 @@ if [ "$IMAGE_MODE" = true ]; then
             UBOOT_BIN="${PROJECT_ROOT}/build/state/${BOARD_ARCH}/bootloader/${BOARD}/u-boot.bin"
             if [ ! -f "$UBOOT_BIN" ]; then
                 echo "ERROR: u-boot.bin not found: ${UBOOT_BIN}"
-                echo "  ./build/astro-build.sh ${BOARD} ${VARIANT} --step=bootloader"
+                echo "  ./build/crag-build.sh ${BOARD} ${VARIANT} --step=bootloader"
                 exit 1
             fi
             QEMU_ARGS+=(-bios "$UBOOT_BIN")
@@ -196,7 +196,7 @@ else
     KERNEL_PATH="${PROJECT_ROOT}/build/state/${BOARD_ARCH}/kernel/${BOARD}/${KERNEL_IMAGE}"
     if [ ! -f "$KERNEL_PATH" ]; then
         echo "ERROR: Kernel image not found: ${KERNEL_PATH}"
-        echo "Build the kernel first: ./build/astro-build.sh ${BOARD} ${VARIANT} --step=kernel"
+        echo "Build the kernel first: ./build/crag-build.sh ${BOARD} ${VARIANT} --step=kernel"
         exit 1
     fi
 
@@ -214,7 +214,7 @@ else
         ROOTFS_IMG="${BUILD_OUTPUT}/rootfs.squashfs"
         if [ ! -f "$ROOTFS_IMG" ]; then
             echo "ERROR: No squashfs rootfs found at ${ROOTFS_IMG}. Build it first:"
-            echo "  ./build/astro-build.sh ${BOARD} ${VARIANT} --step=rootfs"
+            echo "  ./build/crag-build.sh ${BOARD} ${VARIANT} --step=rootfs"
             exit 1
         fi
         KERNEL_CMDLINE="${KERNEL_CMDLINE} root=/dev/vda rootfstype=squashfs ro"
@@ -231,7 +231,7 @@ else
             echo "[INFO] Created ${img_size}M rootfs image"
         elif [ ! -f "$ROOTFS_IMG" ]; then
             echo "ERROR: No rootfs found. Build it first:"
-            echo "  ./build/astro-build.sh ${BOARD} ${VARIANT} --step=rootfs"
+            echo "  ./build/crag-build.sh ${BOARD} ${VARIANT} --step=rootfs"
             exit 1
         fi
         KERNEL_CMDLINE="${KERNEL_CMDLINE} root=/dev/vda rw"

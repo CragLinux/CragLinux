@@ -93,16 +93,16 @@ LINUX_VERSION="6.12.95"
 
 # Directory configuration
 # This script lives in sdk/; all artifacts are rooted at the repo root
-# (ASTRO_ROOT): toolchain/ and sources/ are gitignored caches, build
+# (CRAG_ROOT): toolchain/ and sources/ are gitignored caches, build
 # outputs live under build/state/.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ASTRO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-BUILD_DIR="${ASTRO_ROOT}/build/state/${ARCH}"
-SRC_DIR="${ASTRO_ROOT}/sources"
-SYSROOT="${ASTRO_ROOT}/build/state/${ARCH}/sysroot"
-TOOLCHAIN_DIR="${ASTRO_ROOT}/toolchain"
-BIN_DIR="${ASTRO_ROOT}/build/state/${ARCH}/bin"
-PATCHES_DIR="${ASTRO_ROOT}/build/patches"
+CRAG_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+BUILD_DIR="${CRAG_ROOT}/build/state/${ARCH}"
+SRC_DIR="${CRAG_ROOT}/sources"
+SYSROOT="${CRAG_ROOT}/build/state/${ARCH}/sysroot"
+TOOLCHAIN_DIR="${CRAG_ROOT}/toolchain"
+BIN_DIR="${CRAG_ROOT}/build/state/${ARCH}/bin"
+PATCHES_DIR="${CRAG_ROOT}/build/patches"
 
 # Source patch definitions if available
 if [ -f "${PATCHES_DIR}/patches.sh" ]; then
@@ -197,7 +197,7 @@ check_and_clean_llvm() {
             log_warn "Cleaning LLVM toolchain due to version change..."
             rm -rf "${TOOLCHAIN_DIR}"
             # Also clean architecture-specific LLVM build dirs
-            rm -rf "${ASTRO_ROOT}/build/state"/*/llvm-native
+            rm -rf "${CRAG_ROOT}/build/state"/*/llvm-native
         fi
     fi
 }
@@ -764,7 +764,7 @@ EOF
 create_cmake_toolchain() {
     log_info "Creating CMake toolchain file..."
 
-    cat > "${ASTRO_ROOT}/${ARCH}-toolchain.cmake" << EOF
+    cat > "${CRAG_ROOT}/${ARCH}-toolchain.cmake" << EOF
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR ${TARGET_ARCH})
 
@@ -801,7 +801,7 @@ set(CMAKE_MODULE_LINKER_FLAGS_INIT "-fuse-ld=lld -rtlib=compiler-rt -lc++ -lc++a
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 EOF
 
-    log_info "CMake toolchain file created: ${ASTRO_ROOT}/${ARCH}-toolchain.cmake"
+    log_info "CMake toolchain file created: ${CRAG_ROOT}/${ARCH}-toolchain.cmake"
 }
 
 ##############################################################################
@@ -878,7 +878,7 @@ display_usage() {
     echo "   ${BIN_DIR}/${TARGET_TRIPLE}-clang++ -o output test.cpp"
     echo ""
     echo "3. Use with CMake:"
-    echo "   cmake -DCMAKE_TOOLCHAIN_FILE=${ASTRO_ROOT}/${ARCH}-toolchain.cmake .."
+    echo "   cmake -DCMAKE_TOOLCHAIN_FILE=${CRAG_ROOT}/${ARCH}-toolchain.cmake .."
     echo ""
     echo "4. Add to PATH:"
     echo "   export PATH=\"${BIN_DIR}:\$PATH\""

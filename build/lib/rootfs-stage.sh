@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Astro Linux - Rootfs stage runner
+# Crag Linux - Rootfs stage runner
 #
 # Executed by build-inner.sh as a CHILD PROCESS (not sourced) so the whole
 # stage can run inside a user namespace for the prod squashfs path:
@@ -25,7 +25,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 source "${SCRIPT_DIR}/rootfs.sh"
 source "${SCRIPT_DIR}/merge.sh"
-source "${SCRIPT_DIR}/astrod.sh"
+source "${SCRIPT_DIR}/cragd.sh"
 
 : "${PROJECT_ROOT:?rootfs-stage.sh must be launched by build-inner.sh}"
 : "${ROOTFS_DIR:?}" "${BOARD:?}" "${VARIANT:?}" "${BOARD_ARCH:?}"
@@ -59,8 +59,8 @@ install_kernel_to_rootfs "$ROOTFS_DIR" "$BOARD" "$BOARD_ARCH" "$BOARD_CONFIG_JSO
 # RAUC system.conf + keyring (+ fw_env.config on uboot boards) — docs/05 §2
 generate_rauc_config "$ROOTFS_DIR" "$BOARD_CONFIG_JSON"
 
-# Baked astrod defaults for the firstboot oneshot — docs/06 §2, docs/07 §3
-generate_astro_defaults "$ROOTFS_DIR" "$BOARD_CONFIG_JSON"
+# Baked cragd defaults for the firstboot oneshot — docs/06 §2, docs/07 §3
+generate_crag_defaults "$ROOTFS_DIR" "$BOARD_CONFIG_JSON"
 
 # dhcpcd fallback config + /etc/resolv.conf symlink — docs/07 §2, M3 phase 3
 bake_network_defaults "$ROOTFS_DIR"
@@ -68,11 +68,11 @@ bake_network_defaults "$ROOTFS_DIR"
 # build-epoch time floor + minimal chrony.conf — docs/07 §6, M3 phase 4
 bake_time_defaults "$ROOTFS_DIR"
 
-# Image identity for GET /system (system.zig prefers ASTRO_* keys)
+# Image identity for GET /system (system.zig prefers CRAG_* keys)
 stamp_os_release "$ROOTFS_DIR" "$BOARD" "$VARIANT"
 
-# Build + install the astrod/astroctl binary (docs/06, AD-012)
-build_astrod "$BOARD_ARCH" "$ROOTFS_DIR"
+# Build + install the cragd/cragctl binary (docs/06, AD-012)
+build_cragd "$BOARD_ARCH" "$ROOTFS_DIR"
 
 # Run hooks, interleaved by numeric prefix across every layer (docs/08 §4).
 run_hooks "$ROOTFS_DIR"

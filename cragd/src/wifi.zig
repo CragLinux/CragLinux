@@ -1,6 +1,6 @@
 //! Wifi backend over iwd's D-Bus surface (net.connman.iwd), AD-015: iwd
 //! manages wifi ONLY (EnableNetworkConfiguration=false via the overlay's
-//! /etc/iwd/main.conf); dhcpcd owns addressing; astrod is the policy
+//! /etc/iwd/main.conf); dhcpcd owns addressing; cragd is the policy
 //! brain. iwd is an ObjectManager at "/" (iwd-3.12 src/main.c) with
 //! Adapter/Device/Station/Network/KnownNetwork objects under
 //! /net/connman/iwd — consumed via bus.getManagedObjects /
@@ -23,7 +23,7 @@
 //!    from netdev_iftype_to_string)
 //!
 //! Persistence split: the CONNECTION PROFILE lives in the store
-//! (network.wifi.connection {ssid, psk}); astrod renders it as an iwd
+//! (network.wifi.connection {ssid, psk}); cragd renders it as an iwd
 //! known-network file <ssid>.psk into /data/net/iwd (iwd's
 //! STATE_DIRECTORY, pointed there by the shadow dinit service). iwd
 //! watches that directory (iwd-3.12 src/knownnetworks.c:1130,
@@ -1130,7 +1130,7 @@ pub const Wifi = struct {
     /// source). Scoped to the v1 AP radio (first device alphabetically,
     /// the apRadioPathZ policy) — NOT "any AP in the iwd tree": the
     /// hwsim e2e rig runs its upstream test AP on wlan1 through the
-    /// same iwd, and counting it made `enabled` true before astrod ever
+    /// same iwd, and counting it made `enabled` true before cragd ever
     /// touched a radio (caught live by the provisioning-e2e case).
     pub fn apActive(self: *Wifi) bool {
         self.mu.lock();
@@ -1471,11 +1471,11 @@ pub var global: ?*Wifi = null;
 //     per-mode config swap around the AP window, not a permanent change.
 //
 // The fill therefore uses StartProfile (Start(ssid,psk) cannot carry the
-// DHCP pool): astrod renders /data/net/iwd/ap/<ssid>.ap (the ap/ dir is
-// tmpfiles-created astrod-owned) and calls StartProfile on the AP
+// DHCP pool): cragd renders /data/net/iwd/ap/<ssid>.ap (the ap/ dir is
+// tmpfiles-created cragd-owned) and calls StartProfile on the AP
 // radio's Device path after switching Device.Mode to "ap".
 //
-// v1 radio policy (baked): astrod's OWN radio is the FIRST iwd device
+// v1 radio policy (baked): cragd's OWN radio is the FIRST iwd device
 // alphabetically by interface name (wlan0 on every current board). A
 // multi-radio product that wants a dedicated AP radio gets a store knob
 // later — additive.
@@ -1484,21 +1484,21 @@ pub var global: ?*Wifi = null;
 pub const ap_profile_dir = iwd_state_dir ++ "/ap";
 /// HMAC label for the deterministic AP PSK (versioned: a future scheme
 /// change bumps the label, never silently changes existing labels).
-pub const ap_psk_label = "astro-ap-psk-v1";
+pub const ap_psk_label = "crag-ap-psk-v1";
 /// The AP provisioning subnet (docs/07 §4; portal.zig mirrors it).
 pub const ap_address = "192.168.223.1";
 pub const ap_netmask = "255.255.255.0";
 
-/// SSID "astro-<last 6 hex of machine-id>" — identical derivation to the
+/// SSID "crag-<last 6 hex of machine-id>" — identical derivation to the
 /// mDNS instance label so the device presents one identity everywhere.
 pub fn deriveApSsid(buf: *[32]u8, machine_id: []const u8) []const u8 {
     return @import("mdns.zig").instanceLabel(buf, machine_id);
 }
 
 /// Deterministic per-device WPA2 passphrase (baked decision):
-/// hex(hmac-sha256(key = machine-id, msg = "astro-ap-psk-v1"))[0..16].
+/// hex(hmac-sha256(key = machine-id, msg = "crag-ap-psk-v1"))[0..16].
 /// 16 lowercase-hex chars — a valid 8..63-char WPA passphrase, printable
-/// on the device label; astroctl exposes it via a socket-surface-only
+/// on the device label; cragctl exposes it via a socket-surface-only
 /// endpoint (fill work) for the label-printing station.
 pub fn deriveApPsk(out: *[16]u8, machine_id: []const u8) []const u8 {
     const HmacSha256 = std.crypto.auth.hmac.sha2.HmacSha256;
@@ -1516,11 +1516,11 @@ pub fn deriveApPsk(out: *[16]u8, machine_id: []const u8) []const u8 {
 }
 
 /// Render the iwd AP profile document (pure; writeApProfile installs it
-/// as ap_profile_dir/<ssid>.ap before StartProfile). Pool: astrod at .1,
+/// as ap_profile_dir/<ssid>.ap before StartProfile). Pool: cragd at .1,
 /// clients .10-.199, DNS pointed at the portal catch-all (docs/07 §4).
 pub fn renderApProfile(allocator: std.mem.Allocator, psk: []const u8) error{OutOfMemory}![]u8 {
     return std.fmt.allocPrint(allocator,
-        \\# Rendered by astrod (docs/07 SS4 AP provisioning) - do not edit.
+        \\# Rendered by cragd (docs/07 SS4 AP provisioning) - do not edit.
         \\[Security]
         \\Passphrase={s}
         \\
@@ -1538,7 +1538,7 @@ pub fn renderApProfile(allocator: std.mem.Allocator, psk: []const u8) error{OutO
 /// <state_dir>/ap/<ssid>.ap (0600, tmp+rename). The filename uses the
 /// ssid VERBATIM — StartProfile loads storage_get_path("ap/%s.ap", ssid)
 /// with NO hex encoding (iwd-3.12 src/ap.c:4437), unlike station
-/// profiles. Derived SSIDs ("astro-" + 6 hex) are always safe; foreign
+/// profiles. Derived SSIDs ("crag-" + 6 hex) are always safe; foreign
 /// ssids are rejected unless filename-clean (defensive: '/' or '.' in an
 /// ssid must never escape the ap/ directory).
 pub fn writeApProfile(
@@ -1575,11 +1575,11 @@ pub fn writeApProfile(
 // ap.c:3364) — and main.conf is read ONCE at startup, first match along
 // $CONFIGURATION_DIRECTORY (iwd-3.12 src/main.c:548-567, ':'-separated).
 // The shipped AD-015 posture is =false (dhcpcd owns station addressing).
-// For the AP window astrod renders the override below into ap_netconf_dir
+// For the AP window cragd renders the override below into ap_netconf_dir
 // — which the iwd shadow dinit service lists FIRST in
-// CONFIGURATION_DIRECTORY (/etc/astro/iwd.env followup) — and restarts
+// CONFIGURATION_DIRECTORY (/etc/crag/iwd.env followup) — and restarts
 // iwd around install/remove. tmpfiles creates ap_netconf_dir
-// astrod-owned; /run contents vanish on reboot, so a crash mid-window
+// cragd-owned; /run contents vanish on reboot, so a crash mid-window
 // can never leave the split-brain config permanent.
 
 /// The baked iwd main.conf (AD-015 posture: EnableNetworkConfiguration=
@@ -1589,7 +1589,7 @@ pub const iwd_baked_conf_path = "/etc/iwd/main.conf";
 
 /// Minimal main.conf scan for EnableNetworkConfiguration (iwd parses it
 /// with l_settings — a flat KEY=VALUE ini; the [General] group is the
-/// only place iwd reads this key, and astro configs never repeat it).
+/// only place iwd reads this key, and crag configs never repeat it).
 /// Used to decide whether the AP netconfig window needs opening at all:
 /// the hwsim e2e rig bind-mounts a =true config over /etc/iwd, and
 /// restarting iwd there would kill the upstream test AP on wlan1.
@@ -1605,10 +1605,10 @@ pub fn mainConfNetconfigEnabled(text: []const u8) bool {
     return false;
 }
 
-pub const ap_netconf_dir = "/run/astro/iwd";
+pub const ap_netconf_dir = "/run/crag/iwd";
 pub const ap_netconf_path = ap_netconf_dir ++ "/main.conf";
 pub const ap_netconf_conf =
-    "# AP-window override rendered by astrod (docs/07 SS4) - do not edit.\n" ++
+    "# AP-window override rendered by cragd (docs/07 SS4) - do not edit.\n" ++
     "# Present ONLY while the provisioning AP is up: iwd's AP DHCP server\n" ++
     "# needs EnableNetworkConfiguration=true; station addressing stays\n" ++
     "# with dhcpcd (AD-015) because no station connect runs in AP mode.\n" ++
@@ -1922,9 +1922,9 @@ test "ssid filename encoding matches iwd storage.c (plain and hex forms)" {
     try std.testing.expectEqualStrings("MyHome-Net_2 4.psk", plain);
 
     // '.' forces hex encoding.
-    const dotted = try ssidFileName(a, "astro.lan", .psk);
+    const dotted = try ssidFileName(a, "crag.lan", .psk);
     defer a.free(dotted);
-    try std.testing.expectEqualStrings("=617374726f2e6c616e.psk", dotted);
+    try std.testing.expectEqualStrings("=637261672e6c616e.psk", dotted);
 
     // Non-ASCII (UTF-8 bytes) force hex encoding, lowercase digits
     // (ell/util.c:474 l_util_hexstring).
@@ -1973,9 +1973,9 @@ test "writeProfile/removeProfiles: atomic install into the state dir, 0600" {
     var dir_buf: [128]u8 = undefined;
     const dir = fsutil.testTmpPath(&dir_buf, "iwd-state");
 
-    try writeProfile(a, dir, "astro-test", "hunter22-secret");
+    try writeProfile(a, dir, "crag-test", "hunter22-secret");
     var path_buf: [160]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "{s}/astro-test.psk", .{dir});
+    const path = try std.fmt.bufPrint(&path_buf, "{s}/crag-test.psk", .{dir});
     const back = try fsutil.readFileAlloc(a, path, 4096);
     defer a.free(back);
     try std.testing.expectEqualStrings("[Security]\nPassphrase=hunter22-secret\n", back);
@@ -1992,13 +1992,13 @@ test "writeProfile/removeProfiles: atomic install into the state dir, 0600" {
     try std.testing.expectEqual(@as(u16, 0o600), stx.mode & 0o7777);
 
     // Hex-named variant and removal of both security flavors.
-    try writeProfile(a, dir, "astro.lan", "");
+    try writeProfile(a, dir, "crag.lan", "");
     var open_buf: [200]u8 = undefined;
-    const open_path = try std.fmt.bufPrint(&open_buf, "{s}/=617374726f2e6c616e.open", .{dir});
+    const open_path = try std.fmt.bufPrint(&open_buf, "{s}/=637261672e6c616e.open", .{dir});
     try std.testing.expect(fsutil.pathExists(open_path));
 
-    removeProfiles(a, dir, "astro-test");
-    removeProfiles(a, dir, "astro.lan");
+    removeProfiles(a, dir, "crag-test");
+    removeProfiles(a, dir, "crag.lan");
     try std.testing.expect(!fsutil.pathExists(path));
     try std.testing.expect(!fsutil.pathExists(open_path));
 
@@ -2010,8 +2010,8 @@ test "writeProfile/removeProfiles: atomic install into the state dir, 0600" {
 // by bus.zig's socketpair tests against iwd's wire shapes).
 
 const t_dev_path = "/net/connman/iwd/0/3";
-const t_net_path = "/net/connman/iwd/0/3/617374726f2d74657374_psk";
-const t_known_path = "/net/connman/iwd/617374726f2d74657374_psk";
+const t_net_path = "/net/connman/iwd/0/3/637261672d74657374_psk";
+const t_known_path = "/net/connman/iwd/637261672d74657374_psk";
 
 fn testIngest(model: *Model) void {
     var dev_props = [_]bus_mod.Prop{
@@ -2028,7 +2028,7 @@ fn testIngest(model: *Model) void {
         .{ .name = station_interface, .props = &sta_props },
     };
     var net_props = [_]bus_mod.Prop{
-        .{ .name = "Name", .value = .{ .s = "astro-test" } },
+        .{ .name = "Name", .value = .{ .s = "crag-test" } },
         .{ .name = "Type", .value = .{ .s = "psk" } },
         .{ .name = "Connected", .value = .{ .b = false } },
         .{ .name = "Device", .value = .{ .o = t_dev_path } },
@@ -2045,7 +2045,7 @@ fn testIngest(model: *Model) void {
         .{ .name = network_interface, .props = &wep_props },
     };
     var known_props = [_]bus_mod.Prop{
-        .{ .name = "Name", .value = .{ .s = "astro-test" } },
+        .{ .name = "Name", .value = .{ .s = "crag-test" } },
         .{ .name = "Type", .value = .{ .s = "psk" } },
     };
     var known_ifaces = [_]bus_mod.InterfaceProps{
@@ -2075,7 +2075,7 @@ test "model: ObjectManager tree ingest maps devices/stations/networks/knowns" {
     try std.testing.expect(dev.connected_network == null);
 
     const net = model.findNet(t_net_path).?;
-    try std.testing.expectEqualStrings("astro-test", net.name);
+    try std.testing.expectEqualStrings("crag-test", net.name);
     try std.testing.expectEqual(@as(?Security, .psk), net.security);
     try std.testing.expect(net.known);
     try std.testing.expect(!net.connected);
@@ -2085,7 +2085,7 @@ test "model: ObjectManager tree ingest maps devices/stations/networks/knowns" {
     try std.testing.expect(model.findNet("/net/connman/iwd/0/3/6c6567616379_wep").?.security == null);
 
     const known = model.findKnown(t_known_path).?;
-    try std.testing.expectEqualStrings("astro-test", known.name);
+    try std.testing.expectEqualStrings("crag-test", known.name);
 
     // Re-ingest is idempotent (no duplicate objects).
     testIngest(&model);
@@ -2205,7 +2205,7 @@ test "model: State snapshot mapping (radio, mode, connected ssid)" {
     _ = model.applyInterface(t_dev_path, station_interface, &connected, &.{});
     st = try modelState(&model, arena);
     try std.testing.expectEqualStrings("connected", st.station_state);
-    try std.testing.expectEqualStrings("astro-test", st.connected_ssid.?);
+    try std.testing.expectEqualStrings("crag-test", st.connected_ssid.?);
 
     // Powered off: mode reads off even though iftype says station.
     var off = [_]bus_mod.Prop{.{ .name = "Powered", .value = .{ .b = false } }};
@@ -2285,11 +2285,11 @@ test "model: DUT scoping — a helper radio's Station never masquerades as ours"
     try std.testing.expectEqualStrings(dut_path, dutDevice(&bare).?.path);
 }
 
-test "live iwd backend (manual: ASTRO_LIVE_IWD=1 against a real bus + iwd)" {
-    if (std.c.getenv("ASTRO_LIVE_IWD") == null) return error.SkipZigTest;
+test "live iwd backend (manual: CRAG_LIVE_IWD=1 against a real bus + iwd)" {
+    if (std.c.getenv("CRAG_LIVE_IWD") == null) return error.SkipZigTest;
     const gpa = std.testing.allocator;
 
-    var st = try store_mod.Store.load(gpa, "/tmp/astro-live-iwd.json");
+    var st = try store_mod.Store.load(gpa, "/tmp/crag-live-iwd.json");
     defer st.deinit();
     var reg = ops.Registry.init(gpa);
     defer reg.deinit();
@@ -2312,7 +2312,7 @@ test "live iwd backend (manual: ASTRO_LIVE_IWD=1 against a real bus + iwd)" {
 test "AP identity: SSID from machine-id, deterministic 16-hex PSK" {
     var ssid_buf: [32]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "astro-9f03a1",
+        "crag-9f03a1",
         deriveApSsid(&ssid_buf, "e5c1770f8ffb4dc7a276869f9f03a1\n"),
     );
 
@@ -2345,18 +2345,18 @@ test "renderApProfile carries the StartProfile contract keys" {
     try std.testing.expect(std.mem.indexOf(u8, doc, "LeaseTime=300\n") != null);
 }
 
-test "AP PSK derivation: pinned vectors (versioned label astro-ap-psk-v1)" {
-    // hex(hmac-sha256(key=machine-id, msg="astro-ap-psk-v1"))[0..16],
+test "AP PSK derivation: pinned vectors (versioned label crag-ap-psk-v1)" {
+    // hex(hmac-sha256(key=machine-id, msg="crag-ap-psk-v1"))[0..16],
     // cross-checked against python hmac/hashlib. A change here means the
     // derivation drifted — devices already labeled in the field would
     // stop matching their printed passphrase. Bump ap_psk_label instead.
     var buf: [16]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "68790122e723996d",
+        "f5cd05c4d98ba678",
         deriveApPsk(&buf, "e5c1770f8ffb4dc7a276869f9f03a1"),
     );
     try std.testing.expectEqualStrings(
-        "574cf2d15abf5222",
+        "04f6ea736c802100",
         deriveApPsk(&buf, "0123456789abcdef0123456789abcdef\n"),
     );
 }
@@ -2367,10 +2367,10 @@ test "writeApProfile: verbatim ap/<ssid>.ap install, 0600, hostile ssids rejecte
     const dir = fsutil.testTmpPath(&dir_buf, "iwd-ap-state");
     try std.testing.expectEqualStrings("/data/net/iwd/ap", ap_profile_dir);
 
-    try writeApProfile(a, dir, "astro-9f03a1", "68790122e723996d");
+    try writeApProfile(a, dir, "crag-9f03a1", "68790122e723996d");
     var path_buf: [180]u8 = undefined;
     // Filename is the ssid VERBATIM + ".ap" (ap.c:4437) — no hex encoding.
-    const path = try std.fmt.bufPrint(&path_buf, "{s}/ap/astro-9f03a1.ap", .{dir});
+    const path = try std.fmt.bufPrint(&path_buf, "{s}/ap/crag-9f03a1.ap", .{dir});
     const back = try fsutil.readFileAlloc(a, path, 4096);
     defer a.free(back);
     try std.testing.expect(std.mem.indexOf(u8, back, "Passphrase=68790122e723996d\n") != null);
@@ -2392,8 +2392,8 @@ test "writeApProfile: verbatim ap/<ssid>.ap install, 0600, hostile ssids rejecte
     try std.testing.expectError(error.InvalidArgument, writeApProfile(a, dir, "../escape", "hunter22-secret"));
     try std.testing.expectError(error.InvalidArgument, writeApProfile(a, dir, "dot.dot", "hunter22-secret"));
     try std.testing.expectError(error.InvalidArgument, writeApProfile(a, dir, "sp ace", "hunter22-secret"));
-    try std.testing.expectError(error.InvalidArgument, writeApProfile(a, dir, "astro-9f03a1", "short7c"));
-    try std.testing.expectError(error.InvalidArgument, writeApProfile(a, dir, "astro-9f03a1", ""));
+    try std.testing.expectError(error.InvalidArgument, writeApProfile(a, dir, "crag-9f03a1", "short7c"));
+    try std.testing.expectError(error.InvalidArgument, writeApProfile(a, dir, "crag-9f03a1", ""));
 }
 
 test "pre-AP scan cache: deep copy round-trip (per-request copies of the snapshot)" {
@@ -2412,10 +2412,10 @@ test "pre-AP scan cache: deep copy round-trip (per-request copies of the snapsho
 }
 
 test "AP netconfig window: override paths + content pin the iwd contract" {
-    // /run/astro/iwd must be listed FIRST in the iwd shadow service's
+    // /run/crag/iwd must be listed FIRST in the iwd shadow service's
     // CONFIGURATION_DIRECTORY (main.c:548-567 takes the first main.conf
-    // found) — /etc/astro/iwd.env carries that (overlay).
-    try std.testing.expectEqualStrings("/run/astro/iwd/main.conf", ap_netconf_path);
+    // found) — /etc/crag/iwd.env carries that (overlay).
+    try std.testing.expectEqualStrings("/run/crag/iwd/main.conf", ap_netconf_path);
     try std.testing.expect(std.mem.startsWith(u8, ap_netconf_path, ap_netconf_dir));
     // The override flips exactly the one setting netconfig_enabled()
     // reads (netconfig.c:760-767) and nothing else.
@@ -2450,7 +2450,7 @@ test "model: AccessPoint interface tracking (Started edge, removal, apActive map
     model.removeInterfaces(t_dev_path, &rm_station);
     var ap_props = [_]bus_mod.Prop{
         .{ .name = "Started", .value = .{ .b = false } },
-        .{ .name = "Name", .value = .{ .s = "astro-9f03a1" } },
+        .{ .name = "Name", .value = .{ .s = "crag-9f03a1" } },
     };
     var res = model.applyInterface(t_dev_path, ap_interface, &ap_props, &.{});
     try std.testing.expect(!res.ap_started_changed); // false → false: no edge

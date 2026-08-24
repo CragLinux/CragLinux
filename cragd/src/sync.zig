@@ -2,7 +2,7 @@
 //!
 //! Zig 0.16 moved std's Mutex/RwLock behind the std.Io interface
 //! (Io.Mutex.lock(io), futex via the Io vtable); this codebase deliberately
-//! keeps std.Io out of daemon code (see fsutil.zig rationale), and astrod
+//! keeps std.Io out of daemon code (see fsutil.zig rationale), and cragd
 //! links musl libc anyway for basu — so the locks come straight from
 //! pthreads. Zero-initialized pthread types ARE the static initializers on
 //! musl (PTHREAD_*_INITIALIZER is all-zeroes), hence `.{}` defaults work.

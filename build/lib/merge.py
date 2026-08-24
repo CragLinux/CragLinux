@@ -1,5 +1,5 @@
 """
-Astro external-tree board/variant TOML deep-merge (docs/08 §4).
+Crag external-tree board/variant TOML deep-merge (docs/08 §4).
 
 Consumes the ordered layer list from build/lib/layers.py and produces the
 merged, validated board (or variant) config as JSON, exactly as config.py does
@@ -149,7 +149,7 @@ def deep_merge_board_variant(layer_list, kind, board, variant):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Astro board/variant deep-merge across external-tree layers"
+        description="Crag board/variant deep-merge across external-tree layers"
     )
     parser.add_argument("kind", choices=["board", "variant"])
     parser.add_argument("--board", required=True)

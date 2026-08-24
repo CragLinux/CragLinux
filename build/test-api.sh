@@ -1,26 +1,26 @@
 #!/bin/bash
 set -euo pipefail
 
-# Astro Linux - astrod API integration suite (M3 phase 3, docs/10 §4
-# "astrod-api"): boots the dev image and exercises the network group end
+# Crag Linux - cragd API integration suite (M3 phase 3, docs/10 §4
+# "cragd-api"): boots the dev image and exercises the network group end
 # to end over the REAL stack — rtnetlink observation, dhcpcd addressing,
-# astrod-rendered resolv.conf, and a full wifi station flow against an
+# cragd-rendered resolv.conf, and a full wifi station flow against an
 # iwd access point on the kernel's mac80211_hwsim rig (two virtual
 # radios, boards/*/kernel/qemu.fragment).
 #
 # Cases, in order (each is one junit <testcase> with wall time):
 #   boot           dev image boots on a scratch overlay, SSH answers
-#   system-auth    GET /system via astroctl + the AD-014 auth matrix on
+#   system-auth    GET /system via cragctl + the AD-014 auth matrix on
 #                  127.0.0.1:8080 (401 problem+json without/with-bad
 #                  token, 200 with the firstboot token) — phase-1
 #                  regression
 #   network-eth0   GET /network shows eth0 with carrier and the QEMU
 #                  slirp 10.0.2.x address (rtnetlink observation path)
 #   resolv-conf    /etc/resolv.conf is the baked symlink into
-#                  /run/astro-resolv/resolv.conf (world-readable — the
-#                  0750 /run/astro gate must NOT cover it: unprivileged
+#                  /run/crag-resolv/resolv.conf (world-readable — the
+#                  0750 /run/crag gate must NOT cover it: unprivileged
 #                  daemons like chronyd resolve through it), the target
-#                  carries astrod's rendered marker comment and the
+#                  carries cragd's rendered marker comment and the
 #                  slirp DNS (docs/07 §2 one-writer model, dhcpcd hook
 #                  -> lease -> render)
 #   update-status  GET /update/status reachable (phase-2 regression)
@@ -31,9 +31,9 @@ set -euo pipefail
 #                  GET /network/wifi reaches "connected" -> wlan0 holds
 #                  an address from the AP pool in GET /network ->
 #                  forget -> disconnected
-#   astrod-rss     astrod VmRSS < 16 MiB after all of it (docs/06 §3)
+#   cragd-rss     cragd VmRSS < 16 MiB after all of it (docs/06 §3)
 #
-# Hardening-pass cases (task #32), appended after astrod-rss:
+# Hardening-pass cases (task #32), appended after cragd-rss:
 #   api-negative   malformed/oversized bodies: invalid JSON and
 #                  unknown-member bodies to the PUT/POST endpoints ->
 #                  400 problem+json; a body over the 64 KiB cap -> 413
@@ -45,12 +45,12 @@ set -euo pipefail
 #                  scheme -> all 401 problem+json), token-file rotation
 #                  mid-session (old token 401s IMMEDIATELY — the auth
 #                  cache is keyed on inode/size/mtime, not TTL), and the
-#                  astro-api unix-socket group gate (non-member uid is
+#                  crag-api unix-socket group gate (non-member uid is
 #                  refused at connect; member uid gets 200)
 #   concurrency    20 parallel GET /system + 2 parallel POST wifi/scan
 #                  (in-flight scan coalesces: both 202 + operation) with
 #                  an SSE client attached: no 5xx anywhere, SSE ids
-#                  strictly monotonic, astrod RSS still < 16 MiB
+#                  strictly monotonic, cragd RSS still < 16 MiB
 #   fuzz-lite      a dozen wrong-method/wrong-path probes -> 404/405
 #                  problem+json shape (urn type, no connection drops)
 #
@@ -71,15 +71,15 @@ set -euo pipefail
 #                  403 outside the subset, nft redirect ruleset), submit
 #                  the upstream credentials, and watch the single-radio
 #                  flip end 'provisioned' with the AP gone for good.
-#   factory-reset  wrong confirm 400s; astroctl --yes-really-wipe
+#   factory-reset  wrong confirm 400s; cragctl --yes-really-wipe
 #                  reboots into a FRESH /data: 'provisioning' again, new
 #                  api token (old one 401s), REGENERATED machine-id (it
 #                  lives in the /etc overlay upper on /data — MIGRATION-
 #                  NOTES §12), firstboot stamps fresh, wifi config gone.
 #   time           docs/07 §6: build-epoch floor applied (now >= floor,
-#                  astroctl time agrees) and chrony reaches real NTP
+#                  cragctl time agrees) and chrony reaches real NTP
 #                  through slirp's UDP forwarding — time.synced true
-#                  (ASTRO_TEST_OFFLINE=1 flips that assert for
+#                  (CRAG_TEST_OFFLINE=1 flips that assert for
 #                  air-gapped runs).
 #
 # HWSIM/IWD TRAP (verified in iwd-3.12 sources, do not "simplify"):
@@ -120,7 +120,7 @@ API_CASES=(
     resolv-conf
     update-status
     wifi-e2e
-    astrod-rss
+    cragd-rss
     api-negative
     auth-matrix
     concurrency
@@ -166,11 +166,11 @@ tl_containerize "build/test-api.sh" "$BOARD" "--timeout=${TIMEOUT}" \
 tl_init "api-${BOARD}" "$BOARD" "$VARIANT"
 SSH_PORT=$(( 20000 + RANDOM % 10000 ))
 tl_ssh_init
-[ -d "$TL_OUT" ] || { echo "ERROR: image dir not found: ${TL_OUT} — run ./build/astro-build.sh ${BOARD} ${VARIANT}"; exit 1; }
+[ -d "$TL_OUT" ] || { echo "ERROR: image dir not found: ${TL_OUT} — run ./build/crag-build.sh ${BOARD} ${VARIANT}"; exit 1; }
 
 # Wifi rig constants (arbitrary but pinned so failures are greppable)
-TEST_SSID="astro-hwsim"
-TEST_PSK="astrotest1234"
+TEST_SSID="crag-hwsim"
+TEST_PSK="cragtest1234"
 AP_ADDR="192.168.80.1"
 AP_POOL_RE='192\.168\.80\.'
 
@@ -179,17 +179,17 @@ AP_POOL_RE='192\.168\.80\.'
 PORTAL_ADDR="192.168.223.1"
 PORTAL_POOL_RE='192\.168\.223\.'
 
-ASTROD_SOCK="/run/astro/astrod.sock"
+CRAGD_SOCK="/run/crag/cragd.sock"
 
 # ---- guest helpers ---------------------------------------------------------
 # All API calls run in-guest with curl (dev image ships it) against the
 # unix socket: the group-gated default surface (AD-014).
-api_get()    { "${SSH[@]}" "curl -s --max-time 20 --unix-socket ${ASTROD_SOCK} http://localhost$1"; }
-api_code()   { "${SSH[@]}" "curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X $1 --unix-socket ${ASTROD_SOCK} http://localhost$2"; }
-api_post()   { "${SSH[@]}" "curl -s --max-time 20 -X POST --unix-socket ${ASTROD_SOCK} http://localhost$1"; }
+api_get()    { "${SSH[@]}" "curl -s --max-time 20 --unix-socket ${CRAGD_SOCK} http://localhost$1"; }
+api_code()   { "${SSH[@]}" "curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X $1 --unix-socket ${CRAGD_SOCK} http://localhost$2"; }
+api_post()   { "${SSH[@]}" "curl -s --max-time 20 -X POST --unix-socket ${CRAGD_SOCK} http://localhost$1"; }
 
 # The AP-surface listener (192.168.223.1:8080). Guest-local curl: the
-# surface is tagged PER LISTENER by astrod (spine main.zig), so any
+# surface is tagged PER LISTENER by cragd (spine main.zig), so any
 # connection accepted here exercises the AP subset/redaction/403 rules.
 # Why not `curl --interface wlan2` over the air, as a phone would: all
 # three hwsim radios share ONE network stack in this rig, so the TCP
@@ -202,23 +202,23 @@ api_post()   { "${SSH[@]}" "curl -s --max-time 20 -X POST --unix-socket ${ASTROD
 portal_get()  { "${SSH[@]}" "curl -s --max-time 20 http://${PORTAL_ADDR}:8080$1"; }
 portal_code() { "${SSH[@]}" "curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X $1 http://${PORTAL_ADDR}:8080$2"; }
 
-# astrod VmRSS in kB. The image ships no pidof/pgrep/ps — find astrod by
+# cragd VmRSS in kB. The image ships no pidof/pgrep/ps — find cragd by
 # /proc/<pid>/comm.
-astrod_rss_kb() {
+cragd_rss_kb() {
     local out
-    out=$("${SSH[@]}" 'for c in /proc/[0-9]*/comm; do read -r n < "$c" 2>/dev/null || continue; if [ "$n" = astrod ]; then cat "${c%/comm}/status"; break; fi; done' 2>/dev/null || :)
+    out=$("${SSH[@]}" 'for c in /proc/[0-9]*/comm; do read -r n < "$c" 2>/dev/null || continue; if [ "$n" = cragd ]; then cat "${c%/comm}/status"; break; fi; done' 2>/dev/null || :)
     printf '%s\n' "$out" | awk '/^VmRSS:/{print $2}'
 }
 
 # check_rss <label> — assert the docs/06 §3 16 MiB budget.
 check_rss() {
     local kb
-    kb=$(astrod_rss_kb)
-    echo "astrod VmRSS ($1): ${kb:-<unknown>} kB (budget 16384 kB)"
+    kb=$(cragd_rss_kb)
+    echo "cragd VmRSS ($1): ${kb:-<unknown>} kB (budget 16384 kB)"
     if [ -z "${kb:-}" ]; then
-        fail "could not read astrod VmRSS ($1 — daemon dead?)"
+        fail "could not read cragd VmRSS ($1 — daemon dead?)"
     elif [ "$kb" -ge 16384 ]; then
-        fail "astrod VmRSS ${kb} kB breaches the 16 MiB budget ($1)"
+        fail "cragd VmRSS ${kb} kB breaches the 16 MiB budget ($1)"
     fi
 }
 
@@ -276,7 +276,7 @@ time_synced_true() {
 }
 
 portal_ap_ready() {
-    AP_SHOW=$("${SSH[@]}" "astroctl wifi ap show" 2>/dev/null || :)
+    AP_SHOW=$("${SSH[@]}" "cragctl wifi ap show" 2>/dev/null || :)
     echo "$AP_SHOW" | grep -q '^enabled  yes$' || return 1
     # The AP address on wlan0 is the readiness signal for the listener +
     # DHCP pool, not just the iwd mode flip.
@@ -318,7 +318,7 @@ wait_wifi_state() {
 write_ap_profile() {
     "${SSH[@]}" "mkdir -p /data/net/iwd/ap && cat > /data/net/iwd/ap/${TEST_SSID}.ap <<'EOF'
 # Test-rig AP profile (iwd.ap(5)): [IPv4] enables iwd's built-in DHCP
-# server for this AP — the pool astrod's station side must lease from.
+# server for this AP — the pool cragd's station side must lease from.
 [Security]
 Passphrase=${TEST_PSK}
 
@@ -330,9 +330,9 @@ EOF"
 
 # apply_iwd_netconfig_override — see the HWSIM/IWD TRAP header note.
 apply_iwd_netconfig_override() {
-    "${SSH[@]}" "mkdir -p /run/astro-test/iwd \
-        && sed 's/^EnableNetworkConfiguration=false/EnableNetworkConfiguration=true/' /etc/iwd/main.conf > /run/astro-test/iwd/main.conf \
-        && mount --bind /run/astro-test/iwd /etc/iwd \
+    "${SSH[@]}" "mkdir -p /run/crag-test/iwd \
+        && sed 's/^EnableNetworkConfiguration=false/EnableNetworkConfiguration=true/' /etc/iwd/main.conf > /run/crag-test/iwd/main.conf \
+        && mount --bind /run/crag-test/iwd /etc/iwd \
         && dinitctl restart iwd"
 }
 
@@ -377,11 +377,11 @@ case_boot() {
 # Case: system-auth — GET /system + the AD-014 401 matrix (regression)
 ##############################################################################
 case_system_auth() {
-    echo "[STEP] astroctl system over the unix socket..."
+    echo "[STEP] cragctl system over the unix socket..."
     local SYS_OUT code hdr TOKEN
-    SYS_OUT=$("${SSH[@]}" "astroctl system" 2>&1) || fail "astroctl system failed"
-    evidence "astroctl system" "$SYS_OUT"
-    echo "$SYS_OUT" | grep -q "board" || fail "astroctl system output missing the board line"
+    SYS_OUT=$("${SSH[@]}" "cragctl system" 2>&1) || fail "cragctl system failed"
+    evidence "cragctl system" "$SYS_OUT"
+    echo "$SYS_OUT" | grep -q "board" || fail "cragctl system output missing the board line"
 
     echo "[STEP] Bearer-token matrix on 127.0.0.1:8080..."
     TOKEN=$("${SSH[@]}" "cat /data/config/api-token" | tr -d '[:space:]') || fail "cannot read /data/config/api-token"
@@ -429,15 +429,15 @@ case_resolv_conf() {
     LINK=$("${SSH[@]}" "readlink /etc/resolv.conf" || :)
     echo "readlink /etc/resolv.conf -> '${LINK}'"
     case "$LINK" in
-        ../run/astro-resolv/resolv.conf|/run/astro-resolv/resolv.conf) : ;;
-        *) fail "/etc/resolv.conf is not the astro symlink (got '${LINK}')" ;;
+        ../run/crag-resolv/resolv.conf|/run/crag-resolv/resolv.conf) : ;;
+        *) fail "/etc/resolv.conf is not the crag symlink (got '${LINK}')" ;;
     esac
-    RESOLV=$("${SSH[@]}" "cat /run/astro-resolv/resolv.conf" || :)
-    evidence "/run/astro-resolv/resolv.conf" "$RESOLV"
+    RESOLV=$("${SSH[@]}" "cat /run/crag-resolv/resolv.conf" || :)
+    evidence "/run/crag-resolv/resolv.conf" "$RESOLV"
     # The renderer must brand its output (one-writer marker): a comment
-    # line naming astrod distinguishes the rendered file from anything a
+    # line naming cragd distinguishes the rendered file from anything a
     # stray resolvconf/dhcpcd hook could have written.
-    echo "$RESOLV" | grep -q '^#.*astrod' || fail "resolv.conf missing the astrod rendered-marker comment"
+    echo "$RESOLV" | grep -q '^#.*cragd' || fail "resolv.conf missing the cragd rendered-marker comment"
     echo "$RESOLV" | grep -q '^nameserver 10\.0\.2\.' || fail "resolv.conf missing the slirp DNS (10.0.2.x) learned via the dhcpcd lease hook"
 }
 
@@ -445,10 +445,10 @@ case_resolv_conf() {
 # Case: update-status — phase-2 surface still reachable (regression)
 ##############################################################################
 case_update_status() {
-    echo "[STEP] astroctl update status..."
+    echo "[STEP] cragctl update status..."
     local UPD_OUT
-    UPD_OUT=$("${SSH[@]}" "astroctl update status" 2>&1) || fail "astroctl update status failed"
-    evidence "astroctl update status" "$UPD_OUT"
+    UPD_OUT=$("${SSH[@]}" "cragctl update status" 2>&1) || fail "cragctl update status failed"
+    evidence "cragctl update status" "$UPD_OUT"
     echo "$UPD_OUT" | grep -q 'boot_slot' || fail "update status output missing boot_slot"
     echo "$UPD_OUT" | grep -q 'SLOT' || fail "update status output missing the slot table"
 }
@@ -479,7 +479,7 @@ case_wifi_e2e() {
     tl_wait_for "wlan1 in ap mode" 10 ap_mode_ready wlan1 || :
     "${SSH[@]}" "iwctl ap wlan1 start-profile ${TEST_SSID}" || fail "iwctl ap start-profile failed"
 
-    # Address assertion goes through astrod's GET /network (rtnetlink
+    # Address assertion goes through cragd's GET /network (rtnetlink
     # observation) — the image ships no iproute2, and the API is the
     # surface under test anyway.
     if ! tl_wait_for "wlan1 AP address" 30 iface_has_addr wlan1 prefix "$AP_ADDR"; then
@@ -496,7 +496,7 @@ case_wifi_e2e() {
 
     echo "[STEP] API: PUT /network/wifi/connection (connect)..."
     local CONNECT_CODE CONNECT_BODY
-    CONNECT_CODE=$("${SSH[@]}" "curl -s -o /tmp/connect-body -w '%{http_code}' --max-time 20 -X PUT -H 'Content-Type: application/json' --data '{\"ssid\":\"${TEST_SSID}\",\"psk\":\"${TEST_PSK}\"}' --unix-socket ${ASTROD_SOCK} http://localhost/api/v1/network/wifi/connection" || echo "000")
+    CONNECT_CODE=$("${SSH[@]}" "curl -s -o /tmp/connect-body -w '%{http_code}' --max-time 20 -X PUT -H 'Content-Type: application/json' --data '{\"ssid\":\"${TEST_SSID}\",\"psk\":\"${TEST_PSK}\"}' --unix-socket ${CRAGD_SOCK} http://localhost/api/v1/network/wifi/connection" || echo "000")
     if [ "${CONNECT_CODE:0:1}" != "2" ]; then
         CONNECT_BODY=$("${SSH[@]}" "cat /tmp/connect-body" 2>/dev/null || :)
         evidence "PUT /network/wifi/connection -> ${CONNECT_CODE}" "$CONNECT_BODY"
@@ -536,10 +536,10 @@ case_wifi_e2e() {
 }
 
 ##############################################################################
-# Case: astrod-rss — docs/06 §3 budget after the classic flow
+# Case: cragd-rss — docs/06 §3 budget after the classic flow
 ##############################################################################
-case_astrod_rss() {
-    echo "[STEP] astrod VmRSS after the phase-3 cases..."
+case_cragd_rss() {
+    echo "[STEP] cragd VmRSS after the phase-3 cases..."
     check_rss "post wifi-e2e"
 }
 
@@ -551,26 +551,26 @@ case_api_negative() {
 
     echo "[STEP] Invalid JSON to the strict PUT/POST endpoints -> 400 problem+json..."
     # PUT /network/wifi/ap: garbage body (no state change on 400).
-    hdr=$("${SSH[@]}" "curl -si --max-time 20 -X PUT -H 'Content-Type: application/json' --data 'this-is-not-json' --unix-socket ${ASTROD_SOCK} http://localhost/api/v1/network/wifi/ap" || :)
+    hdr=$("${SSH[@]}" "curl -si --max-time 20 -X PUT -H 'Content-Type: application/json' --data 'this-is-not-json' --unix-socket ${CRAGD_SOCK} http://localhost/api/v1/network/wifi/ap" || :)
     echo "$hdr" | head -1 | grep -q ' 400 ' || { evidence "PUT wifi/ap garbage" "$hdr"; fail "garbage PUT wifi/ap did not answer 400"; }
     echo "$hdr" | grep -qi '^content-type: application/problem+json' || fail "400 (garbage wifi/ap) is not problem+json"
-    echo "$hdr" | grep -q 'urn:astro:problem:bad-request' || fail "400 (garbage wifi/ap) missing the bad-request urn"
+    echo "$hdr" | grep -q 'urn:crag:problem:bad-request' || fail "400 (garbage wifi/ap) missing the bad-request urn"
 
     # PUT /network/wifi/ap: valid JSON, unknown member (strict body).
-    code=$("${SSH[@]}" "curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X PUT -H 'Content-Type: application/json' --data '{\"enabled\":true,\"bonus\":1}' --unix-socket ${ASTROD_SOCK} http://localhost/api/v1/network/wifi/ap" || echo "000")
+    code=$("${SSH[@]}" "curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X PUT -H 'Content-Type: application/json' --data '{\"enabled\":true,\"bonus\":1}' --unix-socket ${CRAGD_SOCK} http://localhost/api/v1/network/wifi/ap" || echo "000")
     [ "$code" = "400" ] || fail "unknown-member PUT wifi/ap answered ${code}, expected 400 (strict body)"
 
     # PUT /network/wifi/connection: garbage body.
-    code=$("${SSH[@]}" "curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X PUT -H 'Content-Type: application/json' --data '{{{' --unix-socket ${ASTROD_SOCK} http://localhost/api/v1/network/wifi/connection" || echo "000")
+    code=$("${SSH[@]}" "curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X PUT -H 'Content-Type: application/json' --data '{{{' --unix-socket ${CRAGD_SOCK} http://localhost/api/v1/network/wifi/connection" || echo "000")
     [ "$code" = "400" ] || fail "garbage PUT wifi/connection answered ${code}, expected 400"
 
     # POST /system/factory-reset: garbage body must 400, never wipe.
-    code=$("${SSH[@]}" "curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST -H 'Content-Type: application/json' --data 'not json either' --unix-socket ${ASTROD_SOCK} http://localhost/api/v1/system/factory-reset" || echo "000")
+    code=$("${SSH[@]}" "curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST -H 'Content-Type: application/json' --data 'not json either' --unix-socket ${CRAGD_SOCK} http://localhost/api/v1/system/factory-reset" || echo "000")
     [ "$code" = "400" ] || fail "garbage POST factory-reset answered ${code}, expected 400"
 
     echo "[STEP] Body over the 64 KiB cap -> 413 problem+json, response delivered..."
     "${SSH[@]}" "dd if=/dev/zero bs=1024 count=80 2>/dev/null | tr '\\0' 'a' > /tmp/big-body" || fail "could not build the oversized body"
-    hdr=$("${SSH[@]}" "curl -si --max-time 20 -X PUT -H 'Content-Type: application/json' --data-binary @/tmp/big-body --unix-socket ${ASTROD_SOCK} http://localhost/api/v1/network/wifi/ap" || echo "CURL-TRANSPORT-FAIL")
+    hdr=$("${SSH[@]}" "curl -si --max-time 20 -X PUT -H 'Content-Type: application/json' --data-binary @/tmp/big-body --unix-socket ${CRAGD_SOCK} http://localhost/api/v1/network/wifi/ap" || echo "CURL-TRANSPORT-FAIL")
     if [ "$hdr" = "CURL-TRANSPORT-FAIL" ]; then
         # The daemon closing with unread request bytes RSTs the response
         # away — the client never sees the 413. That is a real bug shape,
@@ -579,27 +579,27 @@ case_api_negative() {
     else
         echo "$hdr" | head -1 | grep -q ' 413 ' || { evidence "oversized-body response" "$(echo "$hdr" | head -5)"; fail "oversized body did not answer 413"; }
         echo "$hdr" | grep -qi '^content-type: application/problem+json' || fail "413 is not problem+json"
-        echo "$hdr" | grep -q 'urn:astro:problem:content-too-large' || fail "413 missing the content-too-large urn"
+        echo "$hdr" | grep -q 'urn:crag:problem:content-too-large' || fail "413 missing the content-too-large urn"
     fi
 
     echo "[STEP] Update upload larger than free /data -> 507 insufficient-storage..."
     # stageStream checks the DECLARED length against statvfs free space
     # before reading the body, so a forged Content-Length (no tmpfs/
     # fallocate needed) exercises the exact production path. The value
-    # must FIT usize on 32-bit boards (armv7 astrod: u32, max ~4 GiB —
+    # must FIT usize on 32-bit boards (armv7 cragd: u32, max ~4 GiB —
     # anything larger fails Content-Length parsing and answers 400
     # unrepresentable, caught live on qemu-armv7) while still exceeding
     # the ~1 GiB free /data of the +1G scratch overlay: 2.8 GiB.
     local staged_before staged_after
-    staged_before=$("${SSH[@]}" "ls /data/.astro/staging 2>/dev/null | wc -l" || echo 0)
-    hdr=$("${SSH[@]}" "curl -si --max-time 20 -X POST -H 'Content-Type: application/octet-stream' -H 'Content-Length: 3000000000' --data-binary '' --unix-socket ${ASTROD_SOCK} http://localhost/api/v1/update" || echo "CURL-TRANSPORT-FAIL")
+    staged_before=$("${SSH[@]}" "ls /data/.crag/staging 2>/dev/null | wc -l" || echo 0)
+    hdr=$("${SSH[@]}" "curl -si --max-time 20 -X POST -H 'Content-Type: application/octet-stream' -H 'Content-Length: 3000000000' --data-binary '' --unix-socket ${CRAGD_SOCK} http://localhost/api/v1/update" || echo "CURL-TRANSPORT-FAIL")
     if [ "$hdr" = "CURL-TRANSPORT-FAIL" ]; then
         fail "oversized upload: curl transport error instead of a 507 response"
     else
         echo "$hdr" | head -1 | grep -q ' 507 ' || { evidence "oversized-upload response" "$(echo "$hdr" | head -5)"; fail "2.8 GiB declared upload did not answer 507"; }
-        echo "$hdr" | grep -q 'urn:astro:problem:insufficient-storage' || fail "507 missing the insufficient-storage urn"
+        echo "$hdr" | grep -q 'urn:crag:problem:insufficient-storage' || fail "507 missing the insufficient-storage urn"
     fi
-    staged_after=$("${SSH[@]}" "ls /data/.astro/staging 2>/dev/null | wc -l" || echo 0)
+    staged_after=$("${SSH[@]}" "ls /data/.crag/staging 2>/dev/null | wc -l" || echo 0)
     [ "${staged_after:-0}" -le "${staged_before:-0}" ] || fail "507 path left staging residue (${staged_before} -> ${staged_after} files)"
 }
 
@@ -622,7 +622,7 @@ case_auth_matrix() {
     echo "[STEP] Token rotation mid-session: old token dies immediately..."
     # The auth cache is keyed on (inode, size, mtime) — a rewrite must be
     # picked up on the very next request, no reload window to wait out.
-    # Rewrite in place (>) so root:astro-api 0640 survives; restore after.
+    # Rewrite in place (>) so root:crag-api 0640 survives; restore after.
     local ROTATED="rotated-token-for-test-$(date +%s)"
     "${SSH[@]}" "printf '%s\n' '${ROTATED}' > /data/config/api-token" || fail "could not rotate the token file"
     code=$("${SSH[@]}" "curl -s -o /dev/null -w '%{http_code}' --max-time 20 -H 'Authorization: Bearer ${TOKEN}' http://127.0.0.1:8080/api/v1/system" || echo "000")
@@ -633,17 +633,17 @@ case_auth_matrix() {
     code=$("${SSH[@]}" "curl -s -o /dev/null -w '%{http_code}' --max-time 20 -H 'Authorization: Bearer ${TOKEN}' http://127.0.0.1:8080/api/v1/system" || echo "000")
     [ "$code" = "200" ] || fail "restored token answered ${code}, expected 200"
 
-    echo "[STEP] Unix-socket group gate: astro-api member vs non-member..."
-    # /run/astro is 0750 astrod:astro-api (AD-014). uid 1000 'dev' is in
-    # wheel only -> connect must be REFUSED by the filesystem; the astrod
+    echo "[STEP] Unix-socket group gate: crag-api member vs non-member..."
+    # /run/crag is 0750 cragd:crag-api (AD-014). uid 1000 'dev' is in
+    # wheel only -> connect must be REFUSED by the filesystem; the cragd
     # uid (member by /etc/group) must get a 200. doas.conf's
     # "permit nopass root" makes the drop non-interactive.
     local NONMEM MEM
-    NONMEM=$("${SSH[@]}" "doas -u dev curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket ${ASTROD_SOCK} http://localhost/api/v1/system; echo rc=\$?" || :)
+    NONMEM=$("${SSH[@]}" "doas -u dev curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket ${CRAGD_SOCK} http://localhost/api/v1/system; echo rc=\$?" || :)
     echo "  non-member (dev): ${NONMEM}"
-    echo "$NONMEM" | grep -q 'rc=0' && fail "non-member uid connected to the astrod socket (group gate broken)"
-    MEM=$("${SSH[@]}" "doas -u astrod curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket ${ASTROD_SOCK} http://localhost/api/v1/system" || echo "000")
-    [ "$MEM" = "200" ] || fail "astro-api member answered '${MEM}' on the socket, expected 200"
+    echo "$NONMEM" | grep -q 'rc=0' && fail "non-member uid connected to the cragd socket (group gate broken)"
+    MEM=$("${SSH[@]}" "doas -u cragd curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket ${CRAGD_SOCK} http://localhost/api/v1/system" || echo "000")
+    [ "$MEM" = "200" ] || fail "crag-api member answered '${MEM}' on the socket, expected 200"
 }
 
 ##############################################################################
@@ -656,7 +656,7 @@ case_concurrency() {
     # id 0 (ring replay makes frames flow immediately, so attachment is
     # provable). Results land in /tmp/conc/ for host-side asserts.
     "${SSH[@]}" 'rm -rf /tmp/conc && mkdir -p /tmp/conc
-curl -s -N --max-time 60 -H "Last-Event-ID: 0" --unix-socket /run/astro/astrod.sock http://localhost/api/v1/events > /tmp/conc/sse.log 2>/dev/null &
+curl -s -N --max-time 60 -H "Last-Event-ID: 0" --unix-socket /run/crag/cragd.sock http://localhost/api/v1/events > /tmp/conc/sse.log 2>/dev/null &
 echo $! > /tmp/conc/sse.pid' || fail "could not start the SSE client"
     # Event-driven attach gate: the Last-Event-ID replay means bytes
     # arrive as soon as the subscription is live.
@@ -666,13 +666,13 @@ echo $! > /tmp/conc/sse.pid' || fail "could not start the SSE client"
     "${SSH[@]}" 'i=0
 pids=""
 while [ $i -lt 20 ]; do
-    curl -s -o /dev/null -w "%{http_code}\n" --max-time 30 --unix-socket /run/astro/astrod.sock http://localhost/api/v1/system > /tmp/conc/get.$i &
+    curl -s -o /dev/null -w "%{http_code}\n" --max-time 30 --unix-socket /run/crag/cragd.sock http://localhost/api/v1/system > /tmp/conc/get.$i &
     pids="$pids $!"
     i=$((i+1))
 done
-curl -s --max-time 30 -X POST --unix-socket /run/astro/astrod.sock http://localhost/api/v1/network/wifi/scan -o /tmp/conc/scan1 -w "%{http_code}\n" > /tmp/conc/scan1.code &
+curl -s --max-time 30 -X POST --unix-socket /run/crag/cragd.sock http://localhost/api/v1/network/wifi/scan -o /tmp/conc/scan1 -w "%{http_code}\n" > /tmp/conc/scan1.code &
 pids="$pids $!"
-curl -s --max-time 30 -X POST --unix-socket /run/astro/astrod.sock http://localhost/api/v1/network/wifi/scan -o /tmp/conc/scan2 -w "%{http_code}\n" > /tmp/conc/scan2.code &
+curl -s --max-time 30 -X POST --unix-socket /run/crag/cragd.sock http://localhost/api/v1/network/wifi/scan -o /tmp/conc/scan2 -w "%{http_code}\n" > /tmp/conc/scan2.code &
 pids="$pids $!"
 for p in $pids; do wait $p; done' || fail "parallel request batch failed to run"
 
@@ -728,7 +728,7 @@ case_fuzz_lite() {
     echo "[STEP] A dozen wrong-method/wrong-path probes..."
     # method path expected-status. 404: unknown path; 405: known path,
     # wrong (or unparseable) method. Every answer must be problem+json
-    # with an urn:astro:problem type and the connection must close
+    # with an urn:crag:problem type and the connection must close
     # cleanly (curl exit 0 — no drops, no stack traces).
     local probes=(
         "GET /api/v1/nope 404"
@@ -747,7 +747,7 @@ case_fuzz_lite() {
     local probe m p want hdr got
     for probe in "${probes[@]}"; do
         read -r m p want <<<"$probe"
-        hdr=$("${SSH[@]}" "curl -si --path-as-is --max-time 10 -X ${m} --unix-socket ${ASTROD_SOCK} 'http://localhost${p}'" || echo "CURL-TRANSPORT-FAIL")
+        hdr=$("${SSH[@]}" "curl -si --path-as-is --max-time 10 -X ${m} --unix-socket ${CRAGD_SOCK} 'http://localhost${p}'" || echo "CURL-TRANSPORT-FAIL")
         if [ "$hdr" = "CURL-TRANSPORT-FAIL" ]; then
             fail "${m} ${p}: connection dropped (no HTTP answer)"
             continue
@@ -755,7 +755,7 @@ case_fuzz_lite() {
         got=$(echo "$hdr" | head -1 | awk '{print $2}')
         [ "$got" = "$want" ] || fail "${m} ${p}: answered ${got}, expected ${want}"
         echo "$hdr" | grep -qi '^content-type: application/problem+json' || fail "${m} ${p}: not problem+json"
-        echo "$hdr" | grep -q 'urn:astro:problem:' || fail "${m} ${p}: body missing the urn:astro:problem type"
+        echo "$hdr" | grep -q 'urn:crag:problem:' || fail "${m} ${p}: body missing the urn:crag:problem type"
         echo "  ${m} ${p} -> ${got} problem+json"
     done
 }
@@ -764,7 +764,7 @@ case_fuzz_lite() {
 # Case: provisioning-e2e — docs/07 §4 on the 3-radio rig (M3 phase 4)
 ##############################################################################
 # Radio roles (mac80211_hwsim.radios=3, boards/*/board.toml cmdline):
-#   wlan0 = DUT: astrod's station/AP flip radio (first device, v1 policy)
+#   wlan0 = DUT: cragd's station/AP flip radio (first device, v1 policy)
 #   wlan1 = upstream test AP (the network the portal user selects)
 #   wlan2 = the "phone": associates with the provisioning AP
 case_provisioning_e2e() {
@@ -780,7 +780,7 @@ case_provisioning_e2e() {
     echo "[STEP] Factory reset to reach the fresh-boot provisioning state..."
     local MID RESET_CODE RESET_BODY
     MID=$("${SSH[@]}" "cat /etc/machine-id" | tr -d '[:space:]') || fail "cannot read /etc/machine-id"
-    RESET_CODE=$("${SSH[@]}" "curl -s -o /tmp/reset-body -w '%{http_code}' --max-time 20 -X POST -H 'Content-Type: application/json' --data '{\"confirm\":\"${MID}\"}' --unix-socket ${ASTROD_SOCK} http://localhost/api/v1/system/factory-reset" || echo "000")
+    RESET_CODE=$("${SSH[@]}" "curl -s -o /tmp/reset-body -w '%{http_code}' --max-time 20 -X POST -H 'Content-Type: application/json' --data '{\"confirm\":\"${MID}\"}' --unix-socket ${CRAGD_SOCK} http://localhost/api/v1/system/factory-reset" || echo "000")
     if [ "$RESET_CODE" != "202" ]; then
         RESET_BODY=$("${SSH[@]}" "cat /tmp/reset-body" 2>/dev/null || :)
         evidence "POST /system/factory-reset -> ${RESET_CODE}" "$RESET_BODY"
@@ -802,8 +802,8 @@ case_provisioning_e2e() {
         fail "fresh-boot provisioning state is '${PROV_STATE:-<none>}', expected 'provisioning'"
     fi
     local PROV_OUT
-    PROV_OUT=$("${SSH[@]}" "astroctl provision status" 2>&1) || fail "astroctl provision status failed"
-    evidence "astroctl provision status" "$PROV_OUT"
+    PROV_OUT=$("${SSH[@]}" "cragctl provision status" 2>&1) || fail "cragctl provision status failed"
+    evidence "cragctl provision status" "$PROV_OUT"
     echo "$PROV_OUT" | grep -q '^state    provisioning$' || fail "provision status missing 'state    provisioning'"
     echo "$PROV_OUT" | grep -q '^wired    eth0: carrier yes' || fail "provision status missing the eth0 wired observation"
 
@@ -837,29 +837,29 @@ case_provisioning_e2e() {
     # this rig always has eth0 carrier (that IS the wired-available
     # path), so the AP is deliberately down here — which itself is
     # asserted, then the manual override (PUT /network/wifi/ap, docs/06
-    # §5.2) forces it up. This doubles as the astroctl `wifi ap enable`
+    # §5.2) forces it up. This doubles as the cragctl `wifi ap enable`
     # e2e.
     echo "[STEP] AP down by default (eth carrier present), then wifi ap enable..."
-    AP_SHOW=$("${SSH[@]}" "astroctl wifi ap show" 2>&1) || fail "astroctl wifi ap show failed"
-    evidence "astroctl wifi ap show (pre-enable)" "$AP_SHOW"
+    AP_SHOW=$("${SSH[@]}" "cragctl wifi ap show" 2>&1) || fail "cragctl wifi ap show failed"
+    evidence "cragctl wifi ap show (pre-enable)" "$AP_SHOW"
     echo "$AP_SHOW" | grep -q '^enabled  no$' || fail "AP unexpectedly up before the override (eth carrier should suppress the auto-trigger)"
 
-    "${SSH[@]}" "astroctl wifi ap enable" >/dev/null 2>&1 || fail "astroctl wifi ap enable failed"
+    "${SSH[@]}" "cragctl wifi ap enable" >/dev/null 2>&1 || fail "cragctl wifi ap enable failed"
     if ! tl_wait_for "provisioning AP up on wlan0" 60 portal_ap_ready; then
-        evidence "astroctl wifi ap show (post-enable)" "${AP_SHOW:-<empty>}"
+        evidence "cragctl wifi ap show (post-enable)" "${AP_SHOW:-<empty>}"
         fail "provisioning AP never came up on wlan0 (${PORTAL_ADDR}) after wifi ap enable"
         return 1
     fi
-    evidence "astroctl wifi ap show (post-enable)" "${AP_SHOW:-<empty>}"
+    evidence "cragctl wifi ap show (post-enable)" "${AP_SHOW:-<empty>}"
 
-    # Derived identity: SSID astro-<last 6 hex of machine-id>; the PSK
+    # Derived identity: SSID crag-<last 6 hex of machine-id>; the PSK
     # line is the socket-surface-only label story (never served over
     # HTTP).
     local AP_SSID AP_PSK WANT_SSID
     AP_SSID=$(echo "$AP_SHOW" | awk '$1=="ssid"{print $2}')
     AP_PSK=$(echo "$AP_SHOW" | awk '$1=="psk"{print $2}')
     MID=$("${SSH[@]}" "cat /etc/machine-id" | tr -d '[:space:]') || :
-    WANT_SSID="astro-$(printf '%s' "$MID" | tail -c 6)"
+    WANT_SSID="crag-$(printf '%s' "$MID" | tail -c 6)"
     [ "$AP_SSID" = "$WANT_SSID" ] || fail "AP ssid '${AP_SSID}' != derived '${WANT_SSID}'"
     echo "$AP_PSK" | grep -Eq '^[0-9a-f]{16}$' || fail "derived PSK '${AP_PSK}' is not 16 lowercase hex chars"
 
@@ -897,9 +897,9 @@ case_provisioning_e2e() {
     esac
 
     PAGE=$(portal_get / || :)
-    echo "$PAGE" | grep -q 'Astro device setup' || {
+    echo "$PAGE" | grep -q 'Crag device setup' || {
         evidence "GET / (portal)" "${PAGE:0:400}"
-        fail "portal page missing the 'Astro device setup' title"
+        fail "portal page missing the 'Crag device setup' title"
     }
 
     REDACTED=$(portal_get /api/v1/system || :)
@@ -933,8 +933,8 @@ case_provisioning_e2e() {
     # stack (see portal_get) and the DNS catch-all needs a resolver
     # client the image does not ship; both are covered by unit tests +
     # this rule.
-    NFT_RULES=$("${SSH[@]}" "nft list table ip astro_portal" 2>&1 || :)
-    evidence "nft list table ip astro_portal" "$NFT_RULES"
+    NFT_RULES=$("${SSH[@]}" "nft list table ip crag_portal" 2>&1 || :)
+    evidence "nft list table ip crag_portal" "$NFT_RULES"
     echo "$NFT_RULES" | grep -q 'dport 80' || fail "nft portal table missing the tcp 80 redirect"
     echo "$NFT_RULES" | grep -q '8080' || fail "nft portal table missing the 8080 target"
     echo "$NFT_RULES" | grep -q 'dport 53' || fail "nft portal table missing the udp 53 redirect"
@@ -950,7 +950,7 @@ case_provisioning_e2e() {
     fi
     # Return AP control to the state machine: with the override still
     # 'true' the manual force would fight the flip/'never returns' rule.
-    "${SSH[@]}" "astroctl wifi ap auto" >/dev/null 2>&1 || fail "astroctl wifi ap auto failed"
+    "${SSH[@]}" "cragctl wifi ap auto" >/dev/null 2>&1 || fail "cragctl wifi ap auto failed"
 
     echo "[STEP] Waiting for the station to reach the upstream AP..."
     if ! wait_wifi_state connected 90 "$TEST_SSID"; then
@@ -968,7 +968,7 @@ case_provisioning_e2e() {
     # joins the lab.
 
     echo "[STEP] AP gone for good: show says no, the listener is dead..."
-    AP_SHOW=$("${SSH[@]}" "astroctl wifi ap show" 2>/dev/null || :)
+    AP_SHOW=$("${SSH[@]}" "cragctl wifi ap show" 2>/dev/null || :)
     echo "$AP_SHOW" | grep -q '^enabled  no$' || fail "wifi ap show still enabled after provisioning"
     local DEAD_CODE
     DEAD_CODE=$("${SSH[@]}" "curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://${PORTAL_ADDR}:8080/api/v1/system" || echo "000")
@@ -983,12 +983,12 @@ case_provisioning_e2e() {
     fi
 
     # Same-lifetime memory budget after the whole AP/portal cycle (the
-    # astrod-rss case above measured the pre-reset daemon).
+    # cragd-rss case above measured the pre-reset daemon).
     check_rss "after the provisioning cycle"
 }
 
 ##############################################################################
-# Case: factory-reset — docs/07 §5 via astroctl (M3 phase 4)
+# Case: factory-reset — docs/07 §5 via cragctl (M3 phase 4)
 ##############################################################################
 case_factory_reset() {
     local OLD_TOKEN OLD_MID BAD_CODE RESET_OUT SCHEMA NEW_TOKEN NEW_MID code WIFI_CONN
@@ -996,7 +996,7 @@ case_factory_reset() {
     OLD_MID=$("${SSH[@]}" "cat /etc/machine-id" | tr -d '[:space:]') || fail "cannot read the pre-reset machine-id"
 
     echo "[STEP] Wrong confirm is refused (400, no reboot)..."
-    BAD_CODE=$("${SSH[@]}" "curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST -H 'Content-Type: application/json' --data '{\"confirm\":\"not-the-machine-id\"}' --unix-socket ${ASTROD_SOCK} http://localhost/api/v1/system/factory-reset" || echo "000")
+    BAD_CODE=$("${SSH[@]}" "curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST -H 'Content-Type: application/json' --data '{\"confirm\":\"not-the-machine-id\"}' --unix-socket ${CRAGD_SOCK} http://localhost/api/v1/system/factory-reset" || echo "000")
     [ "$BAD_CODE" = "400" ] || fail "wrong-confirm factory reset answered ${BAD_CODE}, expected 400"
     # Negative dwell, not a wait-for-condition: nothing observable is
     # SUPPOSED to happen after a refused reset — give a mistaken reboot
@@ -1004,9 +1004,9 @@ case_factory_reset() {
     sleep 3
     "${SSH[@]}" true 2>/dev/null || fail "guest went down after a REFUSED factory reset"
 
-    echo "[STEP] astroctl factory-reset --yes-really-wipe ${OLD_MID}..."
-    RESET_OUT=$("${SSH[@]}" "astroctl factory-reset --yes-really-wipe ${OLD_MID}" 2>&1) || fail "astroctl factory-reset failed: ${RESET_OUT}"
-    evidence "astroctl factory-reset" "$RESET_OUT"
+    echo "[STEP] cragctl factory-reset --yes-really-wipe ${OLD_MID}..."
+    RESET_OUT=$("${SSH[@]}" "cragctl factory-reset --yes-really-wipe ${OLD_MID}" 2>&1) || fail "cragctl factory-reset failed: ${RESET_OUT}"
+    evidence "cragctl factory-reset" "$RESET_OUT"
     echo "$RESET_OUT" | grep -q 'accepted' || fail "factory-reset output missing 'accepted'"
     tl_wait_ssh_down "factory-reset reboot" || return 1
     tl_wait_ssh "boot after factory reset" || return 1
@@ -1015,9 +1015,9 @@ case_factory_reset() {
     tl_wait_for "post-reset provisioning state" 60 prov_state_is provisioning \
         || fail "post-reset state is '${PROV_STATE:-<none>}', expected 'provisioning'"
 
-    "${SSH[@]}" "test -f /data/.astro/firstboot-done" || fail "firstboot did not rerun (no fresh done-stamp)"
-    "${SSH[@]}" "test ! -e /data/.astro/factory-reset-request" || fail "factory-reset flag survived the wipe"
-    SCHEMA=$("${SSH[@]}" "cat /data/.astro/schema-version" 2>/dev/null | tr -d '[:space:]' || :)
+    "${SSH[@]}" "test -f /data/.crag/firstboot-done" || fail "firstboot did not rerun (no fresh done-stamp)"
+    "${SSH[@]}" "test ! -e /data/.crag/factory-reset-request" || fail "factory-reset flag survived the wipe"
+    SCHEMA=$("${SSH[@]}" "cat /data/.crag/schema-version" 2>/dev/null | tr -d '[:space:]' || :)
     [ "$SCHEMA" = "1" ] || fail "post-reset schema-version is '${SCHEMA}', expected 1"
 
     NEW_TOKEN=$("${SSH[@]}" "cat /data/config/api-token" | tr -d '[:space:]') || fail "no api token after the reset"
@@ -1050,27 +1050,27 @@ case_factory_reset() {
 case_time() {
     echo "[STEP] Build-epoch floor applied..."
     local BUILD_EPOCH GUEST_NOW TIME_OUT SYNCED
-    BUILD_EPOCH=$("${SSH[@]}" "cat /etc/astro/build-epoch" | tr -d '[:space:]' || :)
+    BUILD_EPOCH=$("${SSH[@]}" "cat /etc/crag/build-epoch" | tr -d '[:space:]' || :)
     case "$BUILD_EPOCH" in
-        ''|*[!0-9]*) fail "/etc/astro/build-epoch missing or non-numeric ('${BUILD_EPOCH}')" ;;
+        ''|*[!0-9]*) fail "/etc/crag/build-epoch missing or non-numeric ('${BUILD_EPOCH}')" ;;
     esac
     GUEST_NOW=$("${SSH[@]}" "date +%s" | tr -d '[:space:]' || echo 0)
     if [ -n "$BUILD_EPOCH" ] && [ "$GUEST_NOW" -lt "$BUILD_EPOCH" ] 2>/dev/null; then
         fail "guest clock ${GUEST_NOW} is BEHIND the build epoch ${BUILD_EPOCH} (floor not applied)"
     fi
-    TIME_OUT=$("${SSH[@]}" "astroctl time" 2>&1) || fail "astroctl time failed"
-    evidence "astroctl time" "$TIME_OUT"
-    echo "$TIME_OUT" | grep -q '^floor_ok yes$' || fail "astroctl time says the clock is behind the floor"
-    echo "$TIME_OUT" | grep -Eq '^floor    [0-9]+$' || fail "astroctl time missing the floor line"
+    TIME_OUT=$("${SSH[@]}" "cragctl time" 2>&1) || fail "cragctl time failed"
+    evidence "cragctl time" "$TIME_OUT"
+    echo "$TIME_OUT" | grep -q '^floor_ok yes$' || fail "cragctl time says the clock is behind the floor"
+    echo "$TIME_OUT" | grep -Eq '^floor    [0-9]+$' || fail "cragctl time missing the floor line"
 
     # NTP sync: QEMU slirp forwards outbound UDP (the resolv-conf case
     # already proves guest DNS through 10.0.2.3), so chronyd's
     # `pool pool.ntp.org iburst` reaches real servers whenever the build
     # host is online — synced=true within seconds of boot is the
     # expected steady state, asserted here. Air-gapped runs set
-    # ASTRO_TEST_OFFLINE=1 to flip the assertion (STA_UNSYNC must then
+    # CRAG_TEST_OFFLINE=1 to flip the assertion (STA_UNSYNC must then
     # still be set: false).
-    if [ "${ASTRO_TEST_OFFLINE:-0}" = "1" ]; then
+    if [ "${CRAG_TEST_OFFLINE:-0}" = "1" ]; then
         echo "[STEP] Offline run: time.synced must be false..."
         SYNCED=$(api_get /api/v1/system | jq -r '.time_synced' 2>/dev/null || :)
         [ "$SYNCED" = "false" ] || fail "offline run but time_synced='${SYNCED}', expected false"
@@ -1078,9 +1078,9 @@ case_time() {
         echo "[STEP] Waiting for chrony to sync through slirp UDP (120s)..."
         if ! tl_wait_for "chrony sync" 120 time_synced_true; then
             evidence "GET /system (time)" "$(api_get /api/v1/system || :)"
-            fail "time_synced never became true (chrony unreachable? use ASTRO_TEST_OFFLINE=1 for air-gapped runs)"
+            fail "time_synced never became true (chrony unreachable? use CRAG_TEST_OFFLINE=1 for air-gapped runs)"
         fi
-        "${SSH[@]}" "astroctl time" 2>/dev/null | grep '^synced' || :
+        "${SSH[@]}" "cragctl time" 2>/dev/null | grep '^synced' || :
     fi
 }
 
@@ -1094,7 +1094,7 @@ run_case() {
     case_end
     # A nonzero return is a FATAL case failure (guest unusable) — write
     # the junit for what ran and stop.
-    [ "$rc" -eq 0 ] || tl_finish "astrod-api"
+    [ "$rc" -eq 0 ] || tl_finish "cragd-api"
 }
 
 case_selected() {
@@ -1112,4 +1112,4 @@ for name in "${API_CASES[@]}"; do
     run_case "$name"
 done
 
-tl_finish "astrod-api"
+tl_finish "cragd-api"

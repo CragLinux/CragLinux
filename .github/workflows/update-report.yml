@@ -1,4 +1,4 @@
-# Astro Linux - scheduled cports update-currency report.
+# Crag Linux - scheduled cports update-currency report.
 #
 # Owning the cports fork means owning version/security currency. This job
 # sweeps the port tree weekly (and on demand) and publishes the report so
@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: "astro | shipped | all"
+        description: "crag | shipped | all"
         default: "shipped"
 
 jobs:
@@ -34,11 +34,11 @@ jobs:
             git -C cports checkout "$PIN"
           fi
 
-      - name: Build astro-builder container
-        run: podman build -t astro-builder -f container/Containerfile container/
+      - name: Build crag-builder container
+        run: podman build -t crag-builder -f container/Containerfile container/
 
       - name: cports update report
-        run: ./build/astro-update-report.sh --scope "${{ github.event.inputs.scope || 'shipped' }}"
+        run: ./build/crag-update-report.sh --scope "${{ github.event.inputs.scope || 'shipped' }}"
 
       - name: Publish report
         if: always()

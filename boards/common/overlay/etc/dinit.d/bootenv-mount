@@ -1,10 +1,10 @@
-# Astro: mount the bootenv partition (vfat, AD-007 partition 2) at
-# /run/astro/bootenv. Both bootloader-env backends need it as a FILE
+# Crag: mount the bootenv partition (vfat, AD-007 partition 2) at
+# /run/crag/bootenv. Both bootloader-env backends need it as a FILE
 # path (AD-009 env-in-FAT deviation, MIGRATION-NOTES §12):
-#   uboot: /etc/fw_env.config -> /run/astro/bootenv/uboot.env
-#   grub:  system.conf grubenv= -> /run/astro/bootenv/grubenv
+#   uboot: /etc/fw_env.config -> /run/crag/bootenv/uboot.env
+#   grub:  system.conf grubenv= -> /run/crag/bootenv/grubenv
 # No bootenv partition (direct-boot dev disk) -> clean no-op.
 
 type = scripted
-command = /usr/lib/astro/bootenv-mount.sh
+command = /usr/lib/crag/bootenv-mount.sh
 depends-on: early-fs-pre.target

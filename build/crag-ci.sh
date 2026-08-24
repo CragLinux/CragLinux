@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Astro Linux - CI suites (AD-024, docs/10 §4)
+# Crag Linux - CI suites (AD-024, docs/10 §4)
 #
 # Local-first: this script IS the pipeline. Hosted CI workflows
 # (.github/workflows/) are thin wrappers that check out, restore caches,
@@ -9,13 +9,13 @@ set -euo pipefail
 # same command.
 #
 # Usage:
-#   ./build/astro-ci.sh pr [--boards=b1,b2] [--skip-gate]
+#   ./build/crag-ci.sh pr [--boards=b1,b2] [--skip-gate]
 #
 # Suites:
 #   pr    docs/10 §4 "Per-PR": lint -> per-arch board builds (dev+prod,
 #         image+bundle) -> boot-smoke (both variants) -> AD-020
 #         update/rollback gate (dev). Steps owned by later milestones
-#         (astrod unit/API suites: M3; external-tree example: M4) are
+#         (cragd unit/API suites: M3; external-tree example: M4) are
 #         reported as SKIPPED so the suite shape already matches the doc.
 #
 # Results: junit XML per test in build/state/test-results/, summary table
@@ -38,7 +38,7 @@ done
 [ "$SUITE" = "pr" ] || { echo "ERROR: unknown suite: ${SUITE} (only 'pr' exists yet)"; exit 1; }
 
 ENGINE="${CONTAINER_ENGINE:-$(command -v podman >/dev/null && echo podman || echo docker)}"
-IMAGE_NAME="${CONTAINER_IMAGE:-astro-builder}"
+IMAGE_NAME="${CONTAINER_IMAGE:-crag-builder}"
 in_container() {
     "$ENGINE" run --rm --userns=keep-id --privileged \
         -v "${PROJECT_ROOT}:/workspace:Z" "$IMAGE_NAME" -c "cd /workspace && $*"
@@ -76,8 +76,8 @@ lint_shell() {
         build/*.sh build/lib/*.sh sdk/*.sh container/*.sh \
         boards/common/hooks/*.sh boards/*/hooks/*.sh \
         examples/*/hooks/*.sh \
-        boards/common/overlay/usr/lib/astro/* \
-        boards/common/overlay/usr/libexec/astro/* 2>&1' | tail -20
+        boards/common/overlay/usr/lib/crag/* \
+        boards/common/overlay/usr/libexec/crag/* 2>&1' | tail -20
     return "${PIPESTATUS[0]}"
 }
 lint_python() {
@@ -106,11 +106,11 @@ lint_config() {
         exit $rc'
 }
 lint_zig() {
-    # astrod lands at M3; check formatting once sources exist
-    if compgen -G "${PROJECT_ROOT}/astrod/src/*.zig" > /dev/null; then
-        in_container 'zig fmt --check astrod/'
+    # cragd lands at M3; check formatting once sources exist
+    if compgen -G "${PROJECT_ROOT}/cragd/src/*.zig" > /dev/null; then
+        in_container 'zig fmt --check cragd/'
     else
-        echo "(no astrod zig sources yet)"
+        echo "(no cragd zig sources yet)"
     fi
 }
 
@@ -131,32 +131,32 @@ build_lib_unit() {
 step "build-lib-unit" build_lib_unit
 
 ##############################################################################
-# 2. astrod unit tests + binary budget (docs/06 §3)
+# 2. cragd unit tests + binary budget (docs/06 §3)
 ##############################################################################
-astrod_unit() {
+cragd_unit() {
     # Unit/conformance tests with the container's pinned Zig, then the
     # docs/06 §3 budget: static x86_64 ReleaseSafe binary <= 8 MiB (the
-    # same bound build_astrod enforces per-board at image assembly).
-    # extract_astrod_deps first: build.zig's default -Dbasu-prefix is
-    # build/state/x86_64/astrod-deps (basu sd-bus headers + libbasu.a).
-    in_container 'source build/lib/common.sh && source build/lib/astrod.sh \
-        && PROJECT_ROOT=/workspace extract_astrod_deps x86_64 \
-        && cd astrod \
+    # same bound build_cragd enforces per-board at image assembly).
+    # extract_cragd_deps first: build.zig's default -Dbasu-prefix is
+    # build/state/x86_64/cragd-deps (basu sd-bus headers + libbasu.a).
+    in_container 'source build/lib/common.sh && source build/lib/cragd.sh \
+        && PROJECT_ROOT=/workspace extract_cragd_deps x86_64 \
+        && cd cragd \
         && zig build test --cache-dir /workspace/build/state/zig-cache-ci \
         && zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSafe \
-            --cache-dir /workspace/build/state/zig-cache-ci --prefix /tmp/astrod-budget \
-        && size=$(stat -c %s /tmp/astrod-budget/bin/astrod) \
-        && echo "astrod x86_64-linux-musl ReleaseSafe: ${size} bytes" \
+            --cache-dir /workspace/build/state/zig-cache-ci --prefix /tmp/cragd-budget \
+        && size=$(stat -c %s /tmp/cragd-budget/bin/cragd) \
+        && echo "cragd x86_64-linux-musl ReleaseSafe: ${size} bytes" \
         && [ "$size" -le $((8 * 1024 * 1024)) ]'
 }
-step "astrod-unit" astrod_unit
+step "cragd-unit" cragd_unit
 
 ##############################################################################
 # 3+4. Per-board: build (dev + prod, image + bundle) -> boot-smoke -> AD-020
 ##############################################################################
 for B in $BOARDS; do
-    step "build-${B}-prod" "${SCRIPT_DIR}/astro-build.sh" "$B" prod
-    step "build-${B}-dev"  "${SCRIPT_DIR}/astro-build.sh" "$B" dev
+    step "build-${B}-prod" "${SCRIPT_DIR}/crag-build.sh" "$B" prod
+    step "build-${B}-dev"  "${SCRIPT_DIR}/crag-build.sh" "$B" dev
     if [ "${RESULT[build-${B}-prod]}" = "PASS" ]; then
         step "boot-smoke-${B}-prod" "${SCRIPT_DIR}/test-boot-smoke.sh" "$B" prod
     else
@@ -176,16 +176,16 @@ for B in $BOARDS; do
 done
 
 ##############################################################################
-# 5+6. astrod API suite (M3 phase 3, hwsim rig), external-tree example (M4)
+# 5+6. cragd API suite (M3 phase 3, hwsim rig), external-tree example (M4)
 ##############################################################################
 # The API suite boots ONE board's dev image: qemu-x86_64 (fastest TCG).
 # It needs that build to have run in this invocation (or --boards to have
 # included it) — otherwise it is skipped, not failed.
 API_BOARD="qemu-x86_64"
 if [ "${RESULT[build-${API_BOARD}-dev]:-}" = "PASS" ]; then
-    step "astrod-api" "${SCRIPT_DIR}/test-api.sh" "$API_BOARD"
+    step "cragd-api" "${SCRIPT_DIR}/test-api.sh" "$API_BOARD"
 else
-    skip "astrod-api" "needs a passing ${API_BOARD} dev build in this run"
+    skip "cragd-api" "needs a passing ${API_BOARD} dev build in this run"
 fi
 # The docs/08 §7 reference tree, kept green here (docs/10 §4 item 6):
 # a full image build with --external (tree templates source-built into
@@ -193,7 +193,7 @@ fi
 # boot-smoke of the product image. Uses the API board: its base
 # packages are binary-mode and its kernel is warm when the default
 # board set ran.
-step "external-tree" "${SCRIPT_DIR}/astro-build.sh" "$API_BOARD" acme-prod \
+step "external-tree" "${SCRIPT_DIR}/crag-build.sh" "$API_BOARD" acme-prod \
     --external="${PROJECT_ROOT}/examples/external-tree-acme"
 if [ "${RESULT[external-tree]}" = "PASS" ]; then
     step "external-tree-smoke" "${SCRIPT_DIR}/test-boot-smoke.sh" "$API_BOARD" acme-prod
@@ -211,11 +211,11 @@ fi
 # booted dev VM. The final rebuild restores the no-tree dev image so
 # later runs never inherit acme state.
 if ls "${PROJECT_ROOT}/build/state/x86_64/bin/"*-clang >/dev/null 2>&1; then
-    step "deploy-build" "${SCRIPT_DIR}/astro-build.sh" "$API_BOARD" dev \
+    step "deploy-build" "${SCRIPT_DIR}/crag-build.sh" "$API_BOARD" dev \
         --external="${PROJECT_ROOT}/examples/external-tree-acme"
     if [ "${RESULT[deploy-build]}" = "PASS" ]; then
         step "deploy-loop" "${SCRIPT_DIR}/test-deploy.sh" "$API_BOARD"
-        step "deploy-restore" "${SCRIPT_DIR}/astro-build.sh" "$API_BOARD" dev
+        step "deploy-restore" "${SCRIPT_DIR}/crag-build.sh" "$API_BOARD" dev
     else
         skip "deploy-loop" "dev+tree build failed"
         skip "deploy-restore" "dev+tree build failed"
@@ -230,7 +230,7 @@ fi
 # Summary
 ##############################################################################
 echo ""
-echo "==================== astro ci ${SUITE} ===================="
+echo "==================== crag ci ${SUITE} ===================="
 for k in $(printf '%s\n' "${!RESULT[@]}" | sort); do
     printf '  %-28s %s\n' "$k" "${RESULT[$k]}"
 done

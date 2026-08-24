@@ -1,17 +1,17 @@
-# Astro Linux - Build Environment Container
+# Crag Linux - Build Environment Container
 # Works with: podman build, docker build
 #
 # Usage:
-#   podman build -t astro-builder -f container/Containerfile container/
-#   podman run --rm -v $(pwd):/workspace:Z --userns=keep-id astro-builder -c "./sdk/build-toolchain.sh aarch64"
+#   podman build -t crag-builder -f container/Containerfile container/
+#   podman run --rm -v $(pwd):/workspace:Z --userns=keep-id crag-builder -c "./sdk/build-toolchain.sh aarch64"
 #
 # Base is pinned by digest (docs/03 §4). To bump:
 #   skopeo inspect --format '{{.Digest}}' docker://registry.fedoraproject.org/fedora:<N>
 
 FROM registry.fedoraproject.org/fedora:44@sha256:bf1977904d73dceee3f693ab77b025b352375a9d06345045ed22b0b1b232b836
 
-LABEL maintainer="Astro Linux project"
-LABEL description="Build environment for Astro Linux cross-compilation toolchain and system builder"
+LABEL maintainer="Crag Linux project"
+LABEL description="Build environment for Crag Linux cross-compilation toolchain and system builder"
 
 # Install all build dependencies in a single layer for cache efficiency
 #
@@ -110,7 +110,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
-# Pinned Zig toolchain for astrod (docs/03 §4, docs/06 §3).
+# Pinned Zig toolchain for cragd (docs/03 §4, docs/06 §3).
 # The pin is recorded in build/zig-version — keep ZIG_VERSION/ZIG_SHA256
 # in sync with that file when bumping.
 ARG ZIG_VERSION=0.16.0

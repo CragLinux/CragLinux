@@ -1,4 +1,4 @@
-# Astro Linux - Fixed base system packages
+# Crag Linux - Fixed base system packages
 # These define the opinionated base and are not customizable.
 # Board-specific and variant-specific packages are additive.
 musl
@@ -12,7 +12,7 @@ nyagetty     # console getty (standalone util-linux agetty + dinit service), per
 dinit-chimera-udev  # udev-backed device manager glue (/usr/lib/dinit-devd) — early-devd fails 127 without it
 util-linux-fdisk    # sfdisk: on-device GPT growth of the data partition (docs/02 §4, M1 "grown+mounted")
 e2fsprogs           # e2fsck + resize2fs: fsck/grow the /data ext4 (same M1 item)
-dbus                # system bus (rauc service + astrod at M3; docs/02 §5.1 graph)
+dbus                # system bus (rauc service + cragd at M3; docs/02 §5.1 graph)
 rauc                # A/B updater (AD-010/AD-011; astro-cports template, docs/05)
 iwd                 # wifi daemon (AD-015: manages wifi ONLY — EnableNetworkConfiguration=false
                     # via the common overlay's /etc/iwd/main.conf; dhcpcd owns addressing).
@@ -22,8 +22,8 @@ iwd-dinit           # dinit service file (auto-split subpackage, like dhcpcd-din
                     # SHADOWED by the common overlay's /etc/dinit.d/iwd (STATE_DIRECTORY
                     # + dbus-daemon dependency fix — upstream names the bus service 'dbus')
 nftables            # nft userspace (M3 phase 4, docs/07 §4): the AP captive-portal
-                    # redirect pair (usr/lib/astro/portal-redirect-{up,down}.sh, root
-                    # dinit oneshots) rewrites AP-interface :80/:53 to astrod's
+                    # redirect pair (usr/lib/crag/portal-redirect-{up,down}.sh, root
+                    # dinit oneshots) rewrites AP-interface :80/:53 to cragd's
                     # unprivileged ports. Verified in the cports pin (main/nftables
                     # 1.1.3; subpackages nftables-libs/-devel/-dinit). DELIBERATELY
                     # without nftables-dinit: we want /usr/bin/nft, not the packaged
@@ -33,7 +33,7 @@ chrony              # NTP client (docs/07 §6, M3 phase 4). Verified in the cpor
                     # 'chrony' (a chronyc-waitsync gate before time-sync.target,
                     # packaged ENABLED), both in the auto-split chrony-dinit.
 chrony-dinit        # service files; BOTH are shadowed by the common overlay:
-                    # /etc/dinit.d/chronyd runs -f /etc/astro/chrony.conf (baked
+                    # /etc/dinit.d/chronyd runs -f /etc/crag/chrony.conf (baked
                     # minimal pool+makestep config), /etc/dinit.d/chrony neutralizes
                     # the packaged 180 s-offline waitsync boot gate (boot-smoke budget;
-                    # astrod's docs/07 §6 floor covers the TLS story instead).
+                    # cragd's docs/07 §6 floor covers the TLS story instead).

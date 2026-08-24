@@ -7,7 +7,7 @@
 //!    second fd + per-interface join bookkeeping for zero current
 //!    consumers (installer tools on the target fleet are v4) — recorded
 //!    v1 limitation, revisit with the LAN-surface work.
-//!  - Announces `<instance>._astro._tcp.local` with SRV (port 8080),
+//!  - Announces `<instance>._crag._tcp.local` with SRV (port 8080),
 //!    TXT (serial=<machine-id>, version, provisioning=<state>) and an A
 //!    record; answers PTR/SRV/TXT/A queries FOR OUR NAMES ONLY,
 //!    case-insensitively (RFC 6762 §16). We PARSE name compression in
@@ -41,7 +41,7 @@ const sync = @import("sync.zig");
 
 pub const port: u16 = 5353;
 pub const multicast_v4 = [4]u8{ 224, 0, 0, 251 };
-pub const service_type = "_astro._tcp.local";
+pub const service_type = "_crag._tcp.local";
 pub const reannounce_interval_s: u64 = 120;
 /// SRV target port: the API TCP listener (recorded deviation from
 /// docs/06's :80 — unprivileged daemon, MIGRATION-NOTES §15).
@@ -75,7 +75,7 @@ pub const Error = error{
     Socket,
 };
 
-/// "astro-XXXXXX": the last 6 hex chars of the machine-id — the same
+/// "crag-XXXXXX": the last 6 hex chars of the machine-id — the same
 /// derivation the AP SSID uses (wifi.zig deriveApSsid), so the mDNS
 /// instance and the provisioning AP present one device identity.
 pub fn instanceLabel(buf: *[32]u8, machine_id: []const u8) []const u8 {
@@ -84,13 +84,13 @@ pub fn instanceLabel(buf: *[32]u8, machine_id: []const u8) []const u8 {
     if (tail.len == 0 or !allHex(tail)) {
         // Fail-soft: a missing/garbled machine-id yields a fixed name
         // rather than no responder (matches system.zig's "unknown").
-        const fallback = "astro-000000";
+        const fallback = "crag-000000";
         @memcpy(buf[0..fallback.len], fallback);
         return buf[0..fallback.len];
     }
-    buf[0..6].* = "astro-".*;
-    @memcpy(buf[6..][0..tail.len], tail);
-    return buf[0 .. 6 + tail.len];
+    buf[0..5].* = "crag-".*;
+    @memcpy(buf[5..][0..tail.len], tail);
+    return buf[0 .. 5 + tail.len];
 }
 
 fn allHex(s: []const u8) bool {
@@ -98,7 +98,7 @@ fn allHex(s: []const u8) bool {
     return true;
 }
 
-/// "<instance>._astro._tcp.local" — the service instance name (SRV/TXT
+/// "<instance>._crag._tcp.local" — the service instance name (SRV/TXT
 /// owner, PTR rdata).
 pub fn serviceName(buf: *[64]u8, instance: []const u8) []const u8 {
     return std.fmt.bufPrint(buf, "{s}." ++ service_type, .{instance}) catch unreachable;
@@ -140,7 +140,7 @@ fn appendTxtPair(
     try out.appendSlice(allocator, v);
 }
 
-/// Encode a dotted name ("x._astro._tcp.local") as DNS wire labels.
+/// Encode a dotted name ("x._crag._tcp.local") as DNS wire labels.
 /// No compression — announce packets are small and self-contained.
 pub fn encodeName(allocator: std.mem.Allocator, name: []const u8) error{OutOfMemory}![]u8 {
     var out: std.ArrayList(u8) = .empty;
@@ -204,7 +204,7 @@ pub fn decodeName(msg: []const u8, start: usize, buf: *[max_name_len]u8) ?Decode
 
 /// The records one device publishes; input to the pure packet builders.
 pub const RecordSet = struct {
-    /// e.g. "astro-9f03a1" (instanceLabel).
+    /// e.g. "crag-9f03a1" (instanceLabel).
     instance: []const u8,
     /// Prebuilt TXT rdata (buildTxt).
     txt: []const u8,
@@ -486,7 +486,7 @@ const IpMreq = extern struct {
 };
 
 /// Join 224.0.0.251 on whatever interface the kernel routes it to.
-/// Fails with ENODEV while no configured NIC exists — astrod starts in
+/// Fails with ENODEV while no configured NIC exists — cragd starts in
 /// parallel with dhcpcd's first lease, so this is RETRIED from the run
 /// loop rather than failing start() for good (caught live: the boot-
 /// race left the responder permanently down with "Socket").
@@ -538,7 +538,7 @@ fn nowMs() u64 {
 /// concurrent query answering are safe.
 pub const Responder = struct {
     allocator: std.mem.Allocator,
-    /// Instance label, e.g. "astro-9f03a1" (owned copy).
+    /// Instance label, e.g. "crag-9f03a1" (owned copy).
     instance: []const u8,
     /// Release version for TXT (owned copy).
     version: []const u8,
@@ -703,7 +703,7 @@ pub const Responder = struct {
             };
             const n = posix.poll(&pfds, timeout) catch return;
             if (n == 0) {
-                // Group-join retry (boot race: astrod can start before
+                // Group-join retry (boot race: cragd can start before
                 // dhcpcd's first lease gives the kernel a multicast-
                 // capable route; sends work regardless, reception waits).
                 if (!self.joined.load(.acquire) and joinGroup(self.sock))
@@ -748,24 +748,24 @@ pub const Responder = struct {
 
 // ---- tests -----------------------------------------------------------------
 
-test "instanceLabel derives astro-<last 6 hex> and fails soft" {
+test "instanceLabel derives crag-<last 6 hex> and fails soft" {
     var buf: [32]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "astro-9f03a1",
+        "crag-9f03a1",
         instanceLabel(&buf, "e5c1770f8ffb4dc7a276869f9f03a1\n"),
     );
     // Short-but-hex ids use what exists.
-    try std.testing.expectEqualStrings("astro-ab12", instanceLabel(&buf, "ab12"));
+    try std.testing.expectEqualStrings("crag-ab12", instanceLabel(&buf, "ab12"));
     // Garbage/missing ids yield the fixed fallback, never junk.
-    try std.testing.expectEqualStrings("astro-000000", instanceLabel(&buf, "unknown"));
-    try std.testing.expectEqualStrings("astro-000000", instanceLabel(&buf, ""));
+    try std.testing.expectEqualStrings("crag-000000", instanceLabel(&buf, "unknown"));
+    try std.testing.expectEqualStrings("crag-000000", instanceLabel(&buf, ""));
 }
 
 test "serviceName/hostName compose the owner names" {
     var b1: [64]u8 = undefined;
     var b2: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("astro-9f03a1._astro._tcp.local", serviceName(&b1, "astro-9f03a1"));
-    try std.testing.expectEqualStrings("astro-9f03a1.local", hostName(&b2, "astro-9f03a1"));
+    try std.testing.expectEqualStrings("crag-9f03a1._crag._tcp.local", serviceName(&b1, "crag-9f03a1"));
+    try std.testing.expectEqualStrings("crag-9f03a1.local", hostName(&b2, "crag-9f03a1"));
 }
 
 test "buildTxt renders RFC 6763 length-prefixed pairs" {
@@ -788,16 +788,16 @@ test "buildTxt truncates oversized values at the 255-byte string cap" {
 }
 
 test "encodeName produces wire labels with a root terminator" {
-    const wire = try encodeName(std.testing.allocator, "astro-9f03a1._astro._tcp.local");
+    const wire = try encodeName(std.testing.allocator, "crag-9f03a1._crag._tcp.local");
     defer std.testing.allocator.free(wire);
-    const want = "\x0castro-9f03a1" ++ "\x06_astro" ++ "\x04_tcp" ++ "\x05local" ++ "\x00";
+    const want = "\x0bcrag-9f03a1" ++ "\x05_crag" ++ "\x04_tcp" ++ "\x05local" ++ "\x00";
     try std.testing.expectEqualStrings(want, wire);
 }
 
 // Shared wire fragments for the byte-vector tests below (hand-computed).
-const svc_type_wire = "\x06_astro" ++ "\x04_tcp" ++ "\x05local" ++ "\x00"; // 19 bytes
-const svc_wire = "\x0castro-9f03a1" ++ svc_type_wire; // 32 bytes
-const host_wire = "\x0castro-9f03a1" ++ "\x05local" ++ "\x00"; // 20 bytes
+const svc_type_wire = "\x05_crag" ++ "\x04_tcp" ++ "\x05local" ++ "\x00"; // 18 bytes
+const svc_wire = "\x0bcrag-9f03a1" ++ svc_type_wire; // 30 bytes
+const host_wire = "\x0bcrag-9f03a1" ++ "\x05local" ++ "\x00"; // 19 bytes
 // TXT rdata for ("abc","1.0","factory"): 11 + 12 + 21 = 44 bytes.
 const txt_rdata = "\x0aserial=abc" ++ "\x0bversion=1.0" ++ "\x14provisioning=factory";
 
@@ -806,7 +806,7 @@ test "buildAnnouncement full packet byte vector" {
     const txt = try buildTxt(a, "abc", "1.0", "factory");
     defer a.free(txt);
     const pkt = try buildAnnouncement(a, .{
-        .instance = "astro-9f03a1",
+        .instance = "crag-9f03a1",
         .txt = txt,
         .addr = .{ 192, 168, 1, 2 },
     }, record_ttl);
@@ -816,14 +816,14 @@ test "buildAnnouncement full packet byte vector" {
     const want =
         // id=0, flags 0x8400 (QR|AA), QD=0, AN=4, NS=0, AR=0
         "\x00\x00" ++ "\x84\x00" ++ "\x00\x00" ++ "\x00\x04" ++ "\x00\x00" ++ "\x00\x00" ++
-        // PTR _astro._tcp.local -> astro-9f03a1._astro._tcp.local (no flush: shared)
-        svc_type_wire ++ "\x00\x0c" ++ "\x00\x01" ++ ttl_bytes ++ "\x00\x20" ++ svc_wire ++
-        // SRV astro-9f03a1._astro._tcp.local (flush) prio 0 weight 0 port 8080 -> astro-9f03a1.local
-        svc_wire ++ "\x00\x21" ++ "\x80\x01" ++ ttl_bytes ++ "\x00\x1a" ++
+        // PTR _crag._tcp.local -> crag-9f03a1._crag._tcp.local (no flush: shared)
+        svc_type_wire ++ "\x00\x0c" ++ "\x00\x01" ++ ttl_bytes ++ "\x00\x1e" ++ svc_wire ++
+        // SRV crag-9f03a1._crag._tcp.local (flush) prio 0 weight 0 port 8080 -> crag-9f03a1.local
+        svc_wire ++ "\x00\x21" ++ "\x80\x01" ++ ttl_bytes ++ "\x00\x19" ++
         "\x00\x00" ++ "\x00\x00" ++ "\x1f\x90" ++ host_wire ++
         // TXT (flush)
         svc_wire ++ "\x00\x10" ++ "\x80\x01" ++ ttl_bytes ++ "\x00\x2c" ++ txt_rdata ++
-        // A astro-9f03a1.local (flush) 192.168.1.2
+        // A crag-9f03a1.local (flush) 192.168.1.2
         host_wire ++ "\x00\x01" ++ "\x80\x01" ++ ttl_bytes ++ "\x00\x04" ++ "\xc0\xa8\x01\x02";
     try std.testing.expectEqualSlices(u8, want, pkt);
 }
@@ -831,7 +831,7 @@ test "buildAnnouncement full packet byte vector" {
 test "buildAnnouncement goodbye (ttl 0) and address-less (3 answers)" {
     const a = std.testing.allocator;
     const goodbye_pkt = try buildAnnouncement(a, .{
-        .instance = "astro-9f03a1",
+        .instance = "crag-9f03a1",
         .txt = txt_rdata,
         .addr = .{ 192, 168, 1, 2 },
     }, 0);
@@ -841,7 +841,7 @@ test "buildAnnouncement goodbye (ttl 0) and address-less (3 answers)" {
     try std.testing.expectEqualSlices(u8, "\x00\x00\x00\x00", goodbye_pkt[ptr_ttl_off..][0..4]);
 
     const no_addr = try buildAnnouncement(a, .{
-        .instance = "astro-9f03a1",
+        .instance = "crag-9f03a1",
         .txt = txt_rdata,
         .addr = null,
     }, record_ttl);
@@ -875,7 +875,7 @@ test "decodeName: plain, compressed, and hostile inputs" {
 }
 
 fn testRecordSet() RecordSet {
-    return .{ .instance = "astro-9f03a1", .txt = txt_rdata, .addr = .{ 192, 168, 1, 2 } };
+    return .{ .instance = "crag-9f03a1", .txt = txt_rdata, .addr = .{ 192, 168, 1, 2 } };
 }
 
 test "answerQuery: PTR service query yields PTR answer + SRV/TXT/A additionals" {
@@ -888,8 +888,8 @@ test "answerQuery: PTR service query yields PTR answer + SRV/TXT/A additionals" 
     const ttl_bytes = "\x00\x00\x00\x78";
     const want =
         "\x00\x00" ++ "\x84\x00" ++ "\x00\x00" ++ "\x00\x01" ++ "\x00\x00" ++ "\x00\x03" ++
-        svc_type_wire ++ "\x00\x0c" ++ "\x00\x01" ++ ttl_bytes ++ "\x00\x20" ++ svc_wire ++
-        svc_wire ++ "\x00\x21" ++ "\x80\x01" ++ ttl_bytes ++ "\x00\x1a" ++
+        svc_type_wire ++ "\x00\x0c" ++ "\x00\x01" ++ ttl_bytes ++ "\x00\x1e" ++ svc_wire ++
+        svc_wire ++ "\x00\x21" ++ "\x80\x01" ++ ttl_bytes ++ "\x00\x19" ++
         "\x00\x00" ++ "\x00\x00" ++ "\x1f\x90" ++ host_wire ++
         svc_wire ++ "\x00\x10" ++ "\x80\x01" ++ ttl_bytes ++ "\x00\x2c" ++ txt_rdata ++
         host_wire ++ "\x00\x01" ++ "\x80\x01" ++ ttl_bytes ++ "\x00\x04" ++ "\xc0\xa8\x01\x02";
@@ -898,13 +898,13 @@ test "answerQuery: PTR service query yields PTR answer + SRV/TXT/A additionals" 
 
 test "answerQuery: compressed and case-insensitive query names" {
     const a = std.testing.allocator;
-    // Q1 at offset 12: "_ASTRO._TCP.LOCAL" PTR (case-insensitive match).
-    // Q2: "ASTRO-9F03A1" + pointer to offset 12 (the service-type name)
+    // Q1 at offset 12: "_CRAG._TCP.LOCAL" PTR (case-insensitive match).
+    // Q2: "CRAG-9F03A1" + pointer to offset 12 (the service-type name)
     //     with qtype SRV — exercises compression inside a parsed name.
-    const q1_name = "\x06_ASTRO" ++ "\x04_TCP" ++ "\x05LOCAL" ++ "\x00";
+    const q1_name = "\x05_CRAG" ++ "\x04_TCP" ++ "\x05LOCAL" ++ "\x00";
     const query = "\x00\x00" ++ "\x00\x00" ++ "\x00\x02" ++ "\x00\x00" ++ "\x00\x00" ++ "\x00\x00" ++
         q1_name ++ "\x00\x0c" ++ "\x00\x01" ++
-        "\x0cASTRO-9F03A1" ++ "\xc0\x0c" ++ "\x00\x21" ++ "\x00\x01";
+        "\x0bCRAG-9F03A1" ++ "\xc0\x0c" ++ "\x00\x21" ++ "\x00\x01";
     const resp = (try answerQuery(a, testRecordSet(), query, record_ttl, false)).?;
     defer a.free(resp);
 
@@ -971,7 +971,7 @@ test "answerQuery legacy: id echo, question repeat, TTL cap, no cache-flush" {
 test "Responder: identity wiring and TXT state updates in built packets" {
     var r = try Responder.init(std.testing.allocator, "e5c1770f9f03a1\n", "0.2.0", "factory");
     defer r.deinit();
-    try std.testing.expectEqualStrings("astro-9f03a1", r.instance);
+    try std.testing.expectEqualStrings("crag-9f03a1", r.instance);
 
     const txt1 = try r.txtRdata(std.testing.allocator);
     defer std.testing.allocator.free(txt1);

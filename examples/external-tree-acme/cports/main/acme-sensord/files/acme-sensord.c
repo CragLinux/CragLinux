@@ -1,20 +1,20 @@
 /*
- * acme-sensord — the docs/08 §7 reference app for Astro external trees.
+ * acme-sensord — the docs/08 §7 reference app for Crag external trees.
  *
  * A ~200-line "sensor" daemon demonstrating the three platform
  * integrations an app package opts into via its service manifest
  * (files/acme-sensord.toml, docs/08 §5):
  *
- *   data_dir          $ASTRO_DATA_DIR (/data/apps/acme-sensord) exists,
+ *   data_dir          $CRAG_DATA_DIR (/data/apps/acme-sensord) exists,
  *                     is owned by the service user, and survives OS
  *                     updates (it lives in /data). The config file is
  *                     kept — and created on first boot — there.
  *
  *   api_client        the 'acme' service user is joined to the
- *                     astro-api group at image assembly, which is what
- *                     authorizes connecting to astrod's unix socket
+ *                     crag-api group at image assembly, which is what
+ *                     authorizes connecting to cragd's unix socket
  *                     (docs/02 §7 — the socket dir is 0750
- *                     astrod:astro-api; there is no token on this
+ *                     cragd:crag-api; there is no token on this
  *                     surface). At startup we GET /api/v1/network and
  *                     /api/v1/update/status and log the results.
  *
@@ -23,8 +23,8 @@
  *                     in-process — dinit restarts us; we just exit
  *                     cleanly on SIGTERM.
  *
- * $ASTRO_DATA_DIR and $ASTRO_API_SOCKET arrive via the env file
- * /etc/astro/services/acme-sensord.env, generated at image assembly and
+ * $CRAG_DATA_DIR and $CRAG_API_SOCKET arrive via the env file
+ * /etc/crag/services/acme-sensord.env, generated at image assembly and
  * referenced by the service description's own `env-file =` line.
  *
  * Plain C99 + POSIX, no dependencies beyond libc, cross-built by cbuild
@@ -46,7 +46,7 @@
 #define DEFAULT_INTERVAL 30 /* seconds between readings */
 #define MIN_INTERVAL 1
 #define MAX_INTERVAL 3600
-#define STARTUP_TRIES 15  /* seconds to wait for astrod's listener */
+#define STARTUP_TRIES 15  /* seconds to wait for cragd's listener */
 #define RESP_CAP 4096     /* keep this much of an API response */
 #define BODY_LOG_CAP 300  /* log at most this much response body */
 
@@ -84,7 +84,7 @@ static const char *env_or(const char *name, const char *fallback)
     return (v && *v) ? v : fallback;
 }
 
-/* Config lives in the app data dir ($ASTRO_DATA_DIR/sensord.conf); on
+/* Config lives in the app data dir ($CRAG_DATA_DIR/sensord.conf); on
  * first boot the default is written there — which doubles as proof the
  * manifest's data_dir wiring produced a directory we can write. */
 static int load_interval(const char *dir)
@@ -101,7 +101,7 @@ static int load_interval(const char *dir)
             return DEFAULT_INTERVAL;
         }
         fprintf(f,
-                "# acme-sensord configuration. Lives in $ASTRO_DATA_DIR\n"
+                "# acme-sensord configuration. Lives in $CRAG_DATA_DIR\n"
                 "# (docs/08 sec. 5): owned by the service user, kept\n"
                 "# across OS updates, wiped by factory reset.\n"
                 "interval = %d\n",
@@ -129,11 +129,11 @@ static int load_interval(const char *dir)
     return interval;
 }
 
-/* One GET over the astrod unix socket (the api_client pattern). astrod
+/* One GET over the cragd unix socket (the api_client pattern). cragd
  * speaks minimal HTTP/1.1; with Connection: close, "read until EOF" is
  * the whole client. No Host header and no auth token are needed on this
  * surface — group membership already authorized the connect. Returns
- * the HTTP status, or -1 with errno set if astrod is unreachable. */
+ * the HTTP status, or -1 with errno set if cragd is unreachable. */
 static int api_get(const char *sock_path, const char *path, char *resp,
                    size_t cap)
 {
@@ -195,7 +195,7 @@ static void probe(const char *sock_path, const char *path)
     char resp[RESP_CAP];
     int status = api_get(sock_path, path, resp, sizeof resp);
     if (status < 0) {
-        logline("GET %s: astrod unreachable (%s)", path, strerror(errno));
+        logline("GET %s: cragd unreachable (%s)", path, strerror(errno));
         return;
     }
     const char *body = strstr(resp, "\r\n\r\n");
@@ -212,15 +212,15 @@ int main(void)
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGINT, &sa, NULL);
 
-    const char *dir = env_or("ASTRO_DATA_DIR", "/data/apps/acme-sensord");
-    const char *sock = env_or("ASTRO_API_SOCKET", "/run/astro/astrod.sock");
+    const char *dir = env_or("CRAG_DATA_DIR", "/data/apps/acme-sensord");
+    const char *sock = env_or("CRAG_API_SOCKET", "/run/crag/cragd.sock");
     logline("starting (data_dir=%s, api_socket=%s)", dir, sock);
 
     int interval = load_interval(dir);
 
-    /* dinit marks astrod started as soon as its process is up, which can
+    /* dinit marks cragd started as soon as its process is up, which can
      * be a beat before the listener binds; retry briefly instead of
-     * racing it. If astrod never answers, run without it. */
+     * racing it. If cragd never answers, run without it. */
     int tries = STARTUP_TRIES;
     char resp[RESP_CAP];
     int status = -1;
@@ -237,7 +237,7 @@ int main(void)
                 body, strlen(body) > (size_t)BODY_LOG_CAP ? "..." : "");
         probe(sock, "/api/v1/update/status");
     } else {
-        logline("astrod not reachable after %d s; continuing without it",
+        logline("cragd not reachable after %d s; continuing without it",
                 STARTUP_TRIES);
     }
 

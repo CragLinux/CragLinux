@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-# Container-based build wrapper for Astro Linux toolchain
+# Container-based build wrapper for Crag Linux toolchain
 #
 # Usage: ./container/build-in-container.sh [armv7hf|aarch64|x86_64|riscv64]
 #
 # Environment variables:
 #   CONTAINER_ENGINE  - Override container engine (default: auto-detect podman/docker)
-#   CONTAINER_IMAGE   - Override image name (default: astro-builder)
+#   CONTAINER_IMAGE   - Override image name (default: crag-builder)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -39,7 +39,7 @@ if [ -z "$ENGINE" ]; then
     fi
 fi
 
-IMAGE_NAME="${CONTAINER_IMAGE:-astro-builder}"
+IMAGE_NAME="${CONTAINER_IMAGE:-crag-builder}"
 
 # Build container image if it doesn't exist
 if ! $ENGINE image exists "$IMAGE_NAME" 2>/dev/null; then

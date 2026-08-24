@@ -1,7 +1,7 @@
-# Astro: astrod, the device configuration API daemon (docs/06, M3 — the
+# Crag: cragd, the device configuration API daemon (docs/06, M3 — the
 # real Zig daemon in the graph position the M1 health-check stub held,
 # docs/02 §5.1). Runs unprivileged (docs/02 §7): listeners are
-# /run/astro/astrod.sock (gated by the astro-api group on the parent dir)
+# /run/crag/cragd.sock (gated by the crag-api group on the parent dir)
 # and 127.0.0.1:8080 (bearer token; recorded deviation from docs/06's :80).
 #
 # "started" = readiness: the daemon writes one byte to fd 4 once both
@@ -9,34 +9,34 @@
 # behind it — only fire when the API is actually reachable.
 #
 # depends-on rationale:
-#   data-mount    hard: mutable-state layer failure must fail astrod and,
+#   data-mount    hard: mutable-state layer failure must fail cragd and,
 #                 through it, boot-success (rollback semantics, AD-011)
-#   firstboot     bakes /data/config/{api-token,astro.json} before the
+#   firstboot     bakes /data/config/{api-token,crag.json} before the
 #                 daemon first reads them
-#   local.target  orders early-tmpfiles first: it creates /run/astro
-#                 (tmpfiles.d/astrod.conf) and opens /run/dinitctl to the
-#                 astrod group for the reboot/poweroff endpoints
+#   local.target  orders early-tmpfiles first: it creates /run/crag
+#                 (tmpfiles.d/cragd.conf) and opens /run/dinitctl to the
+#                 cragd group for the reboot/poweroff endpoints
 #   dbus-daemon   hard (docs/02 §5.1): the D-Bus spine (RAUC now, iwd in
 #                 phase 3) needs the system bus socket; without it the
 #                 update/network groups can only 503
-#   rauc          waits-for, not depends-on: astrod degrades cleanly
+#   rauc          waits-for, not depends-on: cragd degrades cleanly
 #                 (503 rauc-unavailable + restart re-attach probe) if
 #                 rauc is down, and must not be pulled down with it
 #   iwd, dhcpcd   waits-for (soft — docs/02 §5.1): the phase-3 network
-#                 group wants both up before astrod snapshots the iwd
-#                 tree and first-renders /run/astro/net/dhcpcd.conf, but
-#                 astrod is control plane: it must neither pull the data
+#                 group wants both up before cragd snapshots the iwd
+#                 tree and first-renders /run/crag/net/dhcpcd.conf, but
+#                 cragd is control plane: it must neither pull the data
 #                 plane down with it nor refuse to start when a radio-less
 #                 board has iwd sitting idle or dhcpcd failed. Also the
 #                 reverse dependency is forbidden: dhcpcd/iwd never wait
-#                 for astrod (see the dhcpcd shadow's bootstrap notes).
+#                 for cragd (see the dhcpcd shadow's bootstrap notes).
 
 type = process
-command = /usr/bin/astrod --ready-fd=4
+command = /usr/bin/cragd --ready-fd=4
 ready-notification = pipefd:4
-run-as = astrod
+run-as = cragd
 restart = true
-logfile = /var/log/astrod.log
+logfile = /var/log/cragd.log
 depends-on: data-mount
 depends-on: firstboot
 depends-on: local.target

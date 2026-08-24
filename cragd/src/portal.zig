@@ -6,10 +6,10 @@
 //!  - the DNS catch-all responder: while AP mode is up it answers EVERY
 //!    A query with the AP address so phones open the portal. It binds
 //!    UDP 5354 on the AP address — NOT 5353 (that is mDNS, a different
-//!    protocol and socket) and NOT 53 (astrod is capless; the root
-//!    nftables oneshot pair astro-portal-redirect-{start,stop} redirects
+//!    protocol and socket) and NOT 53 (cragd is capless; the root
+//!    nftables oneshot pair crag-portal-redirect-{start,stop} redirects
 //!    AP-interface :53 → :5354 and :80 → :8080, see boards/common
-//!    overlay usr/lib/astro/portal-redirect-up.sh);
+//!    overlay usr/lib/crag/portal-redirect-up.sh);
 //!  - the ApController: the enterAp/leaveAp effect implementations the
 //!    provisioning machine (provision.zig Effects) executes — profile
 //!    render + iwd AP start (wifi.zig), the root nft redirect pair (via
@@ -17,7 +17,7 @@
 //!    in that order (reversed on leave).
 //!
 //! Privileged-port story (baked decision): phones probe http://…:80 and
-//! DNS :53; astrod stays capless, so a root nft redirect pair — driven
+//! DNS :53; cragd stays capless, so a root nft redirect pair — driven
 //! through the existing dinit client around AP up/down — owns ports
 //! <1024. Nothing in this module ever needs privilege.
 
@@ -31,12 +31,12 @@ const dinit = @import("dinit.zig");
 /// The AP provisioning subnet (docs/07 §4: iwd's built-in DHCP server
 /// serves it from the rendered AP profile's [IPv4] settings).
 pub const ap_subnet = "192.168.223.0/24";
-/// astrod on the AP interface (profile [IPv4].Address).
+/// cragd on the AP interface (profile [IPv4].Address).
 pub const ap_addr = [4]u8{ 192, 168, 223, 1 };
 /// DNS catch-all port (unprivileged; nft redirects :53 here).
 pub const dns_port: u16 = 5354;
 /// Portal HTTP listener (nft redirects :80 here) — the AP-surface
-/// listener astrod binds on 192.168.223.1 while AP mode is up.
+/// listener cragd binds on 192.168.223.1 while AP mode is up.
 pub const http_port: u16 = 8080;
 
 /// The provisioning page (docs/06 §2 "embedded provisioning UI"):
@@ -309,20 +309,20 @@ fn udpSocket() ?posix.fd_t {
 
 // ---- the AP controller (provision.Effects enterAp/leaveAp) ------------------
 
-/// Root dinit oneshots wrapping /usr/lib/astro/portal-redirect-{up,down}.sh
+/// Root dinit oneshots wrapping /usr/lib/crag/portal-redirect-{up,down}.sh
 /// — the nft :80→8080/:53→5354 redirect pair on the AP interface plus the
-/// iwd EnableNetworkConfiguration window swap (astrod is capless; docs/02
+/// iwd EnableNetworkConfiguration window swap (cragd is capless; docs/02
 /// §7 residual-root-ops pattern).
-pub const redirect_start_service = "astro-portal-redirect-start";
-pub const redirect_stop_service = "astro-portal-redirect-stop";
+pub const redirect_start_service = "crag-portal-redirect-start";
+pub const redirect_stop_service = "crag-portal-redirect-stop";
 
 /// Composes the full AP window around wifi.zig's radio mechanics:
 ///
 ///   enterAp: derive ssid/psk from the machine-id → wifi.apStart (profile
 ///            render + Mode="ap" + StartProfile) → dinit start
-///            astro-portal-redirect-start (root nft + iwd netconfig
+///            crag-portal-redirect-start (root nft + iwd netconfig
 ///            window) → DNS catch-all up → main's AP listener up.
-///   leaveAp: listener down → DNS down → astro-portal-redirect-stop →
+///   leaveAp: listener down → DNS down → crag-portal-redirect-stop →
 ///            wifi.apStop (Stop + Mode="station").
 ///
 /// Driven from the provisioning machine's single reconciliation context
@@ -467,7 +467,7 @@ pub const ApController = struct {
     fn runRedirect(self: *ApController, service: []const u8) bool {
         // dinit keeps a scripted oneshot STARTED after a successful run,
         // so a second start is a no-op (service-file note in
-        // etc/dinit.d/astro-portal-redirect-start): repeat AP cycles
+        // etc/dinit.d/crag-portal-redirect-start): repeat AP cycles
         // must stop-then-start. Gated on the dinit.zig stop addition
         // (followup) — the FIRST cycle works without it.
         if (self.hooks.dinitStart == null) {
@@ -576,15 +576,15 @@ test "router.portal_routes carries exactly the page + every probe path" {
 
 test "DNS codec: A query gets the AP address, exact pointer-free bytes" {
     const a = std.testing.allocator;
-    // "astro.example" A/IN, id 0xBEEF, RD set.
+    // "crag.example" A/IN, id 0xBEEF, RD set.
     const query = "\xBE\xEF\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00" ++
-        "\x05astro\x07example\x00" ++
+        "\x04crag\x07example\x00" ++
         "\x00\x01\x00\x01";
     const answer = try buildDnsAnswer(a, query, ap_addr);
     defer a.free(answer);
     const expected = "\xBE\xEF\x85\x80\x00\x01\x00\x01\x00\x00\x00\x00" ++ // QR|AA|RD|RA, 1 an
-        "\x05astro\x07example\x00\x00\x01\x00\x01" ++ // question echoed
-        "\x05astro\x07example\x00" ++ // answer name, VERBATIM (no 0xC0 pointer)
+        "\x04crag\x07example\x00\x00\x01\x00\x01" ++ // question echoed
+        "\x04crag\x07example\x00" ++ // answer name, VERBATIM (no 0xC0 pointer)
         "\x00\x01\x00\x01" ++ // TYPE A, CLASS IN
         "\x00\x00\x00\x0A" ++ // TTL 10
         "\x00\x04\xC0\xA8\xDF\x01"; // RDLENGTH 4, 192.168.223.1
@@ -729,8 +729,8 @@ test "ApController: enter/leave ordering through scripted hooks (full portal cyc
     try std.testing.expect(ctl.last_error == null);
     try std.testing.expectEqualStrings("WNL", Script.log.items);
     // The identity handed to the radio is the baked derivation.
-    try std.testing.expectEqualStrings("astro-9f03a1", Script.last_ssid[0..Script.last_ssid_len]);
-    try std.testing.expectEqualStrings("68790122e723996d", Script.last_psk[0..16]);
+    try std.testing.expectEqualStrings("crag-9f03a1", Script.last_ssid[0..Script.last_ssid_len]);
+    try std.testing.expectEqualStrings("f5cd05c4d98ba678", Script.last_psk[0..16]);
     // Idempotent while active.
     ctl.enterAp();
     try std.testing.expectEqualStrings("WNL", Script.log.items);

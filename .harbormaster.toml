@@ -13,7 +13,7 @@ work_dir = "./"
 shallow_clone = true
 clone_depth = 1
 
-# cports is Astro's FORK of chimera-linux/cports (see cports/README.md for
+# cports is Crag's FORK of chimera-linux/cports (see cports/README.md for
 # provenance + why-a-fork). Upstream declined our fixes and forbids
 # AI-assisted contributions, and upstream drift risked breaking our pinned
 # builds — so we own the tree. Re-pins are deliberate lock-file diffs

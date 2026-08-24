@@ -1,10 +1,10 @@
-# Astro: AP captive-portal redirect UP (docs/07 §4, M3 phase 4).
+# Crag: AP captive-portal redirect UP (docs/07 §4, M3 phase 4).
 # Root-run nft rules: AP-interface :80 -> :8080 and :53 -> :5354 (see
-# usr/lib/astro/portal-redirect-up.sh for the ruleset + rationale).
+# usr/lib/crag/portal-redirect-up.sh for the ruleset + rationale).
 #
-# NOT ENABLED IN boot.d — DISPATCHED ON DEMAND: astrod starts this
+# NOT ENABLED IN boot.d — DISPATCHED ON DEMAND: cragd starts this
 # oneshot through its dinit-control-socket client when the provisioning
-# AP comes up, and starts astro-portal-redirect-stop when it goes down
+# AP comes up, and starts crag-portal-redirect-stop when it goes down
 # (docs/02 §7 residual-root-ops; the capless daemon cannot touch
 # netfilter or ports <1024 itself).
 #
@@ -16,5 +16,5 @@
 # Both scripts are safe to run in any order and any number of times.
 
 type = scripted
-command = /usr/lib/astro/portal-redirect-up.sh
+command = /usr/lib/crag/portal-redirect-up.sh
 restart = false

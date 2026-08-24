@@ -1,4 +1,4 @@
-# Astro static grub.cfg (docs/04 §3, AD-008) — RAUC grub-backend slot
+# Crag static grub.cfg (docs/04 §3, AD-008) — RAUC grub-backend slot
 # selection: ORDER / <slot>_OK / <slot>_TRY in grubenv on the bootenv
 # partition (partition 2, vfat). Deliberately static: no os-prober, no
 # dynamic menus; identical across devices of a board.
@@ -54,10 +54,10 @@ done
 
 save_env --file $envfile A_TRY B_TRY
 
-menuentry "Astro slot A" {
+menuentry "Crag slot A" {
     linux (hd0,gpt3)/@KERNEL_IMG@ @CMDLINE@ root=PARTLABEL=rootfs.A @ROOTFLAGS@ rauc.slot=A
 }
 
-menuentry "Astro slot B" {
+menuentry "Crag slot B" {
     linux (hd0,gpt5)/@KERNEL_IMG@ @CMDLINE@ root=PARTLABEL=rootfs.B @ROOTFLAGS@ rauc.slot=B
 }

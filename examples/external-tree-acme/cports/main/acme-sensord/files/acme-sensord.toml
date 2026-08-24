@@ -1,7 +1,7 @@
 # Service manifest (docs/08 §5) — installed by the template to
-# usr/lib/astro/services/acme-sensord.toml, next to the dinit service
+# usr/lib/crag/services/acme-sensord.toml, next to the dinit service
 # file. The image-assembly hook (40-service-manifests.sh) reads it and
-# wires every integration below; astrod reads the generated JSON sidecar
+# wires every integration below; cragd reads the generated JSON sidecar
 # at startup to learn the api_controllable set (docs/06 §5.4).
 #
 # [service].name must equal this file's stem and names the dinit
@@ -10,7 +10,7 @@
 [service]
 name = "acme-sensord"
 user = "acme"        # system user, created at assembly (uid 400-899)
-data_dir = true      # /data/apps/acme-sensord, owned by acme -> $ASTRO_DATA_DIR
+data_dir = true      # /data/apps/acme-sensord, owned by acme -> $CRAG_DATA_DIR
 
 [integration]
 # Rollback participation (AD-011) stays OFF: a crashing app should page
@@ -18,5 +18,5 @@ data_dir = true      # /data/apps/acme-sensord, owned by acme -> $ASTRO_DATA_DIR
 boot_success = false
 # Allow POST /api/v1/services/acme-sensord/{restart,stop,start}.
 api_controllable = true
-# Join the astro-api group => astrod unix-socket access (docs/02 §7).
+# Join the crag-api group => cragd unix-socket access (docs/02 §7).
 api_client = true

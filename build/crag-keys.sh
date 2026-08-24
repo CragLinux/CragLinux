@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Astro Linux - key management (docs/05 §6, docs/09 §4)
+# Crag Linux - key management (docs/05 §6, docs/09 §4)
 #
 # Subcommands:
 #   init-dev [--force]   (Re)generate the development-only RAUC PKI under
@@ -19,7 +19,7 @@ set -euo pipefail
 #   keys/dev/rauc-signing.key.pem   bundle signing key
 #   keys/dev/ssh-test / .pub        SSH keypair injected into DEV-variant
 #                                   images (root authorized_keys) so the
-#                                   AD-020 test harness and `astro deploy`
+#                                   AD-020 test harness and `crag deploy`
 #                                   (M4) can drive dev guests; never in prod
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -57,14 +57,14 @@ if [ "$FORCE" = true ] || [ ! -f "$CA_CERT" ] || [ ! -f "$CA_KEY" ] || \
     echo "[INFO] Generating dev RAUC CA (EC P-256, 10 years)..."
     openssl ecparam -name prime256v1 -genkey -noout -out "$CA_KEY"
     openssl req -new -x509 -key "$CA_KEY" -out "$CA_CERT" -days 3650 \
-        -subj "/O=TierOne Software/OU=ASTRO DEV - DO NOT SHIP/CN=Astro Dev RAUC CA" \
+        -subj "/O=TierOne Software/OU=CRAG DEV - DO NOT SHIP/CN=Crag Dev RAUC CA" \
         -addext "basicConstraints=critical,CA:TRUE" \
         -addext "keyUsage=critical,keyCertSign,cRLSign"
 
     echo "[INFO] Generating dev bundle signing cert (issued by the dev CA)..."
     openssl ecparam -name prime256v1 -genkey -noout -out "$SIGN_KEY"
     openssl req -new -key "$SIGN_KEY" -out "$TMP/signing.csr" \
-        -subj "/O=TierOne Software/OU=ASTRO DEV - DO NOT SHIP/CN=Astro Dev Bundle Signer"
+        -subj "/O=TierOne Software/OU=CRAG DEV - DO NOT SHIP/CN=Crag Dev Bundle Signer"
     cat > "$TMP/signing.ext" <<'EOF'
 basicConstraints=critical,CA:FALSE
 keyUsage=critical,digitalSignature
@@ -81,7 +81,7 @@ fi
 if [ ! -f "$SSH_KEY" ] || [ "$FORCE" = true ]; then
     echo "[INFO] Generating dev SSH test key (ed25519)..."
     rm -f "$SSH_KEY" "${SSH_KEY}.pub"
-    ssh-keygen -q -t ed25519 -N "" -C "astro-dev-test-DO-NOT-SHIP" -f "$SSH_KEY"
+    ssh-keygen -q -t ed25519 -N "" -C "crag-dev-test-DO-NOT-SHIP" -f "$SSH_KEY"
 fi
 
 echo ""

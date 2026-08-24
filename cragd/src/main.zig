@@ -1,4 +1,4 @@
-//! astrod entry point: multi-call dispatch (astroctl), CLI parsing, the two
+//! cragd entry point: multi-call dispatch (cragctl), CLI parsing, the two
 //! listener surfaces (unix socket + 127.0.0.1 TCP), and a threaded accept
 //! loop feeding the router (one std.Thread per connection, capped at
 //! max_connections; over-cap connects get an immediate 503 problem).
@@ -15,7 +15,7 @@
 //!    we control beat tracking std.http.Server. Revisit only if keep-alive
 //!    or chunked bodies become necessary.
 //!  - Sockets use raw std.os.linux syscalls behind tiny wrappers below.
-//!    astrod is Linux-only by definition, and the wrappers are the single
+//!    cragd is Linux-only by definition, and the wrappers are the single
 //!    place to swap in std.Io.net if a fill agent adopts the Io interface.
 
 const std = @import("std");
@@ -26,7 +26,7 @@ const dinit = @import("dinit.zig");
 const problem = @import("problem.zig");
 const store = @import("store.zig");
 const auth = @import("auth.zig");
-const astroctl = @import("astroctl.zig");
+const cragctl = @import("cragctl.zig");
 const system = @import("system.zig");
 const update = @import("update.zig");
 const events_mod = @import("events.zig");
@@ -42,10 +42,10 @@ const portal = @import("portal.zig");
 const fsutil = @import("fsutil.zig");
 
 // Deviations from docs/06 (recorded in MIGRATION-NOTES): socket moved under
-// /run/astro/ so the tmpfiles.d-created parent can be astrod:astro-api, and
+// /run/crag/ so the tmpfiles.d-created parent can be cragd:crag-api, and
 // the localhost port is 8080 because an unprivileged daemon cannot bind 80.
 pub const Options = struct {
-    socket_path: []const u8 = "/run/astro/astrod.sock",
+    socket_path: []const u8 = "/run/crag/cragd.sock",
     listen: []const u8 = "127.0.0.1:8080",
     /// TEST-ONLY (container smoke / test-api.sh): bind an extra TCP
     /// listener tagged as the AP surface, so the AD-014 unauthenticated-
@@ -69,15 +69,15 @@ pub fn main(init: std.process.Init) !u8 {
     var it = std.process.Args.Iterator.init(init.minimal.args);
     while (it.next()) |arg| try args.append(arena, arg);
 
-    // Multi-call: argv[0] basename "astroctl", or "astrod ctl ...".
+    // Multi-call: argv[0] basename "cragctl", or "cragd ctl ...".
     const base = std.fs.path.basename(args.items[0]);
-    if (std.mem.eql(u8, base, "astroctl"))
-        return astroctl.run(gpa, args.items[1..]);
+    if (std.mem.eql(u8, base, "cragctl"))
+        return cragctl.run(gpa, args.items[1..]);
     if (args.items.len > 1 and std.mem.eql(u8, args.items[1], "ctl"))
-        return astroctl.run(gpa, args.items[2..]);
+        return cragctl.run(gpa, args.items[2..]);
 
     const opts = parseArgs(args.items[1..]) catch |err| {
-        std.debug.print("astrod: bad arguments ({t})\nusage: astrod [--socket=PATH] [--listen=ADDR:PORT] [--ap-listen=ADDR:PORT] [--store=PATH] [--token=PATH] [--ready-fd=N]\n", .{err});
+        std.debug.print("cragd: bad arguments ({t})\nusage: cragd [--socket=PATH] [--listen=ADDR:PORT] [--ap-listen=ADDR:PORT] [--store=PATH] [--token=PATH] [--ready-fd=N]\n", .{err});
         return 2;
     };
 
@@ -88,7 +88,7 @@ pub fn main(init: std.process.Init) !u8 {
     // and truncating — a document a newer daemon wrote.
     var st = store.Store.load(gpa, opts.store_path) catch |err| switch (err) {
         store.LoadError.SchemaTooNew => {
-            std.debug.print("astrod: {s} has a newer schema than this daemon understands; refusing to start\n", .{opts.store_path});
+            std.debug.print("cragd: {s} has a newer schema than this daemon understands; refusing to start\n", .{opts.store_path});
             return 1;
         },
     };
@@ -137,7 +137,7 @@ pub const max_connections = 32;
 /// Precomputed over-cap response: the accept loop must not allocate or
 /// touch shared state to reject work when saturated.
 const overloaded_body =
-    \\{"type":"urn:astro:problem:overloaded","title":"Service Unavailable","status":503,"detail":"connection limit reached, retry shortly"}
+    \\{"type":"urn:crag:problem:overloaded","title":"Service Unavailable","status":503,"detail":"connection limit reached, retry shortly"}
 ;
 const overloaded_response = std.fmt.comptimePrint(
     "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/problem+json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}",
@@ -194,7 +194,7 @@ const ApDynListener = struct {
         const want = self.want.load(.acquire);
         if (want and self.fd == null) {
             self.fd = listenTcp(spec, true) catch |err| blk: {
-                std.log.warn("astrod: AP listener bind failed ({t}); portal HTTP degraded", .{err});
+                std.log.warn("cragd: AP listener bind failed ({t}); portal HTTP degraded", .{err});
                 break :blk null;
             };
         } else if (!want) {
@@ -225,7 +225,7 @@ fn serve(gpa: std.mem.Allocator, opts: Options, st: *store.Store) !void {
         services_reg.deinit();
     }
     services_reg.loadManifests("") catch |err|
-        std.log.warn("astrod: service manifests unavailable ({t}); /services degrades", .{err});
+        std.log.warn("cragd: service manifests unavailable ({t}); /services degrades", .{err});
     services.global = &services_reg;
 
     var event_bus = events_mod.EventBus.init(gpa);
@@ -252,10 +252,10 @@ fn serve(gpa: std.mem.Allocator, opts: Options, st: *store.Store) !void {
             mgr_owned = m;
             update.manager = m;
         } else |err| {
-            std.log.warn("astrod: bus thread start failed ({t}); update endpoints answer 503", .{err});
+            std.log.warn("cragd: bus thread start failed ({t}); update endpoints answer 503", .{err});
         }
     } else |err| {
-        std.log.warn("astrod: system D-Bus unavailable ({t}); update endpoints answer 503", .{err});
+        std.log.warn("cragd: system D-Bus unavailable ({t}); update endpoints answer 503", .{err});
     }
 
     // Phase-3 network subsystem (docs/07 §2). netconf renders
@@ -286,7 +286,7 @@ fn serve(gpa: std.mem.Allocator, opts: Options, st: *store.Store) !void {
             wifi_owned = w;
             wifi_mod.global = w;
         } else |err| {
-            std.log.warn("astrod: wifi backend unavailable ({t}); wifi endpoints degrade", .{err});
+            std.log.warn("cragd: wifi backend unavailable ({t}); wifi endpoints degrade", .{err});
         }
     }
 
@@ -315,7 +315,7 @@ fn serve(gpa: std.mem.Allocator, opts: Options, st: *store.Store) !void {
         responder_owned = r;
         // Keep the Responder on start failure: provisioning-state TXT
         // updates still land for a later announce.
-        r.start() catch |err| std.log.warn("astrod: mDNS responder unavailable ({t})", .{err});
+        r.start() catch |err| std.log.warn("cragd: mDNS responder unavailable ({t})", .{err});
     }
 
     // AP-surface listener control: the accept loop owns the socket, the
@@ -366,14 +366,14 @@ fn serve(gpa: std.mem.Allocator, opts: Options, st: *store.Store) !void {
     {
         const fr = timekeep.applyFloor(timekeep.build_epoch_path, timekeep.last_known_path);
         if (fr.applied) {
-            std.log.info("astrod: clock stepped to the time floor ({d})", .{fr.floor});
+            std.log.info("cragd: clock stepped to the time floor ({d})", .{fr.floor});
         } else if (fr.denied) {
-            std.log.warn("astrod: clock is behind the floor ({d}) but clock_settime was denied (unprivileged; firstboot owns the boot-time floor)", .{fr.floor});
+            std.log.warn("cragd: clock is behind the floor ({d}) but clock_settime was denied (unprivileged; firstboot owns the boot-time floor)", .{fr.floor});
         }
     }
     var keeper: timekeep.Keeper = .{ .path = timekeep.last_known_path };
     if (keeper.start()) {} else |err| {
-        std.log.warn("astrod: last-known-time keeper thread failed to start ({t})", .{err});
+        std.log.warn("cragd: last-known-time keeper thread failed to start ({t})", .{err});
     }
     defer keeper.stop();
 
@@ -462,7 +462,7 @@ fn listenUnix(path: []const u8) !posix.fd_t {
     @memcpy(addr.path[0..path.len], path);
 
     // Stale socket file from a previous run would make bind fail; removing
-    // it is safe because dinit guarantees a single astrod instance.
+    // it is safe because dinit guarantees a single cragd instance.
     const path_z = try posix.toPosixPath(path);
     _ = linux.unlink(&path_z);
 
@@ -470,8 +470,8 @@ fn listenUnix(path: []const u8) !posix.fd_t {
     errdefer _ = linux.close(fd);
     _ = try sys(linux.bind(fd, @ptrCast(&addr), @sizeOf(posix.sockaddr.un)));
     // connect(2) needs WRITE permission on the socket INODE; the access
-    // gate is the parent dir (0750 astrod:astro-api, tmpfiles.d), so the
-    // inode itself is deliberately 0666 — astro-api members connect,
+    // gate is the parent dir (0750 cragd:crag-api, tmpfiles.d), so the
+    // inode itself is deliberately 0666 — crag-api members connect,
     // everyone else already failed dir traversal. Without this, bind
     // under the daemon's umask leaves 0755 and every non-root client
     // gets EACCES. Latent since M3 (test-api curls as root, which
@@ -487,7 +487,7 @@ fn listenUnix(path: []const u8) !posix.fd_t {
 
 test "listenUnix: socket inode is 0666 — the parent dir is the gate" {
     var buf: [128]u8 = undefined;
-    const path = fsutil.testTmpPath(&buf, "astrod-sock-mode");
+    const path = fsutil.testTmpPath(&buf, "cragd-sock-mode");
     const fd = try listenUnix(path);
     defer _ = linux.close(fd);
     defer fsutil.unlink(path) catch {};
@@ -635,7 +635,7 @@ fn handleConnection(server: *Server, fd: posix.fd_t, surface: Surface) !void {
     const method = router.Method.parse(req.method) orelse
         return writeProblem(fd, arena, st, 405, "Method Not Allowed");
 
-    // AD-014: unix peers passed the astro-api group gate at connect();
+    // AD-014: unix peers passed the crag-api group gate at connect();
     // localhost/lan require the firstboot bearer token (fail-closed — no
     // token file yet means no TCP access); the AP surface admits
     // unauthenticated but the router serves only the subset (403 else).
@@ -655,7 +655,7 @@ fn handleConnection(server: *Server, fd: posix.fd_t, surface: Surface) !void {
         // is drained; Connection: close makes that acceptable.)
         if (!authorized) return writeResponse(fd, arena, unauthorizedResponse(&ctx));
         const mgr = update.manager orelse return writeResponse(fd, arena, router.problemResponse(&ctx, .{
-            .type = "urn:astro:problem:rauc-unavailable",
+            .type = "urn:crag:problem:rauc-unavailable",
             .title = "Service Unavailable",
             .status = 503,
             .detail = "update subsystem is not connected to D-Bus",
@@ -665,13 +665,13 @@ fn handleConnection(server: *Server, fd: posix.fd_t, surface: Surface) !void {
         const staged = mgr.stageStream(arena, buf[head_end..][0..already], &reader, req.content_length) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.InsufficientStorage => return writeResponse(fd, arena, router.problemResponse(&ctx, .{
-                .type = "urn:astro:problem:insufficient-storage",
+                .type = "urn:crag:problem:insufficient-storage",
                 .title = "Insufficient Storage",
                 .status = 507,
                 .detail = "not enough free space on /data to stage the bundle",
             })),
             error.StagingFailed => return writeResponse(fd, arena, router.problemResponse(&ctx, .{
-                .type = "urn:astro:problem:staging-failed",
+                .type = "urn:crag:problem:staging-failed",
                 .title = "Internal Server Error",
                 .status = 500,
                 .detail = "could not write the bundle to the staging directory",
@@ -720,12 +720,12 @@ fn handleConnection(server: *Server, fd: posix.fd_t, surface: Surface) !void {
     try writeResponse(fd, arena, resp);
 
     // Deferred actions run with the response already on the wire: a
-    // SHUTDOWN makes dinit kill astrod immediately, which raced (and
+    // SHUTDOWN makes dinit kill cragd immediately, which raced (and
     // truncated) the 202 when issued from inside the handler.
     if (ctx.deferred) |action| switch (action) {
         .shutdown => |t| {
             // "on clean shutdown" half of the docs/07 §6 last-known-time
-            // contract: this is the one shutdown astrod can see coming
+            // contract: this is the one shutdown cragd can see coming
             // (dinit's SIGTERM offers no reliable async window).
             timekeep.persistLastKnown(timekeep.last_known_path) catch {};
             dinit.requestShutdown(dinit.default_socket_path, t) catch {};
@@ -736,7 +736,7 @@ fn handleConnection(server: *Server, fd: posix.fd_t, surface: Surface) !void {
             // 'factory' until the oneshot's reboot lands.
             if (provision.global) |p| p.notifyFactoryReset();
             dinit.startServiceByName(dinit.default_socket_path, router.factory_reset_service) catch |err| {
-                std.log.warn("astrod: factory-reset dispatch failed ({t})", .{err});
+                std.log.warn("cragd: factory-reset dispatch failed ({t})", .{err});
             };
         },
         .wifi_flip => |f| {
@@ -770,7 +770,7 @@ fn drainBounded(fd: posix.fd_t, remaining: usize) void {
 
 fn unauthorizedResponse(ctx: *router.Context) router.Response {
     return router.problemResponse(ctx, .{
-        .type = "urn:astro:problem:unauthorized",
+        .type = "urn:crag:problem:unauthorized",
         .title = "Unauthorized",
         .status = 401,
     });
@@ -798,10 +798,10 @@ fn writeProblem(fd: posix.fd_t, arena: std.mem.Allocator, st: *store.Store, stat
         // Stable per-class URNs (AD-013): the HTTP-layer rejections used
         // to all claim bad-request, which mislabeled 405/413/431.
         .type = switch (status) {
-            405 => "urn:astro:problem:method-not-allowed",
-            413 => "urn:astro:problem:content-too-large",
-            431 => "urn:astro:problem:headers-too-large",
-            else => "urn:astro:problem:bad-request",
+            405 => "urn:crag:problem:method-not-allowed",
+            413 => "urn:crag:problem:content-too-large",
+            431 => "urn:crag:problem:headers-too-large",
+            else => "urn:crag:problem:bad-request",
         },
         .title = title,
         .status = status,
@@ -853,7 +853,7 @@ test {
     _ = problem;
     _ = store;
     _ = auth;
-    _ = astroctl;
+    _ = cragctl;
     _ = system;
     _ = update;
     _ = events_mod;
@@ -880,17 +880,17 @@ test "parseArgs handles all flags and rejects unknowns" {
         "--socket=/tmp/t.sock",
         "--listen=127.0.0.1:8899",
         "--ap-listen=127.0.0.1:8899",
-        "--store=/tmp/astro.json",
+        "--store=/tmp/crag.json",
         "--ready-fd=3",
     });
     try std.testing.expectEqualStrings("/tmp/t.sock", opts.socket_path);
     try std.testing.expectEqualStrings("127.0.0.1:8899", opts.listen);
     try std.testing.expectEqualStrings("127.0.0.1:8899", opts.ap_listen.?);
-    try std.testing.expectEqualStrings("/tmp/astro.json", opts.store_path);
+    try std.testing.expectEqualStrings("/tmp/crag.json", opts.store_path);
     try std.testing.expectEqual(@as(posix.fd_t, 3), opts.ready_fd.?);
 
     const defaults = try parseArgs(&.{});
-    try std.testing.expectEqualStrings("/run/astro/astrod.sock", defaults.socket_path);
+    try std.testing.expectEqualStrings("/run/crag/cragd.sock", defaults.socket_path);
     try std.testing.expectEqual(@as(?posix.fd_t, null), defaults.ready_fd);
     try std.testing.expect(defaults.ap_listen == null);
 

@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Boot-success watchdog (docs/05 §4; see the astro-boot-watchdog service
+# Boot-success watchdog (docs/05 §4; see the crag-boot-watchdog service
 # file). The scripted service start detaches a watcher (setsid) and
 # returns immediately; the watcher polls for the boot-success milestone
 # and, if it is not reached within the timeout, forces a reboot so the
@@ -12,8 +12,8 @@
 grep -q 'rauc\.slot=' /proc/cmdline || exit 0
 
 TIMEOUT=300
-if [ -r /data/.astro/boot-watchdog-timeout ]; then
-    read -r t < /data/.astro/boot-watchdog-timeout 2>/dev/null || t=
+if [ -r /data/.crag/boot-watchdog-timeout ]; then
+    read -r t < /data/.crag/boot-watchdog-timeout 2>/dev/null || t=
     case "$t" in
         ''|*[!0-9]*) ;;  # ignore garbage
         *) TIMEOUT=$t ;;
@@ -29,7 +29,7 @@ setsid sh -c '
         sleep 5
         waited=$((waited + 5))
     done
-    echo "astro-boot-watchdog: boot-success not reached in '"$TIMEOUT"'s, forcing reboot" > /dev/console 2>/dev/null || :
+    echo "crag-boot-watchdog: boot-success not reached in '"$TIMEOUT"'s, forcing reboot" > /dev/console 2>/dev/null || :
     sync
     reboot
     sleep 30

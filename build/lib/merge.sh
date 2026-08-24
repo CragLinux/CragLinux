@@ -1,5 +1,5 @@
 #!/bin/bash
-# Astro Linux - External-tree merge engine (docs/08 §4)
+# Crag Linux - External-tree merge engine (docs/08 §4)
 # Sourced by build-inner.sh / rootfs-stage.sh, not executed directly.
 #
 # Every function here consumes the ORDERED LAYER LIST produced by
@@ -145,27 +145,27 @@ merge_hooks() {
 # FENCE_USR_LIB_ALLOW — the allowed usr/lib data/config/hook subtrees. Each
 # entry X permits "usr/lib/X" and "usr/lib/X/**". These are distro MECHANISM
 # directories (dinit service TEXT files, tmpfiles/sysctl/modules-load/udev
-# rules, firmware blobs, os-release drop-ins, the astro platform-script dir,
+# rules, firmware blobs, os-release drop-ins, the crag platform-script dir,
 # the dhcpcd hook dir), NOT places an app drops a binary. Keep this list
 # TIGHT and documented — every entry widens the fence.
 #
-# AUDIT (M4 phase 1): every existing Astro overlay (boards/common/overlay and
+# AUDIT (M4 phase 1): every existing Crag overlay (boards/common/overlay and
 # each boards/*/overlay) passes this fence. The one non-obvious entry is
-# `dhcpcd-hooks`: boards/common ships usr/lib/dhcpcd-hooks/60-astro-lease, a
-# SYMLINK into the allowed usr/lib/astro/dhcpcd-hook.sh. dhcpcd only sources
+# `dhcpcd-hooks`: boards/common ships usr/lib/dhcpcd-hooks/60-crag-lease, a
+# SYMLINK into the allowed usr/lib/crag/dhcpcd-hook.sh. dhcpcd only sources
 # hooks from its compiled-in hook dir (usr/lib/dhcpcd-hooks), so the wiring
 # legitimately must live under usr/lib — it is a platform mechanism dir, not
-# app code (the actual script is in the allowlisted usr/lib/astro/). This is
+# app code (the actual script is in the allowlisted usr/lib/crag/). This is
 # recorded as a real audit finding, not a silent carve-out.
 #
 # Full audit result (M4 phase 1 harden pass): 34 overlay entries across
 # boards/common/overlay (the only populated overlay tree; boards/*/overlay are
 # empty). ALL pass. Zero ELF files anywhere. Notable entries verified:
-#   - usr/lib/astro/*.sh                -> allowed (astro platform-script dir)
+#   - usr/lib/crag/*.sh                -> allowed (crag platform-script dir)
 #   - usr/lib/dinit.d/* (via etc + usr) -> dinit service TEXT, allowed
 #   - usr/lib/{tmpfiles.d,os-release}   -> allowed data/config
-#   - usr/lib/dhcpcd-hooks/60-astro-lease -> SYMLINK, allowlisted dir (above)
-#   - usr/libexec/astro/mark-good       -> #!/bin/sh TEXT, and usr/libexec is
+#   - usr/lib/dhcpcd-hooks/60-crag-lease -> SYMLINK, allowlisted dir (above)
+#   - usr/libexec/crag/mark-good       -> #!/bin/sh TEXT, and usr/libexec is
 #                                          NOT a fenced path (AD-017 fences
 #                                          usr/{bin,sbin,lib} only); passes.
 # FOLLOWUP (surfaced, NOT actioned here — outside AD-017's enumeration): the
@@ -176,7 +176,7 @@ merge_hooks() {
 ##############################################################################
 FENCE_ELF_MAGIC=$'\x7fELF'
 FENCE_USR_LIB_ALLOW=(
-    astro           # usr/lib/astro/**         platform helper scripts (docs/02 §7)
+    crag           # usr/lib/crag/**         platform helper scripts (docs/02 §7)
     dinit.d         # usr/lib/dinit.d/**       dinit service TEXT files (allowed, §3)
     tmpfiles.d      # usr/lib/tmpfiles.d/**    systemd-tmpfiles config
     sysctl.d        # usr/lib/sysctl.d/**      kernel sysctl config
@@ -221,8 +221,8 @@ fence_check() {
         usr/lib/os-release)
             : ;;  # the one allowed exact file
         usr/lib/*)
-            # Prefix match is /-anchored so usr/lib/astro/ is allowed but a
-            # sibling like usr/lib/astro-evil/ (which shares the "astro" prefix
+            # Prefix match is /-anchored so usr/lib/crag/ is allowed but a
+            # sibling like usr/lib/crag-evil/ (which shares the "crag" prefix
             # but is a DIFFERENT dir) is NOT: entry must equal $sub exactly, or
             # be a full leading path segment (entry + "/").
             local sub="${canon#usr/lib/}" allowed="" entry

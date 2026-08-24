@@ -50,7 +50,7 @@ rootfs_size = "512M"       # per slot; build fails if squashfs exceeds it
 data_min_size = "64M"
 
 [rauc]
-compatible = "astro-qemu-armv7"
+compatible = "crag-qemu-armv7"
 bootloader = "uboot"       # RAUC uboot backend (docs/04 §4, AD-009)
 
 [image]

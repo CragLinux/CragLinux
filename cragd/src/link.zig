@@ -1,7 +1,7 @@
 //! Read-only rtnetlink: link/address observation for GET /network and WAN
 //! failover events (docs/07 §2; phase-3 decision: netlink is OBSERVATION
 //! ONLY — route policy is expressed via metrics in the rendered
-//! dhcpcd.conf, never by rtnetlink surgery from astrod).
+//! dhcpcd.conf, never by rtnetlink surgery from cragd).
 //!
 //! Two layers:
 //!  - pure parsers over raw netlink bytes (parseLinkDump/parseAddrDump),

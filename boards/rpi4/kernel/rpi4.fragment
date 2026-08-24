@@ -1,6 +1,6 @@
 # bcm2711 (Raspberry Pi 4) drivers the arm64 defconfig leaves =m,
 # forced built-in per the monolithic principle (no initramfs, AD-006;
-# see boards/common/kernel/astro-net.fragment). Wifi (BRCMFMAC) stays a
+# see boards/common/kernel/crag-net.fragment). Wifi (BRCMFMAC) stays a
 # module on purpose: its firmware lives in the rootfs
 # (firmware-linux-brcm-rpi), so a built-in driver would probe before
 # /lib/firmware exists — the module loads post-mount instead.

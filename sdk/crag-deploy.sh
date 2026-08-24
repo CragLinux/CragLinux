@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# astro deploy — the AD-026 developer sideload loop (docs/08 §6).
+# crag deploy — the AD-026 developer sideload loop (docs/08 §6).
 #
 # Push a rebuilt app to a RUNNING dev-variant device and restart its
 # service in seconds. Three modes, fastest first:
@@ -20,8 +20,8 @@ set -euo pipefail
 # additionally refuses any target whose rootfs is not writable.
 #
 # Usage:
-#   sdk/astro-deploy.sh <service> --binary <path> [options]
-#   sdk/astro-deploy.sh <service> --pkg <path.apk> [options]
+#   sdk/crag-deploy.sh <service> --binary <path> [options]
+#   sdk/crag-deploy.sh <service> --pkg <path.apk> [options]
 # Options:
 #   --to qemu | --to host[:port]   target (default qemu = 127.0.0.1:2222,
 #                                  run-qemu.sh --ssh-port=2222)
@@ -29,9 +29,9 @@ set -euo pipefail
 #   --watch                        redeploy on artifact change
 #   --no-log                       skip log streaming after restart
 #
-# Works from an Astro checkout or an external-tree checkout next to
+# Works from an Crag checkout or an external-tree checkout next to
 # one; the SDK tarball ships it alongside the toolchain. Binary-mode
-# drift is recorded on-device in /etc/astro/deploy-drift so `apk
+# drift is recorded on-device in /etc/crag/deploy-drift so `apk
 # query`-based fleet introspection can see locally-modified packages
 # (docs/08 §6).
 
@@ -91,7 +91,7 @@ SSH=(ssh -i "$SSH_KEY" -p "$PORT" -o StrictHostKeyChecking=no
 SCP=(scp -i "$SSH_KEY" -P "$PORT" -o StrictHostKeyChecking=no
      -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
 
-say() { echo "[astro-deploy] $*"; }
+say() { echo "[crag-deploy] $*"; }
 
 ##############################################################################
 # One deploy round
@@ -140,18 +140,18 @@ deploy_binary() {
     }
 
     say "binary ${BINARY} -> ${dest}"
-    "${SCP[@]}" "$BINARY" "root@${HOST}:/tmp/.astro-deploy.$$" >/dev/null
+    "${SCP[@]}" "$BINARY" "root@${HOST}:/tmp/.crag-deploy.$$" >/dev/null
 
     # rename-then-replace: renaming a running binary is legal (the old
     # inode lives on); overwriting it in place would be ETXTBSY.
     "${SSH[@]}" "set -e
         mv '${dest}' '${dest}.deploy-old' 2>/dev/null || :
-        install -m 0755 /tmp/.astro-deploy.$$ '${dest}'
-        rm -f /tmp/.astro-deploy.$$ '${dest}.deploy-old'
-        mkdir -p /etc/astro
-        grep -qxF 'binary ${dest} (${SERVICE})' /etc/astro/deploy-drift 2>/dev/null \
-            || echo 'binary ${dest} (${SERVICE})' >> /etc/astro/deploy-drift"
-    say "drift recorded on device (/etc/astro/deploy-drift): ${dest} is locally modified"
+        install -m 0755 /tmp/.crag-deploy.$$ '${dest}'
+        rm -f /tmp/.crag-deploy.$$ '${dest}.deploy-old'
+        mkdir -p /etc/crag
+        grep -qxF 'binary ${dest} (${SERVICE})' /etc/crag/deploy-drift 2>/dev/null \
+            || echo 'binary ${dest} (${SERVICE})' >> /etc/crag/deploy-drift"
+    say "drift recorded on device (/etc/crag/deploy-drift): ${dest} is locally modified"
 }
 
 deploy_pkg() {

@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Astro Linux — binary packages-mode version-skew guard (warn-only).
+Crag Linux — binary packages-mode version-skew guard (warn-only).
 
-Binary packages-mode mixes Chimera-current binary packages with Astro's
+Binary packages-mode mixes Chimera-current binary packages with Crag's
 Harbormaster-pinned cports checkout. This tool compares every *installed*
 package against the pinned template version and reports:
 
   - SKEW:     installed (Chimera) version != pinned template version, for
-              packages Astro does not build from source. Warn-only: dev
+              packages Crag does not build from source. Warn-only: dev
               images may legitimately run slightly ahead of the pin.
               Release/nightly builds are full-source and cannot skew.
-  - SHADOWED: a package Astro builds from source (astro-cports, patched via
+  - SHADOWED: a package Crag builds from source (astro-cports, patched via
               build/patches/cports/, or source-packages.list) was installed
               at a different version than the local repo provides — i.e. a
-              binary repo shadowed an Astro-built package. This is loud
+              binary repo shadowed an Crag-built package. This is loud
               because it defeats the point of the source-build subset.
 
 Inputs:
@@ -134,7 +134,7 @@ def main():
             if lver and version != lver:
                 shadowed.append(
                     f"{name} (template {origin}): installed {version} "
-                    f"[{provenance}], local Astro build is {lver}"
+                    f"[{provenance}], local Crag build is {lver}"
                 )
             continue
 
@@ -147,7 +147,7 @@ def main():
             )
 
     lines = [
-        "Astro binary packages-mode — version-skew report",
+        "Crag binary packages-mode — version-skew report",
         f"generated: {datetime.datetime.now().isoformat(timespec='seconds')}",
         f"installed packages: {total} "
         f"(local repo: {from_local}, chimera repo: {from_chimera}, "
@@ -156,7 +156,7 @@ def main():
     ]
     if shadowed:
         lines.append(f"SHADOWED source-built packages ({len(shadowed)}) — "
-                     "a binary repo won over an Astro-built package:")
+                     "a binary repo won over an Crag-built package:")
         lines += [f"  {s}" for s in shadowed]
         lines.append("")
     if skew:
@@ -174,7 +174,7 @@ def main():
     Path(args.out).write_text("\n".join(lines) + "\n")
 
     if shadowed:
-        print(f"[WARN] {len(shadowed)} Astro source-built package(s) SHADOWED "
+        print(f"[WARN] {len(shadowed)} Crag source-built package(s) SHADOWED "
               f"by a binary repo — see {args.out}", file=sys.stderr)
     if skew:
         print(f"[WARN] version skew vs pinned templates for {len(skew)} "

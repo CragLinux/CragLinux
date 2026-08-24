@@ -1,8 +1,8 @@
 //! Release-version comparison for the AD-021 monotonic-update gate
-//! (docs/05 §6): astrod refuses to install a bundle whose version is lower
+//! (docs/05 §6): cragd refuses to install a bundle whose version is lower
 //! than the running release unless the request carries {"force": true}.
 //!
-//! Scheme (deliberately simple, matches ASTRO_RELEASE / bundle versions
+//! Scheme (deliberately simple, matches CRAG_RELEASE / bundle versions
 //! like "0.1.0", "0.2.0-rc1", "0.0.0-dev"):
 //!  - split off an optional suffix at the FIRST '-'; the base is compared
 //!    as dotted segments, numerically when both segments are numeric,

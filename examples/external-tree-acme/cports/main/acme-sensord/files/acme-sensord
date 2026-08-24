@@ -2,24 +2,24 @@
 # Installed by the template via install_service -> usr/lib/dinit.d/,
 # auto-split into the acme-sensord-dinit subpackage.
 #
-# env-file: /etc/astro/services/acme-sensord.env is GENERATED at image
+# env-file: /etc/crag/services/acme-sensord.env is GENERATED at image
 # assembly (40-service-manifests.sh) from this app's service manifest;
 # the app carries this line itself — the hook never edits service
-# descriptions. It provides ASTRO_API_SOCKET and ASTRO_DATA_DIR.
+# descriptions. It provides CRAG_API_SOCKET and CRAG_DATA_DIR.
 #
 # run-as: the 'acme' system user is created at image assembly from the
-# manifest's [service].user; dinit initgroups(), so the astro-api
+# manifest's [service].user; dinit initgroups(), so the crag-api
 # supplementary membership (api_client = true) applies to the process.
 #
 # Style note (cports dinit lint): every `key = value` setting must come
 # before any `key: value` dependency line.
 type = process
 command = /usr/bin/acme-sensord
-env-file = /etc/astro/services/acme-sensord.env
+env-file = /etc/crag/services/acme-sensord.env
 run-as = acme
 restart = true
 logfile = /var/log/acme-sensord.log
-# data-mount: $ASTRO_DATA_DIR lives under /data. astrod: probed at
+# data-mount: $CRAG_DATA_DIR lives under /data. cragd: probed at
 # startup (the daemon still tolerates a slow listener itself).
 depends-on: data-mount
-depends-on: astrod
+depends-on: cragd

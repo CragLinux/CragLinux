@@ -1,5 +1,5 @@
 #!/bin/bash
-# Astro Linux - A/B disk image assembly (M1 wave 2, docs/04 §2/§6, AD-007)
+# Crag Linux - A/B disk image assembly (M1 wave 2, docs/04 §2/§6, AD-007)
 # Sourced by build-inner.sh, not executed directly.
 #
 # Builds the canonical 7-partition GPT image entirely UNPRIVILEGED:
@@ -18,9 +18,9 @@
 #   7  data      ext4   AD-005 skeleton, grown on first boot (M2)
 #
 # Outputs into ${BUILD_OUTPUT} (build/state/images/<board>-<variant>/):
-#   astro-<board>-<version>.img       raw (kept for run-qemu.sh --image)
-#   astro-<board>-<version>.img.zst   flashable artifact (docs/04 §6)
-#   astro-<board>-<version>.qcow2     when [image].formats has qcow2
+#   crag-<board>-<version>.img       raw (kept for run-qemu.sh --image)
+#   crag-<board>-<version>.img.zst   flashable artifact (docs/04 §6)
+#   crag-<board>-<version>.qcow2     when [image].formats has qcow2
 #   SHA256SUMS, manifest.json
 #
 # Globals from build-inner.sh: PROJECT_ROOT BOARD_CONFIG_JSON BUILD_OUTPUT
@@ -80,10 +80,10 @@ create_image() {
     require_command python3
     require_command jq
 
-    local version="${ASTRO_VERSION:-0.0.0-dev}"
+    local version="${CRAG_VERSION:-0.0.0-dev}"
     local out_dir="${BUILD_OUTPUT}"
     local work="${out_dir}/image-work"
-    local img="${out_dir}/astro-${board_name}-${version}.img"
+    local img="${out_dir}/crag-${board_name}-${version}.img"
 
     log_step "Assembling A/B disk image for ${board_name}/${variant_name} (${version})..."
 
@@ -168,7 +168,7 @@ create_image() {
     ####################################################################
     log_info "Building boot slot image (${kernel_img_name})..."
     local boot_img="${work}/boot.vfat"
-    make_vfat "$boot_img" "$boot_size" "ASTROBOOT"
+    make_vfat "$boot_img" "$boot_size" "CRAGBOOT"
     mcopy -i "$boot_img" "$kernel_path" "::/${kernel_img_name}" || die "mcopy kernel failed"
     if [ -n "$dtb_path" ]; then
         mmd -i "$boot_img" ::/dtbs
@@ -208,7 +208,7 @@ create_image() {
             render_boot_template "$boot_script_in" \
                 "${work}/boot.cmd" "$KERNEL_CMDLINE" "$rootflags" "$kernel_img_name" "$bootcmd"
             mkimage -A "$mkimage_arch" -O linux -T script -C none \
-                -n "Astro A/B boot" -d "${work}/boot.cmd" "${work}/boot.scr" > /dev/null || \
+                -n "Crag A/B boot" -d "${work}/boot.cmd" "${work}/boot.scr" > /dev/null || \
                 die "mkimage boot.scr failed"
             mcopy -i "$esp_img" "${work}/boot.scr" ::/boot.scr
 
@@ -217,7 +217,7 @@ create_image() {
             # for why FAT instead of the AD-009 raw redundant env.
             # The env file replaces the built-in default env wholesale, so
             # it is seeded from the bootloader stage's u-boot-initial-env
-            # (default env as text) plus the Astro BOOT_* variables.
+            # (default env as text) plus the Crag BOOT_* variables.
             [ -f "${bl_dir}/u-boot-initial-env" ] || \
                 die "u-boot-initial-env not found in ${bl_dir} (run --step=bootloader first)"
             {
@@ -299,8 +299,8 @@ create_image() {
              "${data_skel}/var/log" \
              "${data_skel}/apps" \
              "${data_skel}/keys/seedrng" \
-             "${data_skel}/.astro"
-    echo "1" > "${data_skel}/.astro/data-version"
+             "${data_skel}/.crag"
+    echo "1" > "${data_skel}/.crag/data-version"
     local data_img="${work}/data.ext4"
     make_ext4_from_dir "$data_img" "$data_size" "data" "$data_skel"
 

@@ -1,11 +1,11 @@
-# Astro: AP captive-portal redirect DOWN (docs/07 §4, M3 phase 4) —
-# removes the astro_portal nft table. Counterpart of
-# astro-portal-redirect-start (see there for the dispatch model);
-# idempotent when the table is already gone, so astrod may fire it on
+# Crag: AP captive-portal redirect DOWN (docs/07 §4, M3 phase 4) —
+# removes the crag_portal nft table. Counterpart of
+# crag-portal-redirect-start (see there for the dispatch model);
+# idempotent when the table is already gone, so cragd may fire it on
 # every AP-down edge including error paths.
 #
-# NOT ENABLED IN boot.d — dispatched on demand by astrod.
+# NOT ENABLED IN boot.d — dispatched on demand by cragd.
 
 type = scripted
-command = /usr/lib/astro/portal-redirect-down.sh
+command = /usr/lib/crag/portal-redirect-down.sh
 restart = false

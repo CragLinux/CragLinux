@@ -1,8 +1,8 @@
-# The tree-PROVIDED variant (docs/08 §2, §7): no Astro board defines
+# The tree-PROVIDED variant (docs/08 §2, §7): no Crag board defines
 # acme-prod — this file is the whole definition, resolved from the tree
 # by the layer engine (highest-priority tree wins; docs/08 §4). Build:
 #
-#   ./build/astro-build.sh qemu-x86_64 acme-prod \
+#   ./build/crag-build.sh qemu-x86_64 acme-prod \
 #       --external=examples/external-tree-acme
 
 [variant]

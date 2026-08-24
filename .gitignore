@@ -36,7 +36,7 @@
 __pycache__/
 *.pyc
 
-# --- Zig (astrod) ---
+# --- Zig (cragd) ---
 zig-cache/
 .zig-cache/
 zig-out/

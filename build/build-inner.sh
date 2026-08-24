@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 
-# Astro Linux - Inner Build Logic
+# Crag Linux - Inner Build Logic
 #
-# This script runs INSIDE the container. It is called by build/astro-build.sh
+# This script runs INSIDE the container. It is called by build/crag-build.sh
 # (the host entry point) and should not be invoked directly on the host.
 #
 # Usage: ./build/build-inner.sh <board> <variant> [--step=<step>] [--clean]
@@ -31,7 +31,7 @@ STEP=""
 CLEAN=false
 PACKAGES_MODE_CLI=""
 # --external=PATH is REPEATABLE (docs/08 §4 multi-tree). Accumulated verbatim
-# and passed through to layers.py; $ASTRO_EXTERNAL (colon-separated) is honored
+# and passed through to layers.py; $CRAG_EXTERNAL (colon-separated) is honored
 # there too.
 EXTERNAL_ARGS=()
 
@@ -53,7 +53,7 @@ fi
 # Discover external trees + resolve the ordered layer list (docs/08 §2, §4)
 #
 # layers.py is THE single source of truth for merge order. It parses the
-# --external list (+ $ASTRO_EXTERNAL), version-gates each tree.toml, orders
+# --external list (+ $CRAG_EXTERNAL), version-gates each tree.toml, orders
 # trees by priority, and resolves BOARD_DIR / VARIANT_FILE (either may live in
 # a tree). The emitted JSON array (LAYERS_JSON, exported below) is what the
 # merge engine (build/lib/merge.sh) consumes. With NO external trees this
@@ -116,7 +116,7 @@ if [ -n "$VARIANT_CMDLINE" ]; then
 fi
 
 # Packages-mode: CLI flag > variant [packages].mode > "source" (docs/03 §1
-# "Binary consumption for dev builds"). binary = build only Astro-touched
+# "Binary consumption for dev builds"). binary = build only Crag-touched
 # templates, consume Chimera's signed binary repo for the rest; source =
 # build the full manifest from the pinned cports (release/nightly path).
 PACKAGES_MODE="${PACKAGES_MODE_CLI:-$(echo "$VARIANT_CONFIG_JSON" | jq -r '.packages.mode // "source"')}"
@@ -149,7 +149,7 @@ SOURCE_MANIFEST_FILE="${BUILD_OUTPUT}/packages.source.manifest"
 export BUILD_OUTPUT ROOTFS_DIR MANIFEST_FILE SOURCE_MANIFEST_FILE
 
 echo ""
-log_info "Astro Linux Build"
+log_info "Crag Linux Build"
 log_info "  Board:   ${BOARD_NAME} (${BOARD})"
 log_info "  Variant: ${VARIANT_NAME} (${VARIANT})"
 log_info "  Arch:    ${BOARD_ARCH}"
@@ -270,7 +270,7 @@ if should_run_step "packages"; then
         echo "    ${pkg}"
     done < "$MANIFEST_FILE"
 
-    # In binary packages-mode only the Astro-owned fork templates are built
+    # In binary packages-mode only the Crag-owned fork templates are built
     # from source (build/cports-owned.list); everything else is installed
     # from Chimera's signed binary repo at rootfs time.
     BUILD_LIST_FILE="$MANIFEST_FILE"

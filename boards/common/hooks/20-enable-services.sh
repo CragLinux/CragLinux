@@ -16,12 +16,12 @@ enable_services() {
 
     # Platform services (always in the boot set, not variant-selectable):
     # boot-success is the docs/02 §5.1 milestone; it hard-depends on
-    # astrod (M1: the health-check stub) and data-mount, so enabling it
+    # cragd (M1: the health-check stub) and data-mount, so enabling it
     # by name activates the whole chain. Soft (waits-for) from 'boot', so
     # a failed health check surfaces as [FAILED] without blocking login.
     ln -sf "../boot-success" "${boot_d}/boot-success"
     log_info "Enabled platform service: boot-success (-> ../boot-success)"
-    # dbus-daemon: system bus for rauc (and astrod at M3); the service
+    # dbus-daemon: system bus for rauc (and cragd at M3); the service
     # definition ships in the dbus package as "dbus-daemon".
     ln -sf "../../../usr/lib/dinit.d/dbus-daemon" "${boot_d}/dbus-daemon"
     log_info "Enabled platform service: dbus-daemon"
@@ -31,18 +31,18 @@ enable_services() {
     log_info "Enabled platform service: rauc-mark-good"
     # watchdog: forces a reboot when boot-success is never reached, so
     # bootloader attempt counters advance (docs/05 §4; no-op off A/B)
-    ln -sf "../astro-boot-watchdog" "${boot_d}/astro-boot-watchdog"
-    log_info "Enabled platform service: astro-boot-watchdog"
+    ln -sf "../crag-boot-watchdog" "${boot_d}/crag-boot-watchdog"
+    log_info "Enabled platform service: crag-boot-watchdog"
     # firstboot: once per /data lifetime (docs/07 §3; no-op on direct boots)
     ln -sf "../firstboot" "${boot_d}/firstboot"
     log_info "Enabled platform service: firstboot"
     # chronyd: NTP client (docs/07 §6, M3 phase 4) — resolves to the
-    # /etc/dinit.d shadow (minimal /etc/astro/chrony.conf). The packaged
+    # /etc/dinit.d shadow (minimal /etc/crag/chrony.conf). The packaged
     # 'chrony' waitsync boot gate ships enabled in chrony-dinit's own
     # boot.d but is neutralized by its /etc/dinit.d shadow (no 180 s
-    # offline boot stall; see that file). astro-portal-redirect-{start,
-    # stop} and astro-factory-reset are deliberately NOT enabled here:
-    # they are on-demand root oneshots astrod dispatches over the dinit
+    # offline boot stall; see that file). crag-portal-redirect-{start,
+    # stop} and crag-factory-reset are deliberately NOT enabled here:
+    # they are on-demand root oneshots cragd dispatches over the dinit
     # control socket (docs/02 §7).
     ln -sf "../chronyd" "${boot_d}/chronyd"
     log_info "Enabled platform service: chronyd"

@@ -43,7 +43,7 @@ rootfs_size = "512M"       # per slot; build fails if squashfs exceeds it
 data_min_size = "64M"
 
 [rauc]
-compatible = "astro-qemu-x86_64"
+compatible = "crag-qemu-x86_64"
 bootloader = "grub"        # RAUC grub backend (docs/04 §3, AD-008)
 
 [image]
@@ -63,7 +63,7 @@ baud = 115200
 machine = "q35"
 cpu = "max"
 memory = "1G"
-# OVMF code image inside the astro-builder container (edk2-ovmf package);
+# OVMF code image inside the crag-builder container (edk2-ovmf package);
 # run-qemu.sh pairs it with a scratch copy of OVMF_VARS.fd on pflash.
 firmware = "/usr/share/edk2/ovmf/OVMF_CODE.fd"
 # NIC: plain boots get QEMU's default user-mode NIC; SSH forwarding is

@@ -3,13 +3,13 @@
 #
 # M4 phase 1 — SERVICE MANIFEST ASSEMBLY (docs/08 §5).
 #
-# App apks install usr/lib/astro/services/<name>.toml next to their dinit
+# App apks install usr/lib/crag/services/<name>.toml next to their dinit
 # service file. They arrive in the ASSEMBLED rootfs via apk (never via overlay
 # — the code/config fence in merge.sh forbids app code in overlays). This hook
 # reads every such manifest and wires the platform integration each app opted
-# into. Numeric prefix 40 => runs AFTER 05-platform-users (astrod/astro-api),
+# into. Numeric prefix 40 => runs AFTER 05-platform-users (cragd/crag-api),
 # 10-create-users (variant users), 20-enable-services (platform + variant
-# service enablement), so the astro-api group and the boot.d dir already exist.
+# service enablement), so the crag-api group and the boot.d dir already exist.
 #
 # Hook environment (docs/08 §8): ROOTFS_DIR (the assembled rootfs), PROJECT_ROOT
 # (repo root, for the reader), ROOTFS_TYPE, and the log_* helpers.
@@ -21,7 +21,7 @@
 # Each effect below is a small, idempotent function; the assembly loop at the
 # bottom (apply_service_manifests) reads the validated manifests via
 # build/lib/service_manifest.py and dispatches them. api_controllable needs NO
-# build-time effect — astrod reads the same manifests at startup
+# build-time effect — cragd reads the same manifests at startup
 # (services.zig loadManifests, docs/06 §5.4) to learn which services its
 # POST /services/<name>/{restart,stop,start} endpoints may touch.
 
@@ -75,7 +75,7 @@ sm_effect_user() {
     # shadow (locked password) — a system identity, not a login account.
     grep -q "^${user}:" "$group_f" 2>/dev/null || \
         echo "${user}:x:${uid}:" >> "$group_f"
-    echo "${user}:x:${uid}:${uid}:Astro app service (${name}):/var/empty:/bin/false" >> "$passwd_f"
+    echo "${user}:x:${uid}:${uid}:Crag app service (${name}):/var/empty:/bin/false" >> "$passwd_f"
     echo "${user}:!:19000:0:99999:7:::" >> "$shadow_f"
 
     if [ -n "$shadow_mode" ]; then
@@ -92,16 +92,16 @@ sm_effect_user() {
 # ---- effect (b): data_dir => /data/apps/<name> at RUNTIME -----------------
 # /data is a RUNTIME mount (not present at build), so the dir cannot be made
 # here. MECHANISM: record the request in a build-time list that the boot-time
-# data-mount step (usr/lib/astro/data-mount.sh) replays — for each recorded
+# data-mount step (usr/lib/crag/data-mount.sh) replays — for each recorded
 # "<name> <owner>" it `mkdir -p /data/apps/<name>` + `chown owner:owner` right
 # after /data is mounted (see the followup edit to data-mount.sh). Owner
-# defaults to root when the service declares no [service].user. ASTRO_DATA_DIR
+# defaults to root when the service declares no [service].user. CRAG_DATA_DIR
 # (effect c) points at the same path.
 sm_effect_data_dir() {
     local name="$1" user="$2" data_dir="$3"
     [ "$data_dir" = "true" ] || return 0
 
-    local dir="${ROOTFS_DIR}/etc/astro"
+    local dir="${ROOTFS_DIR}/etc/crag"
     mkdir -p "$dir"
     local rec="${dir}/app-data-dirs"
     local owner="${user:-root}"
@@ -114,29 +114,29 @@ sm_effect_data_dir() {
 }
 
 # ---- effect (c): per-service env file (docs/08 §5) ------------------------
-# Every app service gets ASTRO_API_SOCKET (=/run/astro/astrod.sock — astrod's
-# default unix socket, main.zig) and, when data_dir, ASTRO_DATA_DIR
+# Every app service gets CRAG_API_SOCKET (=/run/crag/cragd.sock — cragd's
+# default unix socket, main.zig) and, when data_dir, CRAG_DATA_DIR
 # (=/data/apps/<name>). dinit reads it via `env-file = <path>` in the app's OWN
 # service description — the same 0.22 mechanism the iwd shadow already uses
-# (etc/dinit.d/iwd: `env-file = /etc/astro/iwd.env`). PATH:
-# /etc/astro/services/<name>.env. The app's service file must carry the line
-#     env-file = /etc/astro/services/<name>.env
+# (etc/dinit.d/iwd: `env-file = /etc/crag/iwd.env`). PATH:
+# /etc/crag/services/<name>.env. The app's service file must carry the line
+#     env-file = /etc/crag/services/<name>.env
 # (documented in docs/08 §5 / the acme example) — this hook only writes the
 # file; it does not edit the app's service description.
 sm_effect_env_file() {
     local name="$1" data_dir="$2"
 
-    local dir="${ROOTFS_DIR}/etc/astro/services"
+    local dir="${ROOTFS_DIR}/etc/crag/services"
     mkdir -p "$dir"
     local f="${dir}/${name}.env"
 
     {
-        echo "# Astro per-service environment (docs/08 §5) — generated at image"
+        echo "# Crag per-service environment (docs/08 §5) — generated at image"
         echo "# assembly by 40-service-manifests.sh. The app's dinit service"
-        echo "# references it with: env-file = /etc/astro/services/${name}.env"
-        echo "ASTRO_API_SOCKET=/run/astro/astrod.sock"
+        echo "# references it with: env-file = /etc/crag/services/${name}.env"
+        echo "CRAG_API_SOCKET=/run/crag/cragd.sock"
         if [ "$data_dir" = "true" ]; then
-            echo "ASTRO_DATA_DIR=/data/apps/${name}"
+            echo "CRAG_DATA_DIR=/data/apps/${name}"
         fi
     } > "$f"
     log_info "  [service-manifest] wrote env-file ${f#"${ROOTFS_DIR}"}"
@@ -146,7 +146,7 @@ sm_effect_env_file() {
 # The service becomes a dependency of the boot-success milestone: if it fails
 # to start after an update, rauc-mark-good never runs and the device rolls
 # back (docs/05 §4). MECHANISM: append `depends-on: <name>` to the assembled
-# /etc/dinit.d/boot-success (it already lists `depends-on: astrod` /
+# /etc/dinit.d/boot-success (it already lists `depends-on: cragd` /
 # `depends-on: data-mount`). Idempotent.
 sm_effect_boot_success() {
     local name="$1" boot_success="$2"
@@ -163,8 +163,8 @@ sm_effect_boot_success() {
     log_info "  [service-manifest] boot-success now depends-on ${name} (rollback opt-in, AD-011)"
 }
 
-# ---- effect (e): api_client => join the astro-api group -------------------
-# Membership in astro-api is permission to use astrod's unix socket (docs/02
+# ---- effect (e): api_client => join the crag-api group -------------------
+# Membership in crag-api is permission to use cragd's unix socket (docs/02
 # §7). The group exists from 05-platform-users.sh (gid 301). Append the user
 # to the group's member field. Idempotent.
 sm_effect_api_group() {
@@ -173,41 +173,41 @@ sm_effect_api_group() {
 
     local group_f="${ROOTFS_DIR}/etc/group"
     if [ -z "$user" ]; then
-        log_warn "  [service-manifest] ${name}: api_client=true but no [service].user — nothing to add to astro-api (root already has socket access)"
+        log_warn "  [service-manifest] ${name}: api_client=true but no [service].user — nothing to add to crag-api (root already has socket access)"
         return 0
     fi
-    if ! grep -q '^astro-api:' "$group_f" 2>/dev/null; then
-        log_warn "  [service-manifest] astro-api group missing (05-platform-users) — cannot join ${user} (${name})"
+    if ! grep -q '^crag-api:' "$group_f" 2>/dev/null; then
+        log_warn "  [service-manifest] crag-api group missing (05-platform-users) — cannot join ${user} (${name})"
         return 0
     fi
     # Already a member? (exact match on a member-list element, not a substring.)
-    if awk -F: -v u="$user" '$1=="astro-api"{n=split($4,a,","); for(i=1;i<=n;i++) if(a[i]==u) exit 0; exit 1}' "$group_f"; then
+    if awk -F: -v u="$user" '$1=="crag-api"{n=split($4,a,","); for(i=1;i<=n;i++) if(a[i]==u) exit 0; exit 1}' "$group_f"; then
         return 0
     fi
     # Append to the 4th field, handling an empty member list without a stray
     # leading comma.
     local tmp="${group_f}.tmp.$$"
-    awk -F: -v u="$user" 'BEGIN{OFS=":"} $1=="astro-api"{$4=($4==""?u:$4","u)} {print}' \
+    awk -F: -v u="$user" 'BEGIN{OFS=":"} $1=="crag-api"{$4=($4==""?u:$4","u)} {print}' \
         "$group_f" > "$tmp" && mv "$tmp" "$group_f"
-    log_info "  [service-manifest] added ${user} to astro-api group (${name})"
+    log_info "  [service-manifest] added ${user} to crag-api group (${name})"
 }
 
-# ---- effect (g): JSON sidecar for astrod (docs/06 §5.4, docs/08 §5) -------
-# astrod cannot parse the .toml manifests at runtime (std has no TOML parser;
+# ---- effect (g): JSON sidecar for cragd (docs/06 §5.4, docs/08 §5) -------
+# cragd cannot parse the .toml manifests at runtime (std has no TOML parser;
 # AD-016 no shelling out), so it reads a JSON sidecar per service. Emit
-# usr/lib/astro/services/<name>.json — the manifest's full to_dict() object,
-# beside the <name>.toml. astrod (services.zig loadManifests) consumes only
+# usr/lib/crag/services/<name>.json — the manifest's full to_dict() object,
+# beside the <name>.toml. cragd (services.zig loadManifests) consumes only
 # `name` + `api_controllable` (ignore_unknown_fields), so shipping the whole
-# dict is fine and future-proof. Zero manifests => zero sidecars => astrod's
+# dict is fine and future-proof. Zero manifests => zero sidecars => cragd's
 # loadManifests is a no-op and the no-app image stays byte-identical.
 sm_effect_sidecar() {
     local name="$1" element_json="$2"
-    local dir="${ROOTFS_DIR}/usr/lib/astro/services"
+    local dir="${ROOTFS_DIR}/usr/lib/crag/services"
     mkdir -p "$dir"
     # Drop source_path: it is a build-host absolute path (leaks the builder's
-    # filesystem into the image and astrod never reads it).
+    # filesystem into the image and cragd never reads it).
     printf '%s\n' "$element_json" | jq -S 'del(.source_path)' > "${dir}/${name}.json"
-    log_info "  [service-manifest] wrote sidecar usr/lib/astro/services/${name}.json (astrod)"
+    log_info "  [service-manifest] wrote sidecar usr/lib/crag/services/${name}.json (cragd)"
 }
 
 # ---- effect (f): enable the service into boot.d ---------------------------
@@ -267,7 +267,7 @@ apply_service_manifests() {
 
         log_info "  service manifest: ${name} (user=${user:-<root>}, data_dir=${data_dir}, boot_success=${boot_success}, api_controllable=${api_controllable}, api_client=${api_client})"
 
-        # api_controllable needs NO build-time effect: astrod reads the same
+        # api_controllable needs NO build-time effect: cragd reads the same
         # manifests at startup (services.zig loadManifests) to learn which
         # services POST /services/<name>/{restart,stop,start} may touch
         # (docs/06 §5.4). It is surfaced here only for the assembly log.

@@ -2,7 +2,7 @@
 
 > **These were drafts for upstreaming to Chimera cports. Superseded by the
 > fork.** Upstream declined the fixes and does not accept AI-assisted
-> contributions (2026-07), so Astro now maintains its own cports fork and
+> contributions (2026-07), so Crag now maintains its own cports fork and
 > these changes live there as ordinary commits (`git -C cports log`, and
 > the `main/<pkg>:` messages). This file is kept only as the original
 > root-cause analysis for each change — useful if a fix is ever offered to
@@ -54,7 +54,7 @@ M2 additions (2026-07-18): `0006-glib-no-introspection-cross.patch` and
 `-Dintrospection=disabled` for cross profiles (meson: later -D wins).
 Upstreamable as cross enablement. Also new in `astro-cports/main/`:
 `rauc` (1.15.2) and `libubootenv` (0.3.7) — standard ports with no
-Astro-specific content, upstreamable as new packages if Chimera wants
+Crag-specific content, upstreamable as new packages if Chimera wants
 them; proposed commits `main/rauc: new package` etc.
 
 Also carried, **not** upstreamable in its current form:
@@ -62,7 +62,7 @@ Also carried, **not** upstreamable in its current form:
 armv7/armhf because its closure dead-ends in `main/protobuf`, which is
 marked broken for cross builds. The honest upstream fix is making
 protobuf cross-buildable (its template carries the diagnosis); our patch
-is an Astro-local port decision to keep the armv7 repo closable.
+is an Crag-local port decision to keep the armv7 repo closable.
 
 ---
 
@@ -203,7 +203,7 @@ clang via CROSS_TOOLCHAIN_FLAGS_NATIVE.
 ```
 
 Diff (against the pinned template's `init_configure`, without the
-Astro-local comment carried in our build-time patch):
+Crag-local comment carried in our build-time patch):
 
 ```diff
      # grab these from the host
@@ -245,7 +245,7 @@ cross-built llvm. Cross-building `main/llvm` appears unexercised by
 Chimera CI today (their builders are native per-arch), so this should not
 regress any produced repo — but reviewers should confirm.
 
-## Verification evidence (Astro build logs)
+## Verification evidence (Crag build logs)
 
 - Unpatched: ~2.5 h in, NATIVE sub-build fails on `llvm-min-tblgen`
   (aarch64 binary, musl loader missing on host).
@@ -253,4 +253,4 @@ regress any produced repo — but reviewers should confirm.
   fails at `runtimes-configure` in `flang-rt` (bug 2).
 - Both commits: full cross build rc=0 in ~1.5 h (24 cores), packages
   produced: llvm, clang, lld, libcxx, libcxxabi, libunwind, ...
-  (log: `build/state/logs/04g-llvm3.log` in the Astro workspace).
+  (log: `build/state/logs/04g-llvm3.log` in the Crag workspace).

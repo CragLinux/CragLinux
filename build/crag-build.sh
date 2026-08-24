@@ -1,16 +1,16 @@
 #!/bin/bash
 set -e
 
-# Astro Linux - Build System Entry Point
+# Crag Linux - Build System Entry Point
 #
-# This is the host-side entry point. It ensures the astro-builder container
+# This is the host-side entry point. It ensures the crag-builder container
 # image exists and launches the real build logic inside the container.
 #
 # Usage:
-#   ./build/astro-build.sh <board> <variant> [options]
-#   ./build/astro-build.sh rpi4 dev
-#   ./build/astro-build.sh --external=/path/to/products my-gateway production
-#   ./build/astro-build.sh qemu-aarch64 dev --step=packages
+#   ./build/crag-build.sh <board> <variant> [options]
+#   ./build/crag-build.sh rpi4 dev
+#   ./build/crag-build.sh --external=/path/to/products my-gateway production
+#   ./build/crag-build.sh qemu-aarch64 dev --step=packages
 #
 # Options:
 #   --external=<path>   Path to external board/package tree (like BR2_EXTERNAL)
@@ -18,7 +18,7 @@ set -e
 #                       packages, rootfs, image, bundle, sdk (the image-derived
 #                       app sysroot + environment, docs/03 §3 — needs the
 #                       image built first)
-#   --packages-mode=<m> binary|source. binary: build only Astro-touched
+#   --packages-mode=<m> binary|source. binary: build only Crag-touched
 #                       templates, install the rest from Chimera's signed
 #                       binary repo (dev/PR default via variant TOML).
 #                       source: build everything from the pinned cports
@@ -28,9 +28,9 @@ set -e
 #   --shell             Drop into an interactive shell inside the container
 #
 # Environment variables:
-#   ASTRO_EXTERNAL      Same as --external
+#   CRAG_EXTERNAL      Same as --external
 #   CONTAINER_ENGINE    Override container engine (default: auto-detect podman/docker)
-#   CONTAINER_IMAGE     Override image name (default: astro-builder)
+#   CONTAINER_IMAGE     Override image name (default: crag-builder)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -42,11 +42,11 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BOARD=""
 VARIANT=""
 # --external=PATH is REPEATABLE (docs/08 §4 multi-tree composition); the
-# colon-separated $ASTRO_EXTERNAL seeds the list first. Each tree is bind
+# colon-separated $CRAG_EXTERNAL seeds the list first. Each tree is bind
 # -mounted read-through and passed to the inner build as --external=/external-N.
 EXTERNALS=()
-if [ -n "${ASTRO_EXTERNAL:-}" ]; then
-    IFS=':' read -r -a _env_externals <<< "$ASTRO_EXTERNAL"
+if [ -n "${CRAG_EXTERNAL:-}" ]; then
+    IFS=':' read -r -a _env_externals <<< "$CRAG_EXTERNAL"
     for _e in "${_env_externals[@]}"; do
         [ -n "$_e" ] && EXTERNALS+=("$_e")
     done
@@ -137,7 +137,7 @@ if [ -z "$ENGINE" ]; then
     fi
 fi
 
-IMAGE_NAME="${CONTAINER_IMAGE:-astro-builder}"
+IMAGE_NAME="${CONTAINER_IMAGE:-crag-builder}"
 
 ##############################################################################
 # Build container image if needed
@@ -176,7 +176,7 @@ RUN_ARGS+=(-v "${PROJECT_ROOT}:/workspace:Z")
 # mounted read-only at a stable in-container path /external-N (N = input
 # order) and passed to the inner build as --external=/external-N, in the same
 # order — layers.py orders them by tree.toml priority regardless, but keeping
-# input order stable preserves the documented tie-break. $ASTRO_EXTERNAL is
+# input order stable preserves the documented tie-break. $CRAG_EXTERNAL is
 # NOT forwarded (the host paths do not exist in the container); the explicit
 # --external args carry the whole list.
 EXTERNAL_INNER_ARGS=()
@@ -195,7 +195,7 @@ done
 ##############################################################################
 
 if [ "$INTERACTIVE" = true ]; then
-    echo "[INFO] Launching interactive shell in astro-builder container"
+    echo "[INFO] Launching interactive shell in crag-builder container"
     exec $ENGINE "${RUN_ARGS[@]}" "$IMAGE_NAME"
 else
     echo "[INFO] Building ${BOARD}/${VARIANT} in container (engine: ${ENGINE})"

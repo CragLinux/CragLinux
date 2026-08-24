@@ -1,4 +1,4 @@
-# Astro Linux - A/B update + read-only rootfs support (docs/02 §6 rauc.fragment)
+# Crag Linux - A/B update + read-only rootfs support (docs/02 §6 rauc.fragment)
 # Required shared fragment: squashfs-as-root boots without an initramfs
 # (AD-006), so everything needed to mount the prod rootfs must be built in
 # (=y, never =m).

@@ -581,7 +581,7 @@ pub const Bus = struct {
     pub fn connectSystem(gpa: std.mem.Allocator) Error!*Bus {
         // Probe only when sd-bus would use the default socket; an explicit
         // DBUS_SYSTEM_BUS_ADDRESS (tests, containers) is trusted as-is.
-        // (std.c.getenv: astrod links musl anyway; std.posix.getenv is gone
+        // (std.c.getenv: cragd links musl anyway; std.posix.getenv is gone
         // in Zig 0.16 and Environ wants the process-init plumbing.)
         if (std.c.getenv("DBUS_SYSTEM_BUS_ADDRESS") == null) {
             if (!fsutil.pathExists(system_bus_socket)) return error.NoBusSocket;
@@ -1113,7 +1113,7 @@ test "marshal s/b/u and a{sv}: signature and round-trip read-back" {
     defer _ = c.sd_bus_message_unref(m);
 
     try appendArgs(m.?, &.{
-        .{ .s = "/data/.astro/staging/update.raucb" },
+        .{ .s = "/data/.crag/staging/update.raucb" },
         .{ .dict = &.{
             .{ .key = "ignore-compatible", .value = .{ .b = true } },
             .{ .key = "tls-no-verify", .value = .{ .s = "no" } },
@@ -1129,7 +1129,7 @@ test "marshal s/b/u and a{sv}: signature and round-trip read-back" {
 
     var msg: Message = .{ .m = m.?, .owned = false };
     try std.testing.expectEqualStrings("sa{sv}bu", msg.signature());
-    try std.testing.expectEqualStrings("/data/.astro/staging/update.raucb", try msg.readString());
+    try std.testing.expectEqualStrings("/data/.crag/staging/update.raucb", try msg.readString());
 
     // a{sv} read-back through the typed container API.
     try std.testing.expect(try msg.enterContainer('a', "{sv}"));
@@ -1300,7 +1300,7 @@ test "readManagedObjects parses an iwd-shaped a{oa{sa{sv}}} tree" {
     try std.testing.expect(c.sd_bus_message_append_basic(m, 's', "net.connman.iwd.Network") >= 0);
     try std.testing.expect(c.sd_bus_message_open_container(m, 'a', "{sv}") >= 0);
     try appendPropEntry(m.?, "Name", "s");
-    try std.testing.expect(c.sd_bus_message_append_basic(m, 's', "astro-test") >= 0);
+    try std.testing.expect(c.sd_bus_message_append_basic(m, 's', "crag-test") >= 0);
     try closePropEntry(m.?);
     try appendPropEntry(m.?, "Connected", "b");
     var connected: c_int = 0;
@@ -1342,7 +1342,7 @@ test "readManagedObjects parses an iwd-shaped a{oa{sa{sv}}} tree" {
     try std.testing.expectEqualStrings("/net/connman/iwd/0/3/1234_psk", sta.get("ConnectedNetwork").?.o);
 
     const net = tree.find("/net/connman/iwd/0/3/1234_psk", "net.connman.iwd.Network").?;
-    try std.testing.expectEqualStrings("astro-test", net.get("Name").?.s);
+    try std.testing.expectEqualStrings("crag-test", net.get("Name").?.s);
     try std.testing.expectEqual(false, net.get("Connected").?.b);
     try std.testing.expectEqual(@as(i16, -4900), net.get("SignalStrength").?.n);
 

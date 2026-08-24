@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Astro Linux - boot-smoke test stage (docs/03 §5, docs/11 M1; GAP §4
+# Crag Linux - boot-smoke test stage (docs/03 §5, docs/11 M1; GAP §4
 # item 8: the hand-run QEMU boots, promoted to an asserting test).
 #
 # Boots the built full A/B image through the real bootloader on a
@@ -18,7 +18,7 @@ set -euo pipefail
 # build/state/logs/boot-smoke-<board>-<variant>.log and a junit XML at
 # build/state/test-results/boot-smoke-<board>-<variant>.xml.
 #
-# Runs on the host (wraps itself into the astro-builder container, where
+# Runs on the host (wraps itself into the crag-builder container, where
 # QEMU lives) or directly inside the container. Harness plumbing lives in
 # build/lib/testlib.sh.
 #

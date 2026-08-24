@@ -1,8 +1,8 @@
-# Astro SHADOW of dinit-chimera's early-fs-local.target (/etc/dinit.d
+# Crag SHADOW of dinit-chimera's early-fs-local.target (/etc/dinit.d
 # precedes /usr/lib/dinit.d in dinit's service dirs, so this file wins).
 #
 # Identical to the packaged target (dinit-chimera at the current cports
-# pin) plus ONE line: waits-for: data-mount. That inserts the Astro
+# pin) plus ONE line: waits-for: data-mount. That inserts the Crag
 # mutable-state mounts (AD-005: /data, /etc overlay, seed/log binds —
 # see data-mount.sh) into the early graph before early-rng and
 # early-machine-id, which order themselves after early-fs-local.target.

@@ -1,4 +1,4 @@
-# Pinned Zig toolchain for astrod (docs/03 §4, docs/06 §3).
+# Pinned Zig toolchain for cragd (docs/03 §4, docs/06 §3).
 # The build container (container/Containerfile) installs exactly this
 # release from ziglang.org; keep the ARG ZIG_VERSION there in sync.
 #

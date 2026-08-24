@@ -1,4 +1,4 @@
-# Astro SHADOW of the packaged iwd service (/etc/dinit.d wins over
+# Crag SHADOW of the packaged iwd service (/etc/dinit.d wins over
 # /usr/lib/dinit.d in dinit's service-dir search order — same mechanism
 # as the rauc and early-fs-local.target shadows). Diffs vs the iwd-dinit
 # file (cports/main/iwd/files/iwd), re-diff on iwd template bumps:
@@ -8,12 +8,12 @@
 #                      systemd-convention env var, iwd-3.12 src/storage.c;
 #                      dinit-service(5) env-file is dinit 0.22's supported
 #                      per-service environment mechanism). The directory
-#                      is created astrod-owned by tmpfiles.d/astrod.conf:
-#                      astrod RENDERS <ssid>.psk profiles there from the
+#                      is created cragd-owned by tmpfiles.d/cragd.conf:
+#                      cragd RENDERS <ssid>.psk profiles there from the
 #                      store (docs/07 §2), root iwd reads them regardless.
 #   depends-on dbus-daemon  upstream says 'dbus' but our dbus package
 #                      installs the service as 'dbus-daemon' (the name
-#                      astrod and the enable hook use) — the upstream
+#                      cragd and the enable hook use) — the upstream
 #                      dependency would fail to resolve on this image.
 #   depends-on data-mount   hard: the state dir is on /data; starting
 #                      without it would scribble profiles on the tmpfs.
@@ -25,7 +25,7 @@
 
 type = process
 command = /usr/lib/iwd
-env-file = /etc/astro/iwd.env
+env-file = /etc/crag/iwd.env
 logfile = /var/log/iwd.log
 before: network.target
 depends-on: data-mount

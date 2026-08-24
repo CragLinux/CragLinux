@@ -5,7 +5,7 @@ const std = @import("std");
 pub const content_type = "application/problem+json";
 
 pub const Problem = struct {
-    /// Stable URN per error class, e.g. "urn:astro:problem:not-found".
+    /// Stable URN per error class, e.g. "urn:crag:problem:not-found".
     type: []const u8 = "about:blank",
     title: []const u8,
     status: u16,
@@ -22,7 +22,7 @@ test "problem serialization round-trips and omits absent detail" {
     const allocator = std.testing.allocator;
 
     const body = try render(allocator, .{
-        .type = "urn:astro:problem:not-found",
+        .type = "urn:crag:problem:not-found",
         .title = "Not Found",
         .status = 404,
     });
@@ -31,7 +31,7 @@ test "problem serialization round-trips and omits absent detail" {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
     defer parsed.deinit();
     const obj = parsed.value.object;
-    try std.testing.expectEqualStrings("urn:astro:problem:not-found", obj.get("type").?.string);
+    try std.testing.expectEqualStrings("urn:crag:problem:not-found", obj.get("type").?.string);
     try std.testing.expectEqualStrings("Not Found", obj.get("title").?.string);
     try std.testing.expectEqual(@as(i64, 404), obj.get("status").?.integer);
     try std.testing.expect(obj.get("detail") == null);

@@ -1,4 +1,4 @@
-# Astro Linux - Clang/LLVM kernel configuration
+# Crag Linux - Clang/LLVM kernel configuration
 # Applied to all kernel builds (unless clang_patches = false)
 
 # ThinLTO (may be overridden by board.toml lto setting)

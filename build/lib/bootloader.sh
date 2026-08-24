@@ -1,5 +1,5 @@
 #!/bin/bash
-# Astro Linux - Bootloader build (M1 wave 2, docs/04 §3/§4)
+# Crag Linux - Bootloader build (M1 wave 2, docs/04 §3/§4)
 # Sourced by build-inner.sh, not executed directly.
 #
 # Produces per-board bootloader artifacts under
@@ -79,7 +79,7 @@ build_uboot() {
             *) die "no cross-gcc wired for arch ${board_arch} (u_boot_compiler=gcc)" ;;
         esac
         command -v "${cross_prefix}gcc" >/dev/null || \
-            die "${cross_prefix}gcc not found — rebuild the astro-builder container (gcc-*-linux-gnu packages)"
+            die "${cross_prefix}gcc not found — rebuild the crag-builder container (gcc-*-linux-gnu packages)"
     else
         local triple cross_bin
         triple=$(uboot_cross_triple "$board_arch")
@@ -91,7 +91,7 @@ build_uboot() {
 
     local build_dir="${PROJECT_ROOT}/build/state/${board_arch}/u-boot/${board}"
     local out_dir="${PROJECT_ROOT}/build/state/${board_arch}/bootloader/${board}"
-    local version_marker="${build_dir}/.astro-uboot-version"
+    local version_marker="${build_dir}/.crag-uboot-version"
 
     # Fragment content is part of the staleness key: an edited
     # env.fragment must reconfigure + rebuild (found when the rpi4 mmc
@@ -172,7 +172,7 @@ build_uboot() {
 
     # Default environment as text: an env file (ENV_IS_IN_FAT) REPLACES the
     # built-in default env wholesale, so the image stage must seed
-    # uboot.env with default-env + Astro's BOOT_* variables — not the
+    # uboot.env with default-env + Crag's BOOT_* variables — not the
     # BOOT_* variables alone (which would lose bootcmd/kernel_addr_r/...).
     "${make_args[@]}" u-boot-initial-env
     cp "${build_dir}/u-boot-initial-env" "${out_dir}/u-boot-initial-env"

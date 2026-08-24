@@ -21,7 +21,7 @@
 //!    is told about the gap, not dropped).
 //!  - SSE clients: capped at max_subscribers (16); subscribe() fails with
 //!    TooManySubscribers beyond that (HTTP layer maps it to 503
-//!    urn:astro:problem:overloaded).
+//!    urn:crag:problem:overloaded).
 //!  - Wakeups: one pthread condvar (broadcast on publish). Zero-init
 //!    pthread_cond_t IS musl's PTHREAD_COND_INITIALIZER, same rationale
 //!    as sync.zig. musl condvars wait on CLOCK_REALTIME by default, so

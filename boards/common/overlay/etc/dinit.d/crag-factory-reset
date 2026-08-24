@@ -1,16 +1,16 @@
-# Astro: factory reset dispatcher (docs/07 §5, M3 phase 4). Root
-# oneshot started on demand by astrod after POST /system/factory-reset
+# Crag: factory reset dispatcher (docs/07 §5, M3 phase 4). Root
+# oneshot started on demand by cragd after POST /system/factory-reset
 # passes its confirm-with-machine-id check (docs/02 §7
-# residual-root-ops). Flags /data/.astro/factory-reset-request, syncs,
+# residual-root-ops). Flags /data/.crag/factory-reset-request, syncs,
 # and reboots; the wipe itself runs in data-mount.sh's executor on the
 # way back up, before anything reads /data. firstboot then reruns and
 # the device is back to factory state with its current firmware.
 #
-# NOT ENABLED IN boot.d — dispatched on demand by astrod. Physical
+# NOT ENABLED IN boot.d — dispatched on demand by cragd. Physical
 # button / QMP triggers (docs/07 §5 table) write the same flag file
 # through their own board hooks, not through this service.
 
 type = scripted
-command = /usr/lib/astro/factory-reset.sh
+command = /usr/lib/crag/factory-reset.sh
 restart = false
 depends-on: data-mount

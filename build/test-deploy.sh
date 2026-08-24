@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Astro Linux - AD-026 sideload-loop test (docs/08 §6, M4 phase 3).
+# Crag Linux - AD-026 sideload-loop test (docs/08 §6, M4 phase 3).
 #
 # Proves the developer deploy loop end-to-end against a RUNNING
 # dev-variant QEMU with the acme reference app aboard:
@@ -9,20 +9,20 @@ set -euo pipefail
 #   1. sysroot     the image-derived app sysroot stages (sdk/
 #                  stage-sysroot.sh) and the app SDK environment
 #                  compiles acme-sensord.c (docs/08 §6 step 1)
-#   2. binary      astro-deploy --binary pushes an SDK-rebuilt daemon
+#   2. binary      crag-deploy --binary pushes an SDK-rebuilt daemon
 #                  carrying a marker, restarts it, and the marker
 #                  appears in the service log; drift is recorded
-#   3. package     astro-deploy --pkg reinstalls the built apk over
+#   3. package     crag-deploy --pkg reinstalls the built apk over
 #                  the sideload (drift healed, apk owns the files)
 #
 # PRECONDITIONS (the CI steps build these first; locally run):
-#   ./build/astro-build.sh <board> dev --external=examples/external-tree-acme
+#   ./build/crag-build.sh <board> dev --external=examples/external-tree-acme
 #   ./sdk/build-toolchain.sh <arch>        (once per arch)
 #
 # Usage:
 #   ./build/test-deploy.sh <board> [--timeout=SECONDS]
 #
-# Runs on the host (wraps itself into the astro-builder container) or
+# Runs on the host (wraps itself into the crag-builder container) or
 # directly inside it. junit + serial log land in build/state/ like the
 # other suites.
 
@@ -51,7 +51,7 @@ tl_init "deploy-${BOARD}" "$BOARD" "$VARIANT"
 # Preconditions, with actionable messages.
 [ -f "${TL_OUT}/rootfs/usr/lib/dinit.d/acme-sensord" ] || {
     echo "ERROR: ${BOARD}/${VARIANT} image lacks acme-sensord — build it with the tree first:"
-    echo "  ./build/astro-build.sh ${BOARD} ${VARIANT} --external=examples/external-tree-acme"
+    echo "  ./build/crag-build.sh ${BOARD} ${VARIANT} --external=examples/external-tree-acme"
     exit 1
 }
 BOARD_ARCH=$(python3 "${PROJECT_ROOT}/build/lib/config.py" board \
@@ -98,7 +98,7 @@ case_end
 case_begin "binary-deploy-${BOARD}"
 if [ -z "$CURRENT_FAIL" ] && [ -f "${MARKED_BIN:-/nonexistent}" ]; then
     T0=$(tl_now)
-    if "${PROJECT_ROOT}/sdk/astro-deploy.sh" acme-sensord \
+    if "${PROJECT_ROOT}/sdk/crag-deploy.sh" acme-sensord \
         --binary "$MARKED_BIN" --to "127.0.0.1:${SSH_PORT}" --no-log; then
         DEPLOY_S=$(( $(tl_now) - T0 ))
         echo "binary deploy round-trip: ${DEPLOY_S}s"
@@ -108,10 +108,10 @@ if [ -z "$CURRENT_FAIL" ] && [ -f "${MARKED_BIN:-/nonexistent}" ]; then
         tl_wait_for "marker in service log" 15 \
             "${SSH[@]}" "grep -q DEPLOY-MARKER-42 /var/log/acme-sensord.log" \
             || fail "DEPLOY-MARKER-42 never appeared in /var/log/acme-sensord.log"
-        "${SSH[@]}" "grep -q 'binary /usr/bin/acme-sensord' /etc/astro/deploy-drift" \
+        "${SSH[@]}" "grep -q 'binary /usr/bin/acme-sensord' /etc/crag/deploy-drift" \
             || fail "no drift record on the device"
     else
-        fail "astro-deploy --binary failed"
+        fail "crag-deploy --binary failed"
     fi
 else
     fail "skipped: no marked binary from case 1"
@@ -126,7 +126,7 @@ CBUILD_ARCH=$(cbuild_arch_for "$BOARD_ARCH")
 APK=$(find "${PROJECT_ROOT}/cports/packages/main/${CBUILD_ARCH}" -maxdepth 1 \
     -name 'acme-sensord-[0-9]*.apk' 2>/dev/null | sort -V | tail -1)
 if [ -n "$APK" ]; then
-    if "${PROJECT_ROOT}/sdk/astro-deploy.sh" acme-sensord \
+    if "${PROJECT_ROOT}/sdk/crag-deploy.sh" acme-sensord \
         --pkg "$APK" --to "127.0.0.1:${SSH_PORT}" --no-log; then
         # The packaged (marker-less) daemon is running again: the most
         # recent start line in the log must carry no deploy marker.
@@ -136,7 +136,7 @@ if [ -n "$APK" ]; then
         "${SSH[@]}" "apk query acme-sensord >/dev/null 2>&1 || apk list --installed 2>/dev/null | grep -q acme-sensord" \
             || fail "apk no longer owns acme-sensord after package deploy"
     else
-        fail "astro-deploy --pkg failed"
+        fail "crag-deploy --pkg failed"
     fi
 else
     fail "no acme-sensord apk in cports/packages/main/${CBUILD_ARCH} (build the tree image first)"

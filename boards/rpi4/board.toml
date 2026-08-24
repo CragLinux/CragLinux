@@ -61,7 +61,7 @@ rootfs_size = "512M"       # per slot; build fails if squashfs exceeds it
 data_min_size = "64M"
 
 [rauc]
-compatible = "astro-rpi4"
+compatible = "crag-rpi4"
 bootloader = "uboot"
 
 [image]

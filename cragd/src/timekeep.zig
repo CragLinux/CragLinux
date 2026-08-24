@@ -1,13 +1,13 @@
 //! Time floor + sync surface (docs/07 §6, M3 phase 4). Battery-less
 //! boards boot in 1970; TLS then fails before NTP has run. This module:
 //!
-//!  - applies the monotonic time FLOOR at astrod startup:
-//!    clock_settime(REALTIME) to max(/etc/astro/build-epoch,
-//!    /data/.astro/last-known-time) when the clock is behind it. The
+//!  - applies the monotonic time FLOOR at cragd startup:
+//!    clock_settime(REALTIME) to max(/etc/crag/build-epoch,
+//!    /data/.crag/last-known-time) when the clock is behind it. The
 //!    build-epoch file is baked at rootfs assembly (SOURCE_DATE_EPOCH or
 //!    build time — build/lib/rootfs.sh bake_time_defaults); firstboot
 //!    (root) applies the same floor even earlier in boot.
-//!    RECORDED DEVIATION: astrod runs unprivileged (uid 300, no
+//!    RECORDED DEVIATION: cragd runs unprivileged (uid 300, no
 //!    CAP_SYS_TIME), so its own clock_settime attempt fails EPERM on the
 //!    image whenever the floor actually needs applying — the call is
 //!    kept (correct under tests/root and self-documenting), the failure
@@ -17,13 +17,13 @@
 //!    matters: dispatch a root oneshot via the dinit client (docs/02 §7
 //!    residual-root-ops pattern).
 //!  - persists last-known-time hourly and before deferred shutdowns
-//!    (the file is created astrod-owned by tmpfiles.d/astrod.conf —
-//!    /data/.astro itself stays root-owned).
+//!    (the file is created cragd-owned by tmpfiles.d/cragd.conf —
+//!    /data/.crag itself stays root-owned).
 //!  - answers time.synced for GET /system via adjtimex() STA_UNSYNC —
 //!    a raw syscall read of the kernel's own NTP status (chronyd clears
 //!    STA_UNSYNC once it disciplines the clock); no shell-outs, no
 //!    chronyc protocol.
-//!  - gates astrod's OWN https update installs: allowed when synced OR
+//!  - gates cragd's OWN https update installs: allowed when synced OR
 //!    now > floor (update.zig URL path, docs/07 §6 item 3).
 
 const std = @import("std");
@@ -32,8 +32,8 @@ const linux = std.os.linux;
 const fsutil = @import("fsutil.zig");
 const sync = @import("sync.zig");
 
-pub const build_epoch_path = "/etc/astro/build-epoch";
-pub const last_known_path = "/data/.astro/last-known-time";
+pub const build_epoch_path = "/etc/crag/build-epoch";
+pub const last_known_path = "/data/.crag/last-known-time";
 
 /// Hourly persist cadence (docs/07 §6 item 1).
 pub const persist_interval_s: u64 = 3600;
@@ -142,7 +142,7 @@ pub const timex = extern struct {
 /// or fails — callers must treat that as "not synced".
 fn readTimex() ?timex {
     var tx: timex = .{};
-    // __NR_adjtimex exists on all Astro targets (x86_64 124, arm EABI
+    // __NR_adjtimex exists on all Crag targets (x86_64 124, arm EABI
     // 124, aarch64 via asm-generic 171); guard anyway so an exotic
     // target degrades to "unknown" instead of failing the build.
     if (!@hasField(linux.SYS, "adjtimex")) return null;

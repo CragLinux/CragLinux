@@ -1,11 +1,11 @@
 # External-tree identity + compatibility (docs/08 §2).
 #
 # priority orders this tree among all trees passed to the build (lower
-# merges first, higher wins conflicts — docs/08 §4). astro_min fails the
-# build fast on an incompatible Astro; the gate is bypassed for local
-# dev builds (no ASTRO_VERSION set / the 0.0.0-dev sentinel).
+# merges first, higher wins conflicts — docs/08 §4). crag_min fails the
+# build fast on an incompatible Crag; the gate is bypassed for local
+# dev builds (no CRAG_VERSION set / the 0.0.0-dev sentinel).
 [tree]
 name = "acme-product"
 priority = 50
-astro_min = "2026.05"
-astro_max = ""
+crag_min = "2026.05"
+crag_max = ""

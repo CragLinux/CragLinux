@@ -1,12 +1,12 @@
 """
-Astro external-tree SERVICE MANIFEST reader (docs/08 §5).
+Crag external-tree SERVICE MANIFEST reader (docs/08 §5).
 
-An app apk installs `usr/lib/astro/services/<name>.toml` next to its dinit
+An app apk installs `usr/lib/crag/services/<name>.toml` next to its dinit
 service file. At IMAGE ASSEMBLY the hook boards/common/hooks/40-service-
 manifests.sh reads every manifest that landed in the ASSEMBLED rootfs (they
 arrive via apk, NOT via overlay — the code/config fence in merge.sh forbids
 apps in overlays) and wires: system users, /data/apps/<name> data dirs, the
-per-service env file, boot-success dependencies, astro-api group membership,
+per-service env file, boot-success dependencies, crag-api group membership,
 and service enablement.
 
 This module is the single validated reader those consumers share. Validation
@@ -20,11 +20,11 @@ Schema (schema.py:SERVICE_MANIFEST_SCHEMA, docs/08 §5):
     [service]
       name             (str,  required)
       user             (str,  opt "")     system user; "" => runs as root
-      data_dir         (bool, opt False)  true => /data/apps/<name>, ASTRO_DATA_DIR
+      data_dir         (bool, opt False)  true => /data/apps/<name>, CRAG_DATA_DIR
     [integration]
       boot_success     (bool, opt False)  depends-on of boot-success (AD-011)
       api_controllable (bool, opt False)  POST /services/<name>/{restart,stop,start}
-      api_client       (bool, opt False)  join astro-api group (unix socket)
+      api_client       (bool, opt False)  join crag-api group (unix socket)
 
 APP-USER UID SCHEME (deterministic, stable across builds)
 ---------------------------------------------------------
@@ -36,7 +36,7 @@ every machine, regardless of build order or which other apps are present:
 
     APP_UID_MIN = 400, APP_UID_MAX = 899   (500 stable slots)
 
-Range rationale: above the platform users (astrod uid/gid 300, astro-api gid
+Range rationale: above the platform users (cragd uid/gid 300, crag-api gid
 301 — 05-platform-users.sh) and comfortably below the human-user floor (1000),
 so app users never collide with either. SHA-256 (not Python's salted hash())
 keeps the value independent of PYTHONHASHSEED / interpreter version. Hash
@@ -67,7 +67,7 @@ from schema import SERVICE_MANIFEST_SCHEMA  # noqa: E402
 ConfigError = _config.ConfigError
 
 # The rootfs-relative directory apk-installed manifests live in (docs/08 §5).
-SERVICES_SUBDIR = "usr/lib/astro/services"
+SERVICES_SUBDIR = "usr/lib/crag/services"
 
 # App-user uid window (see module docstring).
 APP_UID_MIN = 400
@@ -158,7 +158,7 @@ def parse_manifest(path):
             f"Configuration errors in {path}:\n"
             f"  [service].name = '{name}' must match the manifest file stem "
             f"'{stem}' (the file is installed as "
-            f"usr/lib/astro/services/<name>.toml — docs/08 §5)"
+            f"usr/lib/crag/services/<name>.toml — docs/08 §5)"
         )
     return ServiceManifest(cfg, path)
 
@@ -166,7 +166,7 @@ def parse_manifest(path):
 def read_manifests(rootfs_dir):
     """Every validated manifest in an assembled rootfs, sorted by name.
 
-    Globs <rootfs_dir>/usr/lib/astro/services/*.toml. Returns [] when the
+    Globs <rootfs_dir>/usr/lib/crag/services/*.toml. Returns [] when the
     directory is absent (the no-app / no-external-tree path — the assembly
     hook is then a no-op and the image is byte-identical). Deterministic
     order (sorted by service name) so downstream effects (uid assignment,
@@ -183,7 +183,7 @@ def read_manifests(rootfs_dir):
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Astro service-manifest reader (docs/08 §5)")
+    parser = argparse.ArgumentParser(description="Crag service-manifest reader (docs/08 §5)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_read = sub.add_parser("read", help="Emit all manifests in an assembled rootfs as JSON")

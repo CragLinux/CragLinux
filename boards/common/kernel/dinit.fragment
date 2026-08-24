@@ -1,4 +1,4 @@
-# Astro Linux - dinit-chimera early-boot service requirements
+# Crag Linux - dinit-chimera early-boot service requirements
 #
 # Diagnosis of the two known boot failures on the M0 dev image
 # (GAP-REPORT §4 item 9, build/state/logs/p1-09-final-boot.log):

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Astro Linux - Common shell library
+# Crag Linux - Common shell library
 # Sourced by build scripts, not executed directly.
 
 # Color output

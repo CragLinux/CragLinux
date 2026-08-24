@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Astro SDK — image-derived app sysroot (AD-002, docs/03 §3, docs/08 §6).
+# Crag SDK — image-derived app sysroot (AD-002, docs/03 §3, docs/08 §6).
 #
 # "Sysroot generated from the built image's package set: apk-install
 # *-devel of everything in the image into a staging sysroot, so apps
@@ -42,15 +42,15 @@ set -euo pipefail
 # cross flag (target, march, lld, compiler-rt) is inherited.
 #
 # Usage:  sdk/stage-sysroot.sh <board> <variant>
-# Needs:  the image built (astro-build.sh <board> <variant>) and the
+# Needs:  the image built (crag-build.sh <board> <variant>) and the
 #         SDK toolchain for its arch (sdk/build-toolchain.sh <arch>).
-# Runs host-side or in the astro-builder container (apk via
-# resolve_apk, same as the astrod deps extraction).
+# Runs host-side or in the crag-builder container (apk via
+# resolve_apk, same as the cragd deps extraction).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${PROJECT_ROOT}/build/lib/common.sh"
-source "${PROJECT_ROOT}/build/lib/astrod.sh"   # resolve_apk
+source "${PROJECT_ROOT}/build/lib/cragd.sh"   # resolve_apk
 
 BOARD="${1:?Usage: $0 <board> <variant>}"
 VARIANT="${2:?Usage: $0 <board> <variant>}"
@@ -58,7 +58,7 @@ VARIANT="${2:?Usage: $0 <board> <variant>}"
 IMAGE_DIR="${PROJECT_ROOT}/build/state/images/${BOARD}-${VARIANT}"
 INSTALLED_DB="${IMAGE_DIR}/rootfs/lib/apk/db/installed"
 [ -f "$INSTALLED_DB" ] || \
-    die "no installed-package DB at ${INSTALLED_DB} — build the image first: ./build/astro-build.sh ${BOARD} ${VARIANT}"
+    die "no installed-package DB at ${INSTALLED_DB} — build the image first: ./build/crag-build.sh ${BOARD} ${VARIANT}"
 
 BOARD_ARCH=$(python3 "${PROJECT_ROOT}/build/lib/config.py" board \
     "${PROJECT_ROOT}/boards/${BOARD}/board.toml" --format=json | \
@@ -158,9 +158,9 @@ DEVEL_PKGS+=("linux-headers")
     die "no -devel packages resolved from ${INSTALLED_DB} — is the cports checkout present?"
 
 ##############################################################################
-# 2. Idempotency stamp (astrod.sh extract pattern)
+# 2. Idempotency stamp (cragd.sh extract pattern)
 ##############################################################################
-STAMP="${SYSROOT_DIR}/.astro-sysroot-stamp"
+STAMP="${SYSROOT_DIR}/.crag-sysroot-stamp"
 WANT_STAMP=$(printf '%s\n' "${DEVEL_PKGS[@]}" | sort)
 if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$WANT_STAMP" ]; then
     log_info "app sysroot up to date (${SYSROOT_DIR})"
@@ -187,7 +187,7 @@ if ls "${PROJECT_ROOT}/cports/etc/keys/"*.pub >/dev/null 2>&1; then
 fi
 
 # Local repo first (version pins make it win deterministically); Chimera
-# fallback for devel subpackages Astro never built. armv7 has no Chimera
+# fallback for devel subpackages Crag never built. armv7 has no Chimera
 # binary repo (docs/10 §4) — local only there.
 {
     echo "v3 ${LOCAL_REPO}"
@@ -244,7 +244,7 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 CMAKE
 
 cat > "${SDK_DIR}/environment" <<ENVF
-# Astro app-SDK environment for ${BOARD}/${VARIANT} (docs/08 §6).
+# Crag app-SDK environment for ${BOARD}/${VARIANT} (docs/08 §6).
 # Source me:  . ${SDK_DIR#"${PROJECT_ROOT}"/}/environment
 export SYSROOT="${SYSROOT_DIR}"
 export CC="${SDK_DIR}/bin/${TRIPLE}-clang"

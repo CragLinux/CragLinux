@@ -1,11 +1,11 @@
-# Astro Linux - network stack for the M3 phase-3 network group
+# Crag Linux - network stack for the M3 phase-3 network group
 # (docs/02 §6 shared-fragment convention; docs/07 §1 AD-015: iwd manages
-# wifi ONLY, dhcpcd owns addressing, astrod is the policy brain).
+# wifi ONLY, dhcpcd owns addressing, cragd is the policy brain).
 #
 # The wifi/crypto list is taken from iwd's OWN runtime capability check:
 # iwd-3.12 src/main.c check_crypto() names exactly these CONFIG_* symbols
 # when a kernel is missing them (verified against the pinned tarball, not
-# the wiki). Everything =y — Astro kernels are monolithic (AD-006).
+# the wiki). Everything =y — Crag kernels are monolithic (AD-006).
 
 # cfg80211/mac80211: the wifi subsystem iwd drives over nl80211. RFKILL
 # is cfg80211's soft-block interface (iwctl adapter ... property).
@@ -50,9 +50,9 @@ CONFIG_TUN=y
 # Netfilter for the phase-4 AP captive portal (docs/07 §4) and general
 # firewalling. nftables only (no legacy xtables) — dinit-chimera carries
 # no iptables userspace. The exact ruleset these serve is
-# usr/lib/astro/portal-redirect-up.sh in the common overlay:
+# usr/lib/crag/portal-redirect-up.sh in the common overlay:
 #
-#   table ip astro_portal {
+#   table ip crag_portal {
 #     chain prerouting {
 #       type nat hook prerouting priority dstnat;
 #       iifname "wlan0" tcp dport 80 redirect to :8080

@@ -1,5 +1,5 @@
 """
-Astro image-stage partition layout calculator (docs/04 §2, AD-007).
+Crag image-stage partition layout calculator (docs/04 §2, AD-007).
 
 Pure computation: board [partitions] sizes in -> byte-exact offsets, an
 sfdisk script, and per-partition population parameters out. No I/O beyond
@@ -43,8 +43,8 @@ MIB = 1024 * 1024
 ALIGN = MIB  # 1 MiB partition alignment
 SECTOR = 512
 
-# UUIDv5 namespace for deterministic GUIDs (random fixed value, Astro-local)
-ASTRO_UUID_NS = uuid.UUID("5aa50a25-66cb-45b7-8b4f-8b7a2e4d95d1")
+# UUIDv5 namespace for deterministic GUIDs (random fixed value, Crag-local)
+CRAG_UUID_NS = uuid.UUID("5aa50a25-66cb-45b7-8b4f-8b7a2e4d95d1")
 
 SIZE_RE = re.compile(r"^([1-9][0-9]*)([KMG])$")
 MULT = {"K": 1024, "M": 1024**2, "G": 1024**3}
@@ -67,7 +67,7 @@ def compute_layout(board_config, source_date_epoch=None):
     Returns the dict described in the module docstring.
     """
     parts_cfg = board_config.get("partitions", {})
-    board_id = board_config.get("board", {}).get("name", "astro")
+    board_id = board_config.get("board", {}).get("name", "crag")
 
     esp = size_to_bytes(parts_cfg.get("esp_size", "64M"))
     bootenv = size_to_bytes(parts_cfg.get("bootenv_size", "1M"))
@@ -89,7 +89,7 @@ def compute_layout(board_config, source_date_epoch=None):
         if source_date_epoch is None:
             return None
         return str(
-            uuid.uuid5(ASTRO_UUID_NS, f"{board_id}/{name}/{source_date_epoch}")
+            uuid.uuid5(CRAG_UUID_NS, f"{board_id}/{name}/{source_date_epoch}")
         ).upper()
 
     partitions = []
@@ -151,7 +151,7 @@ def stamp_hybrid_mbr(image_path, layout):
 
     The Raspberry Pi EEPROM boot ROM scans the SD card's MBR for the
     first FAT partition and does not reliably boot pure-GPT cards, while
-    Astro's A/B machinery (root=PARTLABEL=..., RAUC slots) needs the
+    Crag's A/B machinery (root=PARTLABEL=..., RAUC slots) needs the
     real GPT. A hybrid MBR serves both: entry 1 exposes the esp as
     FAT32-LBA (0x0C) for the firmware; entry 2 is the 0xEE protective
     entry covering the GPT structures below the esp. Linux partition

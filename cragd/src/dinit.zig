@@ -1,7 +1,7 @@
 //! dinit control-socket client (dinit 0.22.0, control protocol v6).
 //!
-//! astrod never shells out (AD-016); privileged actions like reboot are
-//! requests over dinit's control socket, keeping astrod unprivileged
+//! cragd never shells out (AD-016); privileged actions like reboot are
+//! requests over dinit's control socket, keeping cragd unprivileged
 //! (docs/02 §7). Protocol source of truth is the pinned cports tree
 //! (cports/sources/dinit-0.22.0/v0.22.0.tar.gz — same version shipped in
 //! the image rootfs, verified via the dinitctl binary's version string):
@@ -14,7 +14,7 @@
 //!   src/shutdown.cc                   SHUTDOWN command framing
 //!
 //! dinit memcpy's wire integers in host byte order. Client and daemon always
-//! share one machine and every astro target is little-endian, so we pack
+//! share one machine and every crag target is little-endian, so we pack
 //! explicitly little-endian; this would need revisiting only for a BE port.
 
 const std = @import("std");
@@ -24,7 +24,7 @@ const linux = std.os.linux;
 /// dinit's system control socket: configure default SYSCONTROLSOCKET for
 /// Linux (dinit-0.22.0/configure line 484) and present as a string in the
 /// shipped dinitctl (build/state/images/qemu-armv7-dev/rootfs/usr/bin).
-/// Access from uid astrod needs socket-permission wiring — recorded followup.
+/// Access from uid cragd needs socket-permission wiring — recorded followup.
 pub const default_socket_path = "/run/dinitctl";
 
 /// Highest protocol version this client knows about (dinit 0.22.0 daemons
@@ -39,7 +39,7 @@ pub const protocol_version: u16 = 6;
 // binary (dinit-0.22.0 src/shutdown.cc), which sends cp_cmd::SHUTDOWN plus a
 // one-byte shutdown_type_t over /run/dinitctl. The correct reboot path on
 // this image is therefore requestShutdown(.reboot)/(.poweroff), NOT starting
-// a oneshot. These names are reserved for astro-packaged pre-shutdown
+// a oneshot. These names are reserved for crag-packaged pre-shutdown
 // oneshots (boards/common/overlay/etc/dinit.d) if we later need audit hooks;
 // startServiceByName is ready for them and for docs/06 §5.4 api_controllable.
 pub const reboot_service = "sys-reboot"; // not packaged yet — see above
@@ -98,7 +98,7 @@ pub const ShutdownType = enum(u8) {
 /// service state (service-constants.h service_state_t) and the running
 /// process pid (present only while the service holds a live process).
 /// dinit's control protocol carries NO automatic-restart counter in any
-/// status buffer — restart counts in astrod's /services surface are the
+/// status buffer — restart counts in cragd's /services surface are the
 /// count of API-initiated restarts, tracked by services.zig, not read here.
 pub const ServiceRuntime = struct {
     /// srvstate_t: 0 STOPPED, 1 STARTING, 2 STARTED, 3 STOPPING.
@@ -119,7 +119,7 @@ pub fn stateName(state: u8) []const u8 {
 }
 
 /// Fixed size of the v5 status buffer (control.cc STATUS_BUFFER5_SIZE =
-/// 6 + 2*sizeof(int)). int is 4 bytes on every astro target, so this is a
+/// 6 + 2*sizeof(int)). int is 4 bytes on every crag target, so this is a
 /// deterministic 14 — unlike the v6 buffer, whose trailing struct timespec
 /// is architecture-sized. We query SERVICESTATUS5 for exactly that reason.
 pub const status_buffer5_len: usize = 14;
@@ -277,7 +277,7 @@ pub const Client = struct {
     /// ACK = stop initiated (async — dinit resolves it), ALREADYSS =
     /// already stopped; both are success. DEPENDENTS means a gentle stop
     /// would take dependents down — surfaced as StopFailed rather than
-    /// escalating to force (astrod stops only leaf oneshots/services).
+    /// escalating to force (cragd stops only leaf oneshots/services).
     pub fn stopService(self: *Client, handle: u32) ClientError!void {
         var buf: [6]u8 = undefined;
         try self.writeAll(encodeStopService(&buf, handle, stop_flags_gentle));
@@ -398,7 +398,7 @@ pub const Client = struct {
 };
 
 /// One-shot connect + load + start. The future api_controllable start path
-/// (docs/06 §5.4), and the reboot path if astro packages oneshot hooks.
+/// (docs/06 §5.4), and the reboot path if crag packages oneshot hooks.
 pub fn startServiceByName(socket_path: []const u8, name: []const u8) ClientError!void {
     var client = try Client.connect(socket_path);
     defer client.deinit();

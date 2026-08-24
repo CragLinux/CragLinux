@@ -1,19 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
-# Astro Linux - cports update-currency report (host entry point).
+# Crag Linux - cports update-currency report (host entry point).
 #
 # Sweeps the forked port tree with cbuild's update-check machinery and
 # writes a JSON+Markdown report of packages with newer upstream releases,
-# prioritized by shipped/Astro-owned so an agent (or a human) can work
+# prioritized by shipped/Crag-owned so an agent (or a human) can work
 # the list down. Owning the fork means owning version currency; this is
 # the tool that makes that tractable (see cports/README.md "Why a fork").
 #
-# Runs inside astro-builder (cbuild + network live there).
+# Runs inside crag-builder (cbuild + network live there).
 #
 # Usage:
-#   ./build/astro-update-report.sh [--scope astro|shipped|all] [--jobs N]
-#     astro    (default) only the Astro-maintained fork delta — fast
+#   ./build/crag-update-report.sh [--scope crag|shipped|all] [--jobs N]
+#     crag    (default) only the Crag-maintained fork delta — fast
 #     shipped  packages installed in some image — the security-currency set
 #     all      the whole tree — the nightly full sweep
 
@@ -22,10 +22,10 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 if [ ! -f /run/.containerenv ] && [ ! -f /.dockerenv ]; then
     ENGINE="${CONTAINER_ENGINE:-$(command -v podman >/dev/null && echo podman || echo docker)}"
-    IMAGE_NAME="${CONTAINER_IMAGE:-astro-builder}"
+    IMAGE_NAME="${CONTAINER_IMAGE:-crag-builder}"
     exec "$ENGINE" run --rm --userns=keep-id --privileged \
         -v "${PROJECT_ROOT}:/workspace:Z" "$IMAGE_NAME" \
-        -c "cd /workspace && ./build/astro-update-report.sh $*"
+        -c "cd /workspace && ./build/crag-update-report.sh $*"
 fi
 
 python3 "${SCRIPT_DIR}/lib/update_report.py" "$@"

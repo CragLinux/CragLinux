@@ -1,13 +1,13 @@
 # external-tree-acme — the docs/08 reference tree
 
 A **complete, buildable** external product tree, kept green in CI
-(`astro-ci.sh` step `external-tree`). Every section of
+(`crag-ci.sh` step `external-tree`). Every section of
 [docs/08](../../docs/08-external-trees.md) points at a file here; if a
 contract question isn't answered there, the answer is demonstrated
 here.
 
 ```
-./build/astro-build.sh qemu-x86_64 acme-prod \
+./build/crag-build.sh qemu-x86_64 acme-prod \
     --external=examples/external-tree-acme
 ./build/test-boot-smoke.sh qemu-x86_64 acme-prod
 ```
@@ -25,14 +25,14 @@ here.
 | §4 | tree PROVIDES a variant | [`variants/acme-prod.toml`](variants/acme-prod.toml) |
 | §5 | service manifest → platform wiring | [`…/files/acme-sensord.toml`](cports/main/acme-sensord/files/acme-sensord.toml) |
 | §5 | env-file, run-as, deps | [`…/files/acme-sensord`](cports/main/acme-sensord/files/acme-sensord) (dinit service) |
-| §5, §7 | the api_client pattern | [`…/files/acme-sensord.c`](cports/main/acme-sensord/files/acme-sensord.c) — `GET /network` + `GET /update/status` over `$ASTRO_API_SOCKET` at startup |
+| §5, §7 | the api_client pattern | [`…/files/acme-sensord.c`](cports/main/acme-sensord/files/acme-sensord.c) — `GET /network` + `GET /update/status` over `$CRAG_API_SOCKET` at startup |
 
 ## What lands on the image
 
 - `acme-sensord` apk in the image world (`apk query` sees it, versions
   and all), its service enabled, running as the generated `acme` system
-  user with `/data/apps/acme-sensord` writable and the astrod socket
-  reachable (astro-api group).
+  user with `/data/apps/acme-sensord` writable and the cragd socket
+  reachable (crag-api group).
 - `POST /api/v1/services/acme-sensord/restart` works
   (`api_controllable = true`); the service does **not** gate rollback
   (`boot_success = false`).
@@ -46,8 +46,8 @@ here.
   refuses to build otherwise.
 - dinit service files: all `key = value` lines before any `key: value`
   dependency lines (cports style lint).
-- `depends-on:` targets are provider-checked at package time; Astro's
-  `astrod`/`data-mount` are overlay services no apk provides, so the
+- `depends-on:` targets are provider-checked at package time; Crag's
+  `cragd`/`data-mount` are overlay services no apk provides, so the
   `-dinit` subpackage sets `!scanrundeps`.
 - A tree-provided prod-shaped variant must set `[rootfs].type =
   "squashfs"` explicitly — the stem-based default only special-cases a

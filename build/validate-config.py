@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Validate Astro Linux board and variant configuration files.
+Validate Crag Linux board and variant configuration files.
 
 Usage:
     build/validate-config.py boards/rpi4/board.toml
@@ -57,7 +57,7 @@ def validate_all(project_root):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Validate Astro Linux configs")
+    parser = argparse.ArgumentParser(description="Validate Crag Linux configs")
     parser.add_argument("path", nargs="?", help="Path to .toml config file")
     parser.add_argument(
         "--variant",

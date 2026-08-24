@@ -1,5 +1,5 @@
-# Astro: the RAUC update daemon (docs/05 §4, AD-011). dinit-supervised —
-# D-Bus activation was considered and rejected (docs/05 §4). astrod (M3)
+# Crag: the RAUC update daemon (docs/05 §4, AD-011). dinit-supervised —
+# D-Bus activation was considered and rejected (docs/05 §4). cragd (M3)
 # and rauc-mark-good talk to it over the system bus.
 
 type = process

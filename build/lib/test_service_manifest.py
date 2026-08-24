@@ -12,7 +12,7 @@ Covers the schema.py:SERVICE_MANIFEST_SCHEMA contract and the reader:
     * read_manifests: empty on a bare rootfs (the no-app byte-identical path),
       sorted + validated across a populated services dir
 
-Run (host or the astro-builder container), from the repo root:
+Run (host or the crag-builder container), from the repo root:
 
     python3 build/lib/test_service_manifest.py            # verbose unittest
     python3 -m unittest build.lib.test_service_manifest   # (if run as pkg)

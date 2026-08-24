@@ -75,7 +75,7 @@ pub const Context = struct {
     param: ?[]const u8 = null,
     /// Action the connection layer must run AFTER the response is on the
     /// wire. Power actions cannot run inline: dinit begins teardown (and
-    /// kills astrod) immediately, so an inline SHUTDOWN raced the 202 and
+    /// kills cragd) immediately, so an inline SHUTDOWN raced the 202 and
     /// clients saw a truncated response (observed on qemu-armv7).
     /// Per-connection by construction: each connection thread builds its
     /// own Context, so deferred actions never cross threads.
@@ -93,7 +93,7 @@ pub const Context = struct {
 pub const DeferredAction = union(enum) {
     shutdown: dinit.ShutdownType,
     /// POST /system/factory-reset accepted: dispatch the
-    /// astro-factory-reset root oneshot (flag + sync + reboot) with the
+    /// crag-factory-reset root oneshot (flag + sync + reboot) with the
     /// 202 already on the wire — same discipline as shutdown.
     factory_reset,
     /// PUT wifi/connection on the AP surface with the AP up: run the
@@ -258,7 +258,7 @@ pub fn dispatch(ctx: *Context) Response {
         for (portal_routes) |route| {
             if (route.method == ctx.request.method and std.mem.eql(u8, route.path, ctx.request.path)) {
                 return route.handler(ctx) catch problemResponse(ctx, .{
-                    .type = "urn:astro:problem:internal",
+                    .type = "urn:crag:problem:internal",
                     .title = "Internal Server Error",
                     .status = 500,
                 });
@@ -266,7 +266,7 @@ pub fn dispatch(ctx: *Context) Response {
         }
         if (!apAllowed(ctx.request.method, ctx.request.path)) {
             return problemResponse(ctx, .{
-                .type = "urn:astro:problem:forbidden",
+                .type = "urn:crag:problem:forbidden",
                 .title = "Forbidden",
                 .status = 403,
                 .detail = "the AP provisioning surface serves only the unauthenticated subset (docs/06 \u{a7}6): GET /api/v1/system, POST /api/v1/network/wifi/scan, GET /api/v1/network/wifi/networks, PUT /api/v1/network/wifi/connection, and the portal page",
@@ -281,7 +281,7 @@ pub fn dispatch(ctx: *Context) Response {
                 ctx.param = param;
                 return route.handler(ctx) catch
                     problemResponse(ctx, .{
-                        .type = "urn:astro:problem:internal",
+                        .type = "urn:crag:problem:internal",
                         .title = "Internal Server Error",
                         .status = 500,
                     });
@@ -290,13 +290,13 @@ pub fn dispatch(ctx: *Context) Response {
     }
     if (path_known) {
         return problemResponse(ctx, .{
-            .type = "urn:astro:problem:method-not-allowed",
+            .type = "urn:crag:problem:method-not-allowed",
             .title = "Method Not Allowed",
             .status = 405,
         });
     }
     return problemResponse(ctx, .{
-        .type = "urn:astro:problem:not-found",
+        .type = "urn:crag:problem:not-found",
         .title = "Not Found",
         .status = 404,
     });
@@ -308,7 +308,7 @@ pub fn problemResponse(ctx: *Context, p: problem.Problem) Response {
     const body = problem.render(ctx.allocator, p) catch
         // OOM while rendering an error: fall back to a static body that is
         // still valid problem+json, keeping the wire contract.
-        \\{"type":"urn:astro:problem:internal","title":"Internal Server Error","status":500}
+        \\{"type":"urn:crag:problem:internal","title":"Internal Server Error","status":500}
     ;
     return .{ .status = p.status, .content_type = problem.content_type, .body = body };
 }
@@ -330,13 +330,13 @@ fn getSystem(ctx: *Context) anyerror!Response {
 const machine_id_path = "/etc/machine-id";
 
 /// The docs/02 §7 residual-root-ops oneshot POST /system/factory-reset
-/// dispatches (boards/common/overlay/etc/dinit.d/astro-factory-reset).
-pub const factory_reset_service = "astro-factory-reset";
+/// dispatches (boards/common/overlay/etc/dinit.d/crag-factory-reset).
+pub const factory_reset_service = "crag-factory-reset";
 
 /// WifiApState assembly (docs/06 §5.2): enabled from the live
 /// AccessPoint.Started mirror, ssid from the same machine-id derivation
 /// the radio beacons, subnet from the baked pool. The PSK is NEVER
-/// served over HTTP — `astroctl wifi ap show` derives it locally on the
+/// served over HTTP — `cragctl wifi ap show` derives it locally on the
 /// socket-only surface (the label story).
 fn wifiApStateResponse(ctx: *Context) anyerror!Response {
     const w = wifi_mod.global.?;
@@ -386,7 +386,7 @@ fn putWifiAp(ctx: *Context) anyerror!Response {
         else => return badRequestProblem(ctx, invalid_detail),
     };
     ctx.store.setApEnabledOverride(override) catch return problemResponse(ctx, .{
-        .type = "urn:astro:problem:store-failed",
+        .type = "urn:crag:problem:store-failed",
         .title = "Internal Server Error",
         .status = 500,
         .detail = "persisting system.ap.enabled_override failed",
@@ -397,7 +397,7 @@ fn putWifiAp(ctx: *Context) anyerror!Response {
 
 fn badRequestProblem(ctx: *Context, detail: []const u8) Response {
     return problemResponse(ctx, .{
-        .type = "urn:astro:problem:bad-request",
+        .type = "urn:crag:problem:bad-request",
         .title = "Bad Request",
         .status = 400,
         .detail = detail,
@@ -406,7 +406,7 @@ fn badRequestProblem(ctx: *Context, detail: []const u8) Response {
 
 /// POST /api/v1/system/factory-reset — confirm-with-serial (docs/06
 /// §5.1): {"confirm": "<machine-id>"} must match this device, then the
-/// astro-factory-reset root oneshot (flag + sync + reboot; data-mount
+/// crag-factory-reset root oneshot (flag + sync + reboot; data-mount
 /// wipes /data on the way back up — docs/07 §5) is dispatched AFTER the
 /// 202 is on the wire (deferred discipline). dinit and the service are
 /// probed before answering so failures still surface as HTTP errors.
@@ -426,7 +426,7 @@ fn postFactoryReset(ctx: *Context) anyerror!Response {
         break :blk std.mem.trim(u8, text, " \t\r\n");
     };
     if (mid.len == 0) return problemResponse(ctx, .{
-        .type = "urn:astro:problem:internal",
+        .type = "urn:crag:problem:internal",
         .title = "Internal Server Error",
         .status = 500,
         .detail = "machine-id unavailable; the confirm token cannot be verified",
@@ -437,17 +437,17 @@ fn postFactoryReset(ctx: *Context) anyerror!Response {
     // Probe: dinit reachable AND the oneshot loadable — after the 202
     // there is no error channel left (same TOCTOU stance as powerAction).
     var probe = dinit.Client.connect(dinit.default_socket_path) catch return problemResponse(ctx, .{
-        .type = "urn:astro:problem:dinit-unavailable",
+        .type = "urn:crag:problem:dinit-unavailable",
         .title = "Service Unavailable",
         .status = 503,
         .detail = "cannot reach the dinit control socket",
     });
     defer probe.deinit();
     _ = probe.loadService(factory_reset_service) catch return problemResponse(ctx, .{
-        .type = "urn:astro:problem:internal",
+        .type = "urn:crag:problem:internal",
         .title = "Internal Server Error",
         .status = 500,
-        .detail = "the astro-factory-reset service is not loadable",
+        .detail = "the crag-factory-reset service is not loadable",
     });
     ctx.deferred = .factory_reset;
     return .{ .status = 202, .body = "{\"operation\":null}" };
@@ -461,7 +461,7 @@ fn postPoweroff(ctx: *Context) anyerror!Response {
     return powerAction(ctx, .poweroff);
 }
 
-// Reboot/poweroff stay root-only (docs/02 §7); astrod asks dinit over its
+// Reboot/poweroff stay root-only (docs/02 §7); cragd asks dinit over its
 // control socket. On a dinit-chimera image there are no sys-reboot/
 // sys-poweroff oneshots — /usr/bin/reboot IS dinit's shutdown client — so
 // the correct mechanism is the SHUTDOWN command (verified in dinit.zig).
@@ -475,13 +475,13 @@ fn powerAction(ctx: *Context, t: dinit.ShutdownType) anyerror!Response {
         // Unreachable/permission-denied control socket: the daemon itself
         // is fine, the mechanism is unavailable — 503, not 500.
         error.ConnectFailed => .{
-            .type = "urn:astro:problem:dinit-unavailable",
+            .type = "urn:crag:problem:dinit-unavailable",
             .title = "Service Unavailable",
             .status = 503,
             .detail = "cannot reach the dinit control socket",
         },
         else => .{
-            .type = "urn:astro:problem:internal",
+            .type = "urn:crag:problem:internal",
             .title = "Internal Server Error",
             .status = 500,
             .detail = "dinit control handshake failed",
@@ -506,7 +506,7 @@ fn notImplemented(ctx: *Context) anyerror!Response {
         .{ ctx.request.method, ctx.request.path },
     );
     return problemResponse(ctx, .{
-        .type = "urn:astro:problem:not-implemented",
+        .type = "urn:crag:problem:not-implemented",
         .title = "Not Implemented",
         .status = 501,
         .detail = detail,
@@ -526,7 +526,7 @@ fn getServices(ctx: *Context) anyerror!Response {
     const reg = services.global orelse return notImplemented(ctx);
     const list = reg.list(ctx.allocator) catch |err| switch (err) {
         error.DinitUnavailable => return problemResponse(ctx, .{
-            .type = "urn:astro:problem:dinit-unavailable",
+            .type = "urn:crag:problem:dinit-unavailable",
             .title = "Service Unavailable",
             .status = 503,
             .detail = "cannot reach the dinit control socket",
@@ -570,13 +570,13 @@ fn serviceAction(ctx: *Context, action: ServiceAction) anyerror!Response {
         // 404 NOT 403 — a non-api_controllable name is indistinguishable
         // from a nonexistent one on this narrow surface (docs/06 §5.4).
         error.UnknownService => return problemResponse(ctx, .{
-            .type = "urn:astro:problem:not-found",
+            .type = "urn:crag:problem:not-found",
             .title = "Not Found",
             .status = 404,
             .detail = try std.fmt.allocPrint(ctx.allocator, "no api-controllable service {s} (docs/06 \u{a7}5.4)", .{name}),
         }),
         error.DinitUnavailable => return problemResponse(ctx, .{
-            .type = "urn:astro:problem:dinit-unavailable",
+            .type = "urn:crag:problem:dinit-unavailable",
             .title = "Service Unavailable",
             .status = 503,
             .detail = "cannot reach the dinit control socket",
@@ -591,10 +591,10 @@ fn serviceAction(ctx: *Context, action: ServiceAction) anyerror!Response {
 /// clients can distinguish "reserved" from "not wired yet".
 fn cellularReserved(ctx: *Context) anyerror!Response {
     return problemResponse(ctx, .{
-        .type = "urn:astro:problem:not-implemented",
+        .type = "urn:crag:problem:not-implemented",
         .title = "Not Implemented",
         .status = 501,
-        .detail = "cellular is a reserved namespace (docs/06 §5.2): planned as ModemManager beside iwd with astrod orchestrating (docs/07 §1); the endpoint shape is pinned by the OpenAPI contract and will activate in a future release",
+        .detail = "cellular is a reserved namespace (docs/06 §5.2): planned as ModemManager beside iwd with cragd orchestrating (docs/07 §1); the endpoint shape is pinned by the OpenAPI contract and will activate in a future release",
     });
 }
 
@@ -606,7 +606,7 @@ fn getEvents(ctx: *Context) anyerror!Response {
     const bus = ctx.event_bus orelse return notImplemented(ctx);
     const sub = bus.subscribe(events.parseLastEventId(ctx.request.last_event_id)) catch |err| switch (err) {
         error.TooManySubscribers => return problemResponse(ctx, .{
-            .type = "urn:astro:problem:overloaded",
+            .type = "urn:crag:problem:overloaded",
             .title = "Service Unavailable",
             .status = 503,
             .detail = "SSE subscriber limit (16) reached; retry after another consumer disconnects",
@@ -631,7 +631,7 @@ fn getOperation(ctx: *Context) anyerror!Response {
     const reg = ops.global orelse return notImplemented(ctx);
     const id = ctx.param.?;
     const op = (try reg.get(ctx.allocator, id)) orelse return problemResponse(ctx, .{
-        .type = "urn:astro:problem:not-found",
+        .type = "urn:crag:problem:not-found",
         .title = "Not Found",
         .status = 404,
         .detail = try std.fmt.allocPrint(ctx.allocator, "no operation {s} in this daemon run (the registry is in-memory and restarts empty)", .{id}),
@@ -652,7 +652,7 @@ fn testCtx(allocator: std.mem.Allocator, st: *store_mod.Store, method: Method, p
 // Handlers only read the store, so a defaults-only store (missing file)
 // stands in for a real one.
 fn testStore() !store_mod.Store {
-    return store_mod.Store.load(std.testing.allocator, "/nonexistent/astro.json");
+    return store_mod.Store.load(std.testing.allocator, "/nonexistent/crag.json");
 }
 
 test "dispatch routes GET /api/v1/system to a 200 JSON body" {
@@ -680,7 +680,7 @@ test "dispatch answers 404 problem+json for unknown paths" {
     const resp = dispatch(&ctx);
     try std.testing.expectEqual(@as(u16, 404), resp.status);
     try std.testing.expectEqualStrings(problem.content_type, resp.content_type);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:astro:problem:not-found") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:crag:problem:not-found") != null);
 }
 
 test "dispatch answers 405 for known path with wrong method" {
@@ -723,7 +723,7 @@ test "unwired events/operations answer 501; param routes bind ctx.param" {
         const resp = dispatch(&ctx);
         try std.testing.expectEqual(@as(u16, 501), resp.status);
         try std.testing.expectEqualStrings(problem.content_type, resp.content_type);
-        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:astro:problem:not-implemented") != null);
+        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:crag:problem:not-implemented") != null);
     }
 
     // The param binds; a deeper path under the param route is a 404.
@@ -770,7 +770,7 @@ test "operations routes serve the registry when wired" {
     var missing_ctx = testCtx(arena.allocator(), &st, .GET, "/api/v1/operations/op-99");
     const missing = dispatch(&missing_ctx);
     try std.testing.expectEqual(@as(u16, 404), missing.status);
-    try std.testing.expect(std.mem.indexOf(u8, missing.body, "urn:astro:problem:not-found") != null);
+    try std.testing.expect(std.mem.indexOf(u8, missing.body, "urn:crag:problem:not-found") != null);
 }
 
 test "network group: every phase-3 route answers 501 problem+json" {
@@ -800,7 +800,7 @@ test "network group: every phase-3 route answers 501 problem+json" {
         const resp = dispatch(&ctx);
         try std.testing.expectEqual(@as(u16, 501), resp.status);
         try std.testing.expectEqualStrings(problem.content_type, resp.content_type);
-        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:astro:problem:not-implemented") != null);
+        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:crag:problem:not-implemented") != null);
     }
 
     // The {iface} param binds; ethernet without an iface is 404 (matchPath
@@ -836,7 +836,7 @@ test "phase-4 routes answer 501 problem+json on default surfaces" {
         var ctx = testCtx(arena.allocator(), &st, case.m, case.p);
         const resp = dispatch(&ctx);
         try std.testing.expectEqual(@as(u16, 501), resp.status);
-        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:astro:problem:not-implemented") != null);
+        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:crag:problem:not-implemented") != null);
     }
     // Wrong verbs are 405 (the paths are known).
     var wrong = testCtx(arena.allocator(), &st, .DELETE, "/api/v1/network/wifi/ap");
@@ -864,7 +864,7 @@ test "services group: unwired routes answer 501; {name} binds; wrong verb 405" {
         const resp = dispatch(&ctx);
         try std.testing.expectEqual(@as(u16, 501), resp.status);
         try std.testing.expectEqualStrings(problem.content_type, resp.content_type);
-        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:astro:problem:not-implemented") != null);
+        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:crag:problem:not-implemented") != null);
     }
 
     // The INTERIOR {name} param binds (proves the segment-wise matcher), and
@@ -929,7 +929,7 @@ test "AP surface serves exactly the unauthenticated subset, 403 otherwise" {
         const resp = dispatch(&ctx);
         try std.testing.expectEqual(@as(u16, 403), resp.status);
         try std.testing.expectEqualStrings(problem.content_type, resp.content_type);
-        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:astro:problem:forbidden") != null);
+        try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:crag:problem:forbidden") != null);
     }
 }
 
@@ -1010,5 +1010,5 @@ test "power actions answer 503 problem+json when dinit is unreachable" {
     const resp = dispatch(&ctx);
     try std.testing.expectEqual(@as(u16, 503), resp.status);
     try std.testing.expectEqualStrings(problem.content_type, resp.content_type);
-    try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:astro:problem:dinit-unavailable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp.body, "urn:crag:problem:dinit-unavailable") != null);
 }

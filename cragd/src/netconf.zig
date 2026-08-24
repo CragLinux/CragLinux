@@ -1,24 +1,24 @@
-//! Network-config rendering: astrod's desired state (store) → daemon-native
+//! Network-config rendering: cragd's desired state (store) → daemon-native
 //! files, per the docs/07 §2 rendering model as amended by the phase-3
 //! decisions:
 //!
-//!   dhcpcd  ← /run/astro/net/dhcpcd.conf (interface allowlist, static
+//!   dhcpcd  ← /run/crag/net/dhcpcd.conf (interface allowlist, static
 //!             blocks, per-interface `metric N` implementing the WAN
 //!             order — dhcpcd.conf(5) `metric`; NO rtnetlink surgery).
 //!             Bootstrap: tmpfiles pre-creates that path as a symlink to
-//!             the baked /etc/astro/dhcpcd-fallback.conf; the first render
+//!             the baked /etc/crag/dhcpcd-fallback.conf; the first render
 //!             atomically replaces the symlink with a real file (rename(2)
 //!             replaces the LINK, never writes through it), then
 //!             reloadDhcpcd() rebinds the running daemon. dhcpcd NEVER
-//!             depends on astrod (control plane, not data plane) — it
+//!             depends on cragd (control plane, not data plane) — it
 //!             starts fine on the fallback.
-//!   resolv  ← /run/astro-resolv/resolv.conf (the /etc/resolv.conf target;
+//!   resolv  ← /run/crag-resolv/resolv.conf (the /etc/resolv.conf target;
 //!             one writer). Inputs: static DNS from the store (wins) +
 //!             DHCP-learned DNS from the lease files the dhcpcd hook
 //!             writes, WAN-preferred interface first.
-//!   leases  ← /run/astro/net/leases/<iface>.json, written BY ROOT (the
-//!             dhcpcd hook, usr/lib/astro/dhcpcd-hook.sh in the common
-//!             overlay); astrod inotify-watches the directory and
+//!   leases  ← /run/crag/net/leases/<iface>.json, written BY ROOT (the
+//!             dhcpcd hook, usr/lib/crag/dhcpcd-hook.sh in the common
+//!             overlay); cragd inotify-watches the directory and
 //!             re-renders resolv.conf + publishes observed-state events.
 //!
 //! RELOAD MECHANISM (verified in dhcpcd-10.3.2 source; the manpage's
@@ -36,8 +36,8 @@
 //!     supported client channel.)
 //!   - access: the priv socket is 0660 root:<controlgroup>
 //!     (src/control.c:400,419 chown to ctx->control_group), so BOTH the
-//!     rendered config and the baked fallback say `controlgroup astrod` —
-//!     uid-300 astrod may connect without owning any part of dhcpcd.
+//!     rendered config and the baked fallback say `controlgroup cragd` —
+//!     uid-300 cragd may connect without owning any part of dhcpcd.
 //!   - fallback: if the socket cannot be reached the daemon is not
 //!     running; asking dinit to start the service (existing dinit.zig
 //!     client — a mechanism start, not a shell-out) makes it read the
@@ -61,16 +61,16 @@ const router = @import("router.zig");
 const provision = @import("provision.zig");
 
 /// Rendered-config paths (tmpfiles-owned parents; see the overlay's
-/// usr/lib/tmpfiles.d/astrod.conf for the ownership map).
-pub const dhcpcd_conf_path = "/run/astro/net/dhcpcd.conf";
-pub const dhcpcd_fallback_path = "/etc/astro/dhcpcd-fallback.conf";
-// DELIBERATELY OUTSIDE the 0750 /run/astro gate: /etc/resolv.conf must
+/// usr/lib/tmpfiles.d/cragd.conf for the ownership map).
+pub const dhcpcd_conf_path = "/run/crag/net/dhcpcd.conf";
+pub const dhcpcd_fallback_path = "/etc/crag/dhcpcd-fallback.conf";
+// DELIBERATELY OUTSIDE the 0750 /run/crag gate: /etc/resolv.conf must
 // be readable by EVERY user (musl getaddrinfo in any daemon — found
 // live: chronyd, dropped to _chrony, could never resolve the NTP pool
-// through the astro-api-gated dir, so time.synced stayed false forever).
-// /run/astro-resolv is a world-readable astrod-owned tmpfiles dir.
-pub const resolv_conf_path = "/run/astro-resolv/resolv.conf";
-pub const lease_dir = "/run/astro/net/leases";
+// through the crag-api-gated dir, so time.synced stayed false forever).
+// /run/crag-resolv is a world-readable cragd-owned tmpfiles dir.
+pub const resolv_conf_path = "/run/crag-resolv/resolv.conf";
+pub const lease_dir = "/run/crag/net/leases";
 
 /// dhcpcd's privileged control socket: RUNDIR "/sock" with the port's
 /// --rundir=/run/dhcpcd (dhcpcd-10.3.2 src/defs.h CONTROLSOCKET,
@@ -101,7 +101,7 @@ pub const Error = error{
 
 /// One parsed lease file (leases/<iface>.json, written by the root hook).
 /// Field set mirrors the hook's output document; unknown fields are
-/// tolerated (a newer hook may add facts before astrod learns them).
+/// tolerated (a newer hook may add facts before cragd learns them).
 pub const Lease = struct {
     iface: []const u8 = "",
     /// DHCP/RA-learned resolvers, in hook order.
@@ -117,7 +117,7 @@ pub const Lease = struct {
 // ---- classification helpers -------------------------------------------------
 
 /// WAN-order class of an interface name ("ethernet"/"wifi") — the same
-/// naming the store's network.wan.order uses. Kernel names on Astro
+/// naming the store's network.wan.order uses. Kernel names on Crag
 /// boards: eth*/en* wired, wlan* wireless.
 pub fn classOfInterface(name: []const u8) []const u8 {
     if (std.mem.startsWith(u8, name, "wlan")) return "wifi";
@@ -189,7 +189,7 @@ pub fn parseIpv4(s: []const u8) ?[4]u8 {
 }
 
 /// Loose IP-literal check for DNS entries: strict v4, or a v6-shaped
-/// hex-and-colon string (the resolver, not astrod, is the final judge).
+/// hex-and-colon string (the resolver, not cragd, is the final judge).
 fn isIpLiteral(s: []const u8) bool {
     if (parseIpv4(s) != null) return true;
     if (std.mem.indexOfScalar(u8, s, ':') == null) return false;
@@ -212,7 +212,7 @@ fn appendFmt(gpa: std.mem.Allocator, out: *std.ArrayList(u8), comptime fmt: []co
 // ---- renderers --------------------------------------------------------------
 
 /// Render the dhcpcd.conf document from the store: header, global options
-/// (`nohook resolv.conf`, `controlgroup astrod`, allowlist), WAN-order
+/// (`nohook resolv.conf`, `controlgroup cragd`, allowlist), WAN-order
 /// class blocks carrying `metric`, then one block per configured
 /// interface (static ip_address/routers for mode=static). Pure — caller
 /// writes it via writeRendered.
@@ -225,19 +225,19 @@ pub fn renderDhcpcdConf(allocator: std.mem.Allocator, st: *store_mod.Store) Erro
     const net = &st.config.network;
 
     out.appendSlice(allocator,
-        \\# dhcpcd.conf — RENDERED BY ASTROD, DO NOT EDIT (docs/07 §2).
-        \\# Desired state lives in /data/config/astro.json (network.*); this
-        \\# file is regenerated on astrod startup and on every config change.
-        \\# One resolv.conf writer: astrod renders /run/astro-resolv/resolv.conf
-        \\# store DNS + the lease exports (hook 60-astro-lease), so dhcpcd's
+        \\# dhcpcd.conf — RENDERED BY CRAGD, DO NOT EDIT (docs/07 §2).
+        \\# Desired state lives in /data/config/crag.json (network.*); this
+        \\# file is regenerated on cragd startup and on every config change.
+        \\# One resolv.conf writer: cragd renders /run/crag-resolv/resolv.conf
+        \\# store DNS + the lease exports (hook 60-crag-lease), so dhcpcd's
         \\# own resolv.conf hook stays off in BOTH this and the fallback conf.
         \\nohook resolv.conf
         \\# Send the system hostname to the DHCP server (dhcpcd.conf(5): an
         \\# empty name means the current kernel hostname).
         \\hostname
-        \\# chown /run/dhcpcd/sock root:astrod so unprivileged astrod can send
+        \\# chown /run/dhcpcd/sock root:cragd so unprivileged cragd can send
         \\# the rebind command after re-rendering (dhcpcd-10.3.2 control.c).
-        \\controlgroup astrod
+        \\controlgroup cragd
         \\# AD-015: dhcpcd owns addressing on wired AND wifi — iwd only
         \\# associates (EnableNetworkConfiguration=false).
         \\allowinterfaces eth* wlan*
@@ -261,7 +261,7 @@ pub fn renderDhcpcdConf(allocator: std.mem.Allocator, st: *store_mod.Store) Erro
         \\
         \\
         \\# WAN policy (network.wan.order): route preference via metrics,
-        \\# lowest wins — never rtnetlink surgery from astrod.
+        \\# lowest wins — never rtnetlink surgery from cragd.
         \\
     ) catch return error.OutOfMemory;
     for (net.wan.order, 0..) |class, idx| {
@@ -301,8 +301,8 @@ pub fn renderResolvConf(allocator: std.mem.Allocator, leases: []const Lease, st:
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     out.appendSlice(allocator,
-        \\# resolv.conf — rendered by astrod, DO NOT EDIT (docs/07 §2: one
-        \\# writer). Inputs: static DNS from /data/config/astro.json (wins
+        \\# resolv.conf — rendered by cragd, DO NOT EDIT (docs/07 §2: one
+        \\# writer). Inputs: static DNS from /data/config/crag.json (wins
         \\# per interface) + DHCP-learned servers exported by the dhcpcd
         \\# lease hook, WAN-preferred interface first.
         \\
@@ -472,7 +472,7 @@ fn controlSocketRebind() bool {
 /// Poke the running dhcpcd to re-read its config and rebind. Primary:
 /// the control-socket command (above). Fallback: the socket being gone
 /// means dhcpcd is down — ask dinit to start the service (it reads the
-/// rendered config on start); dhcpcd never depends on astrod, but astrod
+/// rendered config on start); dhcpcd never depends on cragd, but cragd
 /// may legitimately revive it after a crash-loop.
 pub fn reloadDhcpcd() Error!void {
     if (controlSocketRebind()) return;
@@ -907,7 +907,7 @@ fn notWired(ctx: *router.Context) router.Response {
         .{ ctx.request.method, ctx.request.path },
     ) catch null;
     return router.problemResponse(ctx, .{
-        .type = "urn:astro:problem:not-implemented",
+        .type = "urn:crag:problem:not-implemented",
         .title = "Not Implemented",
         .status = 501,
         .detail = detail,
@@ -916,7 +916,7 @@ fn notWired(ctx: *router.Context) router.Response {
 
 fn badRequest(ctx: *router.Context, detail: []const u8) router.Response {
     return router.problemResponse(ctx, .{
-        .type = "urn:astro:problem:bad-request",
+        .type = "urn:crag:problem:bad-request",
         .title = "Bad Request",
         .status = 400,
         .detail = detail,
@@ -925,7 +925,7 @@ fn badRequest(ctx: *router.Context, detail: []const u8) router.Response {
 
 fn persistFailure(ctx: *router.Context) router.Response {
     return router.problemResponse(ctx, .{
-        .type = "urn:astro:problem:store-persist",
+        .type = "urn:crag:problem:store-persist",
         .title = "Internal Server Error",
         .status = 500,
         .detail = "the config store could not be persisted to /data",
@@ -1148,7 +1148,7 @@ pub fn putWan(ctx: *router.Context) anyerror!router.Response {
 
 fn iwdUnavailable(ctx: *router.Context) router.Response {
     return router.problemResponse(ctx, .{
-        .type = "urn:astro:problem:iwd-unavailable",
+        .type = "urn:crag:problem:iwd-unavailable",
         .title = "Service Unavailable",
         .status = 503,
         .detail = "the wifi subsystem has no D-Bus connection to iwd",
@@ -1157,7 +1157,7 @@ fn iwdUnavailable(ctx: *router.Context) router.Response {
 
 fn noRadio(ctx: *router.Context) router.Response {
     return router.problemResponse(ctx, .{
-        .type = "urn:astro:problem:no-radio",
+        .type = "urn:crag:problem:no-radio",
         .title = "Service Unavailable",
         .status = 503,
         .detail = "no wifi radio is present on this device",
@@ -1166,7 +1166,7 @@ fn noRadio(ctx: *router.Context) router.Response {
 
 fn iwdError(ctx: *router.Context) router.Response {
     return router.problemResponse(ctx, .{
-        .type = "urn:astro:problem:iwd-error",
+        .type = "urn:crag:problem:iwd-error",
         .title = "Bad Gateway",
         .status = 502,
         .detail = "iwd rejected the request",
@@ -1351,25 +1351,25 @@ test "renderDhcpcdConf: golden static + dhcp + metric assignment" {
     defer testing.allocator.free(conf);
 
     const golden =
-        \\# dhcpcd.conf — RENDERED BY ASTROD, DO NOT EDIT (docs/07 §2).
-        \\# Desired state lives in /data/config/astro.json (network.*); this
-        \\# file is regenerated on astrod startup and on every config change.
-        \\# One resolv.conf writer: astrod renders /run/astro-resolv/resolv.conf
-        \\# store DNS + the lease exports (hook 60-astro-lease), so dhcpcd's
+        \\# dhcpcd.conf — RENDERED BY CRAGD, DO NOT EDIT (docs/07 §2).
+        \\# Desired state lives in /data/config/crag.json (network.*); this
+        \\# file is regenerated on cragd startup and on every config change.
+        \\# One resolv.conf writer: cragd renders /run/crag-resolv/resolv.conf
+        \\# store DNS + the lease exports (hook 60-crag-lease), so dhcpcd's
         \\# own resolv.conf hook stays off in BOTH this and the fallback conf.
         \\nohook resolv.conf
         \\# Send the system hostname to the DHCP server (dhcpcd.conf(5): an
         \\# empty name means the current kernel hostname).
         \\hostname
-        \\# chown /run/dhcpcd/sock root:astrod so unprivileged astrod can send
+        \\# chown /run/dhcpcd/sock root:cragd so unprivileged cragd can send
         \\# the rebind command after re-rendering (dhcpcd-10.3.2 control.c).
-        \\controlgroup astrod
+        \\controlgroup cragd
         \\# AD-015: dhcpcd owns addressing on wired AND wifi — iwd only
         \\# associates (EnableNetworkConfiguration=false).
         \\allowinterfaces eth* wlan*
         \\
         \\# WAN policy (network.wan.order): route preference via metrics,
-        \\# lowest wins — never rtnetlink surgery from astrod.
+        \\# lowest wins — never rtnetlink surgery from cragd.
         \\interface eth*
         \\metric 100
         \\interface wlan*
@@ -1853,7 +1853,7 @@ test "assembleNetworkJson: the GET /network merge shape" {
         .radio_present = true,
         .powered = true,
         .mode = .station,
-        .connected_ssid = "astro-test",
+        .connected_ssid = "crag-test",
         .rssi_dbm = -48,
         .station_state = "connected",
     };
@@ -1899,12 +1899,12 @@ test "GET /network via handler: wired manager serves 200; unwired is 501" {
 
     // Unwired (global == null): 501 problem, matching the router's
     // pre-followup behavior for the whole group.
-    var st0 = try store_mod.Store.load(testing.allocator, "/nonexistent/astro.json");
+    var st0 = try store_mod.Store.load(testing.allocator, "/nonexistent/crag.json");
     defer st0.deinit();
     var unwired: router.Context = .{ .allocator = arena, .store = &st0, .request = .{ .method = .GET, .path = "/api/v1/network" } };
     const cold = try getNetwork(&unwired);
     try testing.expectEqual(@as(u16, 501), cold.status);
-    try testing.expect(std.mem.indexOf(u8, cold.body, "urn:astro:problem:not-implemented") != null);
+    try testing.expect(std.mem.indexOf(u8, cold.body, "urn:crag:problem:not-implemented") != null);
 
     var rig: HandlerRig = .{ .st = undefined, .mgr = undefined };
     try rig.init("netconf-getnet", golden_store_doc);

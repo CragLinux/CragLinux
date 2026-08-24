@@ -1,4 +1,4 @@
-# Astro U-Boot boot script — Raspberry Pi flavor (docs/04 §4, AD-009).
+# Crag U-Boot boot script — Raspberry Pi flavor (docs/04 §4, AD-009).
 # Board override of boards/common/uboot/boot.script.in (the image stage
 # prefers boards/<board>/uboot/boot.script.in when present): same
 # BOOT_ORDER / BOOT_<slot>_LEFT slot logic, with two hardware changes:
@@ -29,32 +29,32 @@ for BOOT_SLOT in ${BOOT_ORDER}; do
     if test "x${BOOT_SLOT}" = "xA"; then
         if test ${BOOT_A_LEFT} -gt 0; then
             setexpr BOOT_A_LEFT ${BOOT_A_LEFT} - 1
-            echo "Astro: trying slot A (${BOOT_A_LEFT} attempts left)"
+            echo "Crag: trying slot A (${BOOT_A_LEFT} attempts left)"
             saveenv
-            if part number mmc 1 boot.A astro_bootpart; then
-                if fatload mmc 1:${astro_bootpart} ${kernel_addr_r} @KERNEL_IMG@; then
+            if part number mmc 1 boot.A crag_bootpart; then
+                if fatload mmc 1:${crag_bootpart} ${kernel_addr_r} @KERNEL_IMG@; then
                     setenv bootargs "@CMDLINE@ root=PARTLABEL=rootfs.A @ROOTFLAGS@ rauc.slot=A"
                     @BOOTCMD@ ${kernel_addr_r} - ${fdt_addr}
                 fi
             fi
-            echo "Astro: slot A failed to boot"
+            echo "Crag: slot A failed to boot"
         fi
     fi
     if test "x${BOOT_SLOT}" = "xB"; then
         if test ${BOOT_B_LEFT} -gt 0; then
             setexpr BOOT_B_LEFT ${BOOT_B_LEFT} - 1
-            echo "Astro: trying slot B (${BOOT_B_LEFT} attempts left)"
+            echo "Crag: trying slot B (${BOOT_B_LEFT} attempts left)"
             saveenv
-            if part number mmc 1 boot.B astro_bootpart; then
-                if fatload mmc 1:${astro_bootpart} ${kernel_addr_r} @KERNEL_IMG@; then
+            if part number mmc 1 boot.B crag_bootpart; then
+                if fatload mmc 1:${crag_bootpart} ${kernel_addr_r} @KERNEL_IMG@; then
                     setenv bootargs "@CMDLINE@ root=PARTLABEL=rootfs.B @ROOTFLAGS@ rauc.slot=B"
                     @BOOTCMD@ ${kernel_addr_r} - ${fdt_addr}
                 fi
             fi
-            echo "Astro: slot B failed to boot"
+            echo "Crag: slot B failed to boot"
         fi
     fi
 done
 
-echo "Astro: no bootable slot (all attempts exhausted) - resetting"
+echo "Crag: no bootable slot (all attempts exhausted) - resetting"
 reset

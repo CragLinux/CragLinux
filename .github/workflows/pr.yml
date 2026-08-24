@@ -1,7 +1,7 @@
-# Astro Linux - per-PR pipeline (AD-024, docs/10 §4)
+# Crag Linux - per-PR pipeline (AD-024, docs/10 §4)
 #
 # THIN WRAPPER ONLY: no pipeline logic lives here. Everything runs via
-# `./build/astro-ci.sh pr` inside the astro-builder container — a
+# `./build/crag-ci.sh pr` inside the crag-builder container — a
 # developer reproduces any failure with the same command locally.
 # Runner choice is a capacity decision (AD-024); GitHub-hosted works for
 # QEMU-TCG suites since no KVM is required.
@@ -44,16 +44,16 @@ jobs:
             cports/cbuild_cache
             sources
             toolchain
-          key: astro-ci-${{ hashFiles('.harbormaster.lock') }}-${{ github.ref_name }}
+          key: crag-ci-${{ hashFiles('.harbormaster.lock') }}-${{ github.ref_name }}
           restore-keys: |
-            astro-ci-${{ hashFiles('.harbormaster.lock') }}-
-            astro-ci-
+            crag-ci-${{ hashFiles('.harbormaster.lock') }}-
+            crag-ci-
 
-      - name: Build astro-builder container
-        run: podman build -t astro-builder -f container/Containerfile container/
+      - name: Build crag-builder container
+        run: podman build -t crag-builder -f container/Containerfile container/
 
-      - name: astro ci pr
-        run: ./build/astro-ci.sh pr
+      - name: crag ci pr
+        run: ./build/crag-ci.sh pr
 
       - name: Publish test results
         if: always()

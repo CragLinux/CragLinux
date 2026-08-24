@@ -1,11 +1,11 @@
 #!/bin/bash
-# Astro Linux - Kernel build
+# Crag Linux - Kernel build
 # Sourced by build-inner.sh, not executed directly.
 #
 # Downloads, patches, configures, and cross-compiles the Linux kernel
 # using the project's Clang/LLVM toolchain.
 
-# Map Astro arch to kernel ARCH and build targets
+# Map Crag arch to kernel ARCH and build targets
 kernel_arch_map() {
     local board_arch="$1"
     case "$board_arch" in
@@ -85,7 +85,7 @@ patch_kernel_source() {
     local board_dir="$3"
     local apply_clang_patches="$4"
 
-    local marker="${kernel_src}/.astro-patches-applied"
+    local marker="${kernel_src}/.crag-patches-applied"
     if [ -f "$marker" ]; then
         log_info "Kernel patches already applied"
         return 0
@@ -208,7 +208,7 @@ configure_kernel() {
     local cfg_hash
     cfg_hash=$(kernel_config_hash "$board_dir" "$defconfig_name" "$lto_setting" "$config_fragments_json")
     if [ -f "${build_dir}/.config" ] && \
-       [ "$(cat "${build_dir}/.astro-kernel-configured" 2>/dev/null)" = "$cfg_hash" ]; then
+       [ "$(cat "${build_dir}/.crag-kernel-configured" 2>/dev/null)" = "$cfg_hash" ]; then
         log_info "Kernel already configured (inputs unchanged), skipping"
         return 0
     fi
@@ -299,7 +299,7 @@ configure_kernel() {
     # Step 4: Final resolve
     "${make_env[@]}" olddefconfig
 
-    echo "$cfg_hash" > "${build_dir}/.astro-kernel-configured"
+    echo "$cfg_hash" > "${build_dir}/.crag-kernel-configured"
     log_info "Kernel configured"
     cd "$PROJECT_ROOT"
 }

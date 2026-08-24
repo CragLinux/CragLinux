@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Astro Linux - AD-020 gate: full A/B update + rollback test (docs/10 §4)
+# Crag Linux - AD-020 gate: full A/B update + rollback test (docs/10 §4)
 #
 # Runs against the DEV variant (same A/B layout and update machinery as
 # prod — docs/02 §3; dev additionally ships sshd + the dev test key, which
@@ -10,14 +10,14 @@ set -euo pipefail
 # Phases (docs/10 §4 item 4; each is one junit <testcase>):
 #   boot-slot-a    boot the built image on a +1G scratch overlay, wait
 #                  for SSH, assert slot A booted and was marked good
-#   api-install    install the current build's bundle THROUGH THE ASTROD
-#                  API in-guest (astroctl update install -> staged upload
+#   api-install    install the current build's bundle THROUGH THE CRAGD
+#                  API in-guest (cragctl update install -> staged upload
 #                  -> AD-021 gate -> RAUC operation polled to completion)
 #                  -> installs to slot B; assert the operation succeeded
 #                  and update.progress events were published
-#   api-apply-flip apply via the API (astroctl update apply) -> assert
+#   api-apply-flip apply via the API (cragctl update apply) -> assert
 #                  slot B booted + marked good (slot flip worked)
-#   poison-rollback build a POISONED bundle (astrod health check
+#   poison-rollback build a POISONED bundle (cragd health check
 #                  sabotaged -> boot-success unreachable), install ->
 #                  goes to slot A; reboot -> bootloader prefers A; each
 #                  attempt fails, the boot-success watchdog forces
@@ -62,9 +62,9 @@ tl_containerize "build/test-update-rollback.sh" "$BOARD" "--timeout=${TIMEOUT}"
 tl_init "ad020-${BOARD}" "$BOARD" "$VARIANT"
 SSH_PORT=$(( 20000 + RANDOM % 10000 ))
 tl_ssh_init
-VERSION="${ASTRO_VERSION:-0.0.0-dev}"
-BUNDLE="${TL_OUT}/astro-${BOARD}-${VERSION}.raucb"
-[ -f "$BUNDLE" ] || { echo "ERROR: bundle not found: ${BUNDLE} — run ./build/astro-build.sh ${BOARD} ${VARIANT} --step=bundle"; exit 1; }
+VERSION="${CRAG_VERSION:-0.0.0-dev}"
+BUNDLE="${TL_OUT}/crag-${BOARD}-${VERSION}.raucb"
+[ -f "$BUNDLE" ] || { echo "ERROR: bundle not found: ${BUNDLE} — run ./build/crag-build.sh ${BOARD} ${VARIANT} --step=bundle"; exit 1; }
 
 ##############################################################################
 # Phase: boot-slot-a — first boot, slot A good
@@ -82,25 +82,25 @@ phase_boot_slot_a() {
 
     # Shorten the boot-success watchdog for the rollback phase (test knob
     # — /data survives updates, so the poisoned slot sees it too)
-    "${SSH[@]}" "echo 45 > /data/.astro/boot-watchdog-timeout" || \
+    "${SSH[@]}" "echo 45 > /data/.crag/boot-watchdog-timeout" || \
         fail "could not set watchdog timeout knob"
 }
 
 ##############################################################################
-# Phase: api-install — the current bundle through the astrod API -> slot B
+# Phase: api-install — the current bundle through the cragd API -> slot B
 #
 # This phase is the API-path half of the both-paths coverage (see header):
-# astroctl streams the bundle into POST /api/v1/update, the AD-021 gate and
-# InspectBundle run in astrod, and astroctl polls the returned operation to
+# cragctl streams the bundle into POST /api/v1/update, the AD-021 gate and
+# InspectBundle run in cragd, and cragctl polls the returned operation to
 # a terminal state — its exit code IS the operation-completion assertion.
 ##############################################################################
 phase_api_install() {
-    echo "[STEP] Installing bundle via astrod API ($(basename "$BUNDLE"))..."
+    echo "[STEP] Installing bundle via cragd API ($(basename "$BUNDLE"))..."
     "${SSH[@]}" "cat > /data/update.raucb" < "$BUNDLE" || fail "bundle upload failed"
     local INSTALL_LOG="${TL_LOG_DIR}/ad020-${BOARD}-api-install.log"
-    if ! "${SSH[@]}" "astroctl update install /data/update.raucb" > "$INSTALL_LOG" 2>&1; then
+    if ! "${SSH[@]}" "cragctl update install /data/update.raucb" > "$INSTALL_LOG" 2>&1; then
         cat "$INSTALL_LOG" >> "$SERIAL_LOG"
-        fail "API install failed (astroctl update install — see transcript in serial log)"
+        fail "API install failed (cragctl update install — see transcript in serial log)"
         return 1
     fi
     cat "$INSTALL_LOG" >> "$SERIAL_LOG"
@@ -108,10 +108,10 @@ phase_api_install() {
         fail "install transcript missing the operation-succeeded line"
 
     # Event assertion: at least one update.progress event must have been
-    # published. astroctl's drain mode replays the daemon's event ring
+    # published. cragctl's drain mode replays the daemon's event ring
     # (Last-Event-ID: 0) and exits at the first quiet period.
     local EVENTS_LOG="${TL_LOG_DIR}/ad020-${BOARD}-events.log"
-    "${SSH[@]}" "astroctl events" > "$EVENTS_LOG" 2>&1 || fail "astroctl events drain failed"
+    "${SSH[@]}" "cragctl events" > "$EVENTS_LOG" 2>&1 || fail "cragctl events drain failed"
     cat "$EVENTS_LOG" >> "$SERIAL_LOG"
     grep -q 'update\.progress' "$EVENTS_LOG" || \
         fail "no update.progress event observed in the event ring"
@@ -126,7 +126,7 @@ phase_api_apply_flip() {
     # transcript (or the ssh exit status) can be lost in that race —
     # apply is best-effort here; the hard assertions are the slot flip +
     # mark-good below.
-    "${SSH[@]}" "astroctl update apply" >> "$SERIAL_LOG" 2>&1 || \
+    "${SSH[@]}" "cragctl update apply" >> "$SERIAL_LOG" 2>&1 || \
         echo "[WARN] apply transcript lost (connection dropped at reboot); relying on slot assertions"
     # Event-driven reboot tracking: wait for the guest to actually go
     # DOWN first, so the following wait cannot be satisfied by the old
@@ -145,7 +145,7 @@ phase_api_apply_flip() {
 # Phase: poison-rollback — poisoned bundle -> slot A, automatic rollback
 #
 # DELIBERATELY installs via direct `rauc install` over SSH, not the API:
-# the api-install phase already covered the astrod path, and this keeps the
+# the api-install phase already covered the cragd path, and this keeps the
 # non-API entry point (docs/05 §5.2 USB/offline flows call RAUC the same
 # way) under the gate. It also sidesteps the AD-021 version gate for the
 # poisoned bundle, which is exactly the raw-RAUC behavior we want to prove
@@ -157,12 +157,12 @@ slot_b_remarked_good() {
 }
 
 phase_poison_rollback() {
-    echo "[STEP] Building poisoned bundle (astrod health check sabotaged)..."
+    echo "[STEP] Building poisoned bundle (cragd health check sabotaged)..."
     local PW="${TL_OUT}/image-work/poison"
     rm -rf "$PW"; mkdir -p "$PW"
     cp --reflink=auto "${TL_OUT}/image-work/rootfs.ext4" "${PW}/rootfs.img"
-    # remove the astrod binary -> astrod fails -> boot-success unreachable
-    debugfs -w -R "rm /usr/bin/astrod" "${PW}/rootfs.img" >/dev/null 2>&1
+    # remove the cragd binary -> cragd fails -> boot-success unreachable
+    debugfs -w -R "rm /usr/bin/cragd" "${PW}/rootfs.img" >/dev/null 2>&1
     cp --reflink=auto "${TL_OUT}/image-work/boot.vfat" "${PW}/boot.vfat"
     local COMPAT
     COMPAT=$(python3 "${SCRIPT_DIR}/lib/config.py" board "${PROJECT_ROOT}/boards/${BOARD}/board.toml" --format=json | jq -r '.rauc.compatible')
@@ -180,7 +180,7 @@ filename=rootfs.img
 [image.boot]
 filename=boot.vfat
 EOF
-    local POISON="${TL_OUT}/astro-${BOARD}-poisoned.raucb"
+    local POISON="${TL_OUT}/crag-${BOARD}-poisoned.raucb"
     rm -f "$POISON"
     rauc bundle --cert="${PROJECT_ROOT}/keys/dev/rauc-signing.cert.pem" \
                 --key="${PROJECT_ROOT}/keys/dev/rauc-signing.key.pem" \
@@ -202,7 +202,7 @@ EOF
 
     # The guest now: boots A (poisoned) -> watchdog reboot xN -> falls
     # back to B -> marks good. Wait for SSH to return AND the slot to be
-    # B (ssh may transiently answer on the poisoned slot: astrod broken
+    # B (ssh may transiently answer on the poisoned slot: cragd broken
     # but sshd runs — the watchdog still reboots it; keep waiting).
     local rollback_ok=false slot
     while [ "$(elapsed)" -lt "$TIMEOUT" ]; do
@@ -214,7 +214,7 @@ EOF
     done
     if [ "$rollback_ok" = true ]; then
         local n_wd
-        n_wd=$(grep -ac 'astro-boot-watchdog: boot-success not reached' "$SERIAL_LOG" || :)
+        n_wd=$(grep -ac 'crag-boot-watchdog: boot-success not reached' "$SERIAL_LOG" || :)
         [ "${n_wd:-0}" -ge 1 ] || fail "no watchdog force-reboot observed in serial log"
         # final marked-good on B after the fallback (2nd occurrence)
         tl_wait_for "slot B re-marked good" 120 slot_b_remarked_good || \

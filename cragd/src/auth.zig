@@ -1,5 +1,5 @@
 //! Authentication for the AD-014 surfaces:
-//!  - unix socket: filesystem-gated by group astro-api; peer is trusted.
+//!  - unix socket: filesystem-gated by group crag-api; peer is trusted.
 //!  - 127.0.0.1 TCP (localhost) and opt-in LAN: Bearer token from
 //!    /data/config/api-token.
 //!  - AP provisioning listener: no bearer token — the router serves ONLY
@@ -18,7 +18,7 @@ pub const default_token_path = "/data/config/api-token";
 /// Listener surfaces (AD-014 table, docs/06 §6). Every listener fd is
 /// tagged at bind time; the tag rides the Context into the router so
 /// auth AND route policy can differ per surface:
-///   unix      /run/astro/astrod.sock — group-gated, no token
+///   unix      /run/crag/cragd.sock — group-gated, no token
 ///   localhost 127.0.0.1:8080         — bearer token
 ///   lan       0.0.0.0 (opt-in, AD-025 default off; phase-4 spine only
 ///             carries the tag — the LAN listener itself is future fill)
@@ -83,7 +83,7 @@ pub fn checkBearer(token_file_path: []const u8, header_value: ?[]const u8) bool 
     return constantTimeEql(expected, presented);
 }
 
-/// Unix-socket peers passed the astro-api group gate at connect() time.
+/// Unix-socket peers passed the crag-api group gate at connect() time.
 /// TODO(fill): SO_PEERCRED logging of uid/pid for the audit trail.
 pub fn allowUnixPeer() bool {
     return true;

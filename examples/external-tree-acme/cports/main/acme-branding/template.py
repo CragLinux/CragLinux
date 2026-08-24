@@ -10,7 +10,7 @@ pkgver = "1.0.0"
 pkgrel = 0
 pkgdesc = "ACME product branding and default configuration"
 license = "custom:example"
-url = "https://example.org/astro/external-tree-acme"
+url = "https://example.org/crag/external-tree-acme"
 # /etc contents are apk-protected config files
 options = ["etcfiles"]
 

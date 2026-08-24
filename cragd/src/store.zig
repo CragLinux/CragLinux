@@ -1,4 +1,4 @@
-//! Config store: one versioned JSON document at /data/config/astro.json,
+//! Config store: one versioned JSON document at /data/config/crag.json,
 //! atomic writes (tmp + fsync + rename + parent-dir fsync), restorable-
 //! from-/data contract (docs/06 §1).
 //!
@@ -13,7 +13,7 @@ const linux = std.os.linux;
 const fsutil = @import("fsutil.zig");
 const sync = @import("sync.zig");
 
-pub const default_path = "/data/config/astro.json";
+pub const default_path = "/data/config/crag.json";
 pub const schema_version: u32 = 1;
 
 const max_document_len = 1024 * 1024;
@@ -30,7 +30,7 @@ pub const LoadError = error{
 /// every field has a default (a phase-2 document parses unchanged).
 pub const Config = struct {
     schema: u32 = schema_version,
-    hostname: []const u8 = "astro",
+    hostname: []const u8 = "crag",
     system: System = .{},
     api: Api = .{},
     network: Network = .{},
@@ -265,9 +265,9 @@ pub const Store = struct {
     /// Atomic persist: serialize → <path>.tmp (0640, fsync) → rename →
     /// fsync parent dir. The dir fsync is what makes the *rename* durable
     /// across power loss, not just the bytes. Deployment: firstboot seeds
-    /// the document astrod-owned (0600) and chowns /data/config to
-    /// astrod:astro-api 0710, so the unprivileged daemon can create the
-    /// tmp file and rename; rewrites land 0640 astrod:astrod (the group
+    /// the document cragd-owned (0600) and chowns /data/config to
+    /// cragd:crag-api 0710, so the unprivileged daemon can create the
+    /// tmp file and rename; rewrites land 0640 cragd:cragd (the group
     /// is the daemon's primary group — sole member: the daemon).
     /// Caller holds the exclusive lock (beginMutate or persist()).
     pub fn persistLocked(self: *const Store) !void {
@@ -346,7 +346,7 @@ fn check(rc: usize) fsutil.Error!usize {
 }
 
 /// Like fsutil.writeFileSync but with an explicit mode: the store document
-/// is 0640 (group astro-api readable, world-unreadable — docs/06 §6),
+/// is 0640 (group crag-api readable, world-unreadable — docs/06 §6),
 /// while fsutil's default 0644 suits its other callers.
 fn writeFileSyncMode(path: []const u8, bytes: []const u8, mode: linux.mode_t) fsutil.Error!void {
     const path_z = posix.toPosixPath(path) catch return error.NameTooLong;
@@ -380,10 +380,10 @@ fn syncParentDir(path: []const u8) fsutil.Error!void {
 // ---- tests -----------------------------------------------------------------
 
 test "load returns defaults when the file is absent" {
-    var s = try Store.load(std.testing.allocator, "/nonexistent/astro.json");
+    var s = try Store.load(std.testing.allocator, "/nonexistent/crag.json");
     defer s.deinit();
     try std.testing.expectEqual(schema_version, s.getSchema());
-    try std.testing.expectEqualStrings("astro", s.getHostname());
+    try std.testing.expectEqualStrings("crag", s.getHostname());
     try std.testing.expectEqualStrings("factory", s.getProvisioning());
     try std.testing.expect(!s.getLanExposure());
     try std.testing.expect(s.getApi().wifi);
@@ -401,7 +401,7 @@ test "load returns defaults when the file is absent" {
 test "network subtree: parse, defaults inside entries, persist round-trip" {
     const allocator = std.testing.allocator;
     var path_buf: [128]u8 = undefined;
-    const path = fsutil.testTmpPath(&path_buf, "astro-net.json");
+    const path = fsutil.testTmpPath(&path_buf, "crag-net.json");
     defer fsutil.unlink(path) catch {};
     try fsutil.writeFileSync(path,
         \\{"schema": 1,
@@ -412,7 +412,7 @@ test "network subtree: parse, defaults inside entries, persist round-trip" {
         \\              "dns": ["192.0.2.53"]},
         \\     "eth1": {}
         \\   },
-        \\   "wifi": {"connection": {"ssid": "astro-test", "psk": "hunter22"}},
+        \\   "wifi": {"connection": {"ssid": "crag-test", "psk": "hunter22"}},
         \\   "wan": {"order": ["wifi", "ethernet"]}
         \\ }}
     );
@@ -432,7 +432,7 @@ test "network subtree: parse, defaults inside entries, persist round-trip" {
     try std.testing.expect(eth1.ipv4.address == null);
 
     const conn = s.getWifiConnection().?;
-    try std.testing.expectEqualStrings("astro-test", conn.ssid);
+    try std.testing.expectEqualStrings("crag-test", conn.ssid);
     try std.testing.expectEqualStrings("hunter22", conn.psk);
     try std.testing.expectEqualStrings("wifi", s.getWanOrder()[0]);
 
@@ -441,7 +441,7 @@ test "network subtree: parse, defaults inside entries, persist round-trip" {
     var s2 = try Store.load(allocator, path);
     defer s2.deinit();
     try std.testing.expectEqualStrings("192.0.2.10", s2.getEthernet("eth0").?.ipv4.address.?);
-    try std.testing.expectEqualStrings("astro-test", s2.getWifiConnection().?.ssid);
+    try std.testing.expectEqualStrings("crag-test", s2.getWifiConnection().?.ssid);
     try std.testing.expectEqualStrings("wifi", s2.getWanOrder()[0]);
     try std.testing.expectEqual(schema_version, s2.getSchema());
 }
@@ -449,7 +449,7 @@ test "network subtree: parse, defaults inside entries, persist round-trip" {
 test "persist writes atomically, fsyncs, and load round-trips all subtrees" {
     const allocator = std.testing.allocator;
     var path_buf: [128]u8 = undefined;
-    const path = fsutil.testTmpPath(&path_buf, "astro.json");
+    const path = fsutil.testTmpPath(&path_buf, "crag.json");
     defer fsutil.unlink(path) catch {};
 
     var s = try Store.load(allocator, path);
@@ -477,7 +477,7 @@ test "persist writes atomically, fsyncs, and load round-trips all subtrees" {
 
 test "load refuses a document with a newer schema" {
     var path_buf: [128]u8 = undefined;
-    const path = fsutil.testTmpPath(&path_buf, "astro-v2.json");
+    const path = fsutil.testTmpPath(&path_buf, "crag-v2.json");
     defer fsutil.unlink(path) catch {};
     try fsutil.writeFileSync(path,
         \\{"schema": 2, "hostname": "from-the-future"}
@@ -488,7 +488,7 @@ test "load refuses a document with a newer schema" {
 
 test "load tolerates unknown fields from newer writers within the schema" {
     var path_buf: [128]u8 = undefined;
-    const path = fsutil.testTmpPath(&path_buf, "astro-fwd.json");
+    const path = fsutil.testTmpPath(&path_buf, "crag-fwd.json");
     defer fsutil.unlink(path) catch {};
     try fsutil.writeFileSync(path,
         \\{"schema": 1, "hostname": "h1",
@@ -571,11 +571,11 @@ test "mergePatch: the PATCH /network/ethernet/{iface} shape" {
 test "phase-4 additive fields: defaults, parse, persist round-trip (schema stays 1)" {
     const allocator = std.testing.allocator;
     var path_buf: [128]u8 = undefined;
-    const path = fsutil.testTmpPath(&path_buf, "astro-p4.json");
+    const path = fsutil.testTmpPath(&path_buf, "crag-p4.json");
     defer fsutil.unlink(path) catch {};
 
     // Defaults on a document that predates phase 4.
-    var d = try Store.load(allocator, "/nonexistent/astro.json");
+    var d = try Store.load(allocator, "/nonexistent/crag.json");
     defer d.deinit();
     try std.testing.expect(!d.getWiredProvisions());
     try std.testing.expect(d.getApEnabledOverride() == null);
@@ -607,12 +607,12 @@ test "load falls back to defaults on a corrupt document" {
     // TODO(fill): becomes last-known-good + degraded health later; the
     // contract under test now is "never crash, never propagate garbage".
     var path_buf: [128]u8 = undefined;
-    const path = fsutil.testTmpPath(&path_buf, "astro-corrupt.json");
+    const path = fsutil.testTmpPath(&path_buf, "crag-corrupt.json");
     defer fsutil.unlink(path) catch {};
     try fsutil.writeFileSync(path, "{\"schema\": 1, \"hostn");
 
     var s = try Store.load(std.testing.allocator, path);
     defer s.deinit();
-    try std.testing.expectEqualStrings("astro", s.getHostname());
+    try std.testing.expectEqualStrings("crag", s.getHostname());
     try std.testing.expectEqualStrings("factory", s.getProvisioning());
 }

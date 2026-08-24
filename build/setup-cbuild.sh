@@ -361,7 +361,7 @@ main() {
 
     echo "Next steps:"
     echo "  1. Review architecture profiles in: build/cbuild-profiles/"
-    echo "  2. Build a board: ./build/astro-build.sh <board> <variant>"
+    echo "  2. Build a board: ./build/crag-build.sh <board> <variant>"
     echo ""
 }
 

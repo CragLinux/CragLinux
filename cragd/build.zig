@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// astrod build: one static executable, native-musl by default so `zig build`
+// cragd build: one static executable, native-musl by default so `zig build`
 // yields a deployable static binary even on a glibc host. Cross builds pass
 // -Dtarget=aarch64-linux-musl etc. (docs/06 §3: {x86_64,aarch64}-linux-musl).
 //
@@ -15,16 +15,16 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // Directory holding usr/include/basu/*.h and usr/lib/libbasu.a, produced
-    // by extract_astrod_deps in build/lib/astrod.sh (apk extract of the
+    // by extract_cragd_deps in build/lib/cragd.sh (apk extract of the
     // basu-devel + basu-devel-static packages for the target arch). The
     // default points at the conventional x86_64 location so a plain
     // `zig build test` on the build host works with no flags; cross builds
-    // pass -Dbasu-prefix=build/state/<arch>/astrod-deps explicitly.
+    // pass -Dbasu-prefix=build/state/<arch>/cragd-deps explicitly.
     const basu_prefix = b.option(
         []const u8,
         "basu-prefix",
         "extracted basu apk prefix (usr/include + usr/lib/libbasu.a)",
-    ) orelse b.pathFromRoot("../build/state/x86_64/astrod-deps");
+    ) orelse b.pathFromRoot("../build/state/x86_64/cragd-deps");
 
     const basu_include: std.Build.LazyPath = .{
         .cwd_relative = b.pathJoin(&.{ basu_prefix, "usr", "include" }),
@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const exe = b.addExecutable(.{
-        .name = "astrod",
+        .name = "cragd",
         .root_module = root_module,
     });
     b.installArtifact(exe);

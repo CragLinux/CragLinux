@@ -132,7 +132,7 @@ pub const OsReleaseInfo = struct {
 };
 
 /// os-release KEY=VALUE lines, values optionally double-quoted. Explicit
-/// ASTRO_* keys win over the generic fields so images can stamp board and
+/// CRAG_* keys win over the generic fields so images can stamp board and
 /// variant identity without repurposing standard keys. The rootfs stage
 /// stamps them into /usr/lib/os-release (the canonical document —
 /// /etc/os-release is a tmpfiles-recreated symlink to it; see
@@ -140,8 +140,8 @@ pub const OsReleaseInfo = struct {
 /// `text`.
 pub fn parseOsRelease(text: []const u8) OsReleaseInfo {
     var info: OsReleaseInfo = .{};
-    var astro_variant: ?[]const u8 = null;
-    var astro_release: ?[]const u8 = null;
+    var crag_variant: ?[]const u8 = null;
+    var crag_release: ?[]const u8 = null;
     var generic_variant: ?[]const u8 = null;
     var version_id: ?[]const u8 = null;
 
@@ -154,20 +154,20 @@ pub fn parseOsRelease(text: []const u8) OsReleaseInfo {
         const value = unquote(line[eq + 1 ..]);
         if (value.len == 0) continue;
 
-        if (std.mem.eql(u8, key, "ASTRO_BOARD")) {
+        if (std.mem.eql(u8, key, "CRAG_BOARD")) {
             info.board = value;
-        } else if (std.mem.eql(u8, key, "ASTRO_VARIANT")) {
-            astro_variant = value;
-        } else if (std.mem.eql(u8, key, "ASTRO_RELEASE")) {
-            astro_release = value;
+        } else if (std.mem.eql(u8, key, "CRAG_VARIANT")) {
+            crag_variant = value;
+        } else if (std.mem.eql(u8, key, "CRAG_RELEASE")) {
+            crag_release = value;
         } else if (std.mem.eql(u8, key, "VARIANT")) {
             generic_variant = value;
         } else if (std.mem.eql(u8, key, "VERSION_ID")) {
             version_id = value;
         }
     }
-    info.variant = astro_variant orelse generic_variant;
-    info.release = astro_release orelse version_id;
+    info.variant = crag_variant orelse generic_variant;
+    info.release = crag_release orelse version_id;
     return info;
 }
 
@@ -217,11 +217,11 @@ fn uptimeSeconds() u64 {
 test "parseOsRelease handles the shipped common-overlay document" {
     // Verbatim from boards/common/overlay/usr/lib/os-release (pre-stamp).
     const fixture =
-        \\NAME="Astro Linux"
-        \\ID=astro
+        \\NAME="Crag Linux"
+        \\ID=crag
         \\ID_LIKE=chimera
         \\VERSION_ID=0.1.0
-        \\PRETTY_NAME="Astro Linux 0.1.0"
+        \\PRETTY_NAME="Crag Linux 0.1.0"
         \\HOME_URL="https://github.com/tierone/clang-cross"
         \\
     ;
@@ -231,13 +231,13 @@ test "parseOsRelease handles the shipped common-overlay document" {
     try std.testing.expectEqualStrings("0.1.0", id.release.?);
 }
 
-test "parseOsRelease prefers ASTRO_* keys and unquotes values" {
+test "parseOsRelease prefers CRAG_* keys and unquotes values" {
     const fixture =
         \\VERSION_ID=0.1.0
         \\VARIANT="Development"
-        \\ASTRO_BOARD=qemu-aarch64
-        \\ASTRO_VARIANT="dev"
-        \\ASTRO_RELEASE=0.2.0-rc1
+        \\CRAG_BOARD=qemu-aarch64
+        \\CRAG_VARIANT="dev"
+        \\CRAG_RELEASE=0.2.0-rc1
         \\# comment line
         \\MALFORMED_NO_EQUALS
         \\EMPTY=
@@ -249,7 +249,7 @@ test "parseOsRelease prefers ASTRO_* keys and unquotes values" {
     try std.testing.expectEqualStrings("0.2.0-rc1", id.release.?);
 }
 
-test "parseOsRelease falls back to VARIANT when ASTRO_VARIANT is absent" {
+test "parseOsRelease falls back to VARIANT when CRAG_VARIANT is absent" {
     const id = parseOsRelease("VARIANT=prod\nVERSION_ID=1.0.0\n");
     try std.testing.expectEqualStrings("prod", id.variant.?);
     try std.testing.expectEqualStrings("1.0.0", id.release.?);

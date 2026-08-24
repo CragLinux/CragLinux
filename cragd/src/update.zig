@@ -2,7 +2,7 @@
 //! glue between HTTP handlers, the rauc.zig D-Bus client, the operations
 //! registry (ops.zig) and the event bus (events.zig).
 //!
-//! AD-021 (docs/05 §6): astrod refuses to install a bundle whose version
+//! AD-021 (docs/05 §6): cragd refuses to install a bundle whose version
 //! is lower than the running release unless the request carries
 //! {"force": true}. The gate is signature-first: versions come from
 //! InspectBundle, which verifies against the device keyring before any
@@ -51,7 +51,7 @@ const timekeep = @import("timekeep.zig");
 
 /// docs/05 §5.1: uploads are staged here (on /data, which both slots
 /// share) before RAUC gets the local path.
-pub const default_staging_dir = "/data/.astro/staging";
+pub const default_staging_dir = "/data/.crag/staging";
 
 /// Free space demanded beyond the upload itself: RAUC needs scratch for
 /// mount/verity work, and filling /data to the last byte would starve the
@@ -242,7 +242,7 @@ fn mkdirQuiet(path: []const u8) void {
 }
 
 fn ensureDirs(dir: []const u8) void {
-    // One level of parent creation covers /data/.astro/staging (its own
+    // One level of parent creation covers /data/.crag/staging (its own
     // parent /data is a mount, guaranteed by the data-mount dependency).
     if (std.mem.lastIndexOfScalar(u8, dir, '/')) |i| {
         if (i > 0) mkdirQuiet(dir[0..i]);
@@ -280,7 +280,7 @@ pub const Manager = struct {
     client: ?rauc.Client,
     registry: *ops.Registry,
     events: *events_mod.EventBus,
-    /// The running release (system.zig's ASTRO_RELEASE) the AD-021 gate
+    /// The running release (system.zig's CRAG_RELEASE) the AD-021 gate
     /// compares against; owned copy.
     running_release: []u8,
     staging_dir: []const u8 = default_staging_dir,
@@ -301,7 +301,7 @@ pub const Manager = struct {
 
     /// Production constructor: connects the RAUC client on `bus`, installs
     /// the daemon-lifetime signal watches and re-attaches to an install
-    /// that survived an astrod restart (docs/06 §7).
+    /// that survived an cragd restart (docs/06 §7).
     pub fn init(
         gpa: std.mem.Allocator,
         bus: *bus_mod.Bus,
@@ -367,7 +367,7 @@ pub const Manager = struct {
     }
 
     /// Restart re-attach (docs/06 §7): a non-idle RAUC Operation right
-    /// after daemon start means an install RAUC kept running while astrod
+    /// after daemon start means an install RAUC kept running while cragd
     /// was away. Register a NEW operation for it (ids are per-run) and
     /// resume progress tracking through the already-installed watches.
     pub fn attachInFlight(self: *Manager) void {
@@ -614,7 +614,7 @@ fn onCompleted(ctx: ?*anyopaque, msg: *bus_mod.Message) void {
 
 fn unavailable(ctx: *router.Context, detail: []const u8) router.Response {
     return router.problemResponse(ctx, .{
-        .type = "urn:astro:problem:rauc-unavailable",
+        .type = "urn:crag:problem:rauc-unavailable",
         .title = "Service Unavailable",
         .status = 503,
         .detail = detail,
@@ -623,7 +623,7 @@ fn unavailable(ctx: *router.Context, detail: []const u8) router.Response {
 
 fn badRequest(ctx: *router.Context, detail: []const u8) router.Response {
     return router.problemResponse(ctx, .{
-        .type = "urn:astro:problem:bad-request",
+        .type = "urn:crag:problem:bad-request",
         .title = "Bad Request",
         .status = 400,
         .detail = detail,
@@ -649,7 +649,7 @@ fn raucFailure(ctx: *router.Context, mgr: *Manager, err: rauc.Error) anyerror!ro
         error.OutOfMemory => error.OutOfMemory,
         error.NoBusSocket, error.ConnectFailed, error.Disconnected => unavailable(ctx, "the RAUC D-Bus connection is down"),
         error.RaucFailed, error.CallFailed => router.problemResponse(ctx, .{
-            .type = "urn:astro:problem:rauc-error",
+            .type = "urn:crag:problem:rauc-error",
             .title = "Bad Gateway",
             .status = 502,
             .detail = std.fmt.allocPrint(ctx.allocator, "RAUC call failed ({t}); D-Bus error: {s}", .{
@@ -657,7 +657,7 @@ fn raucFailure(ctx: *router.Context, mgr: *Manager, err: rauc.Error) anyerror!ro
             }) catch null,
         }),
         error.InvalidReply, error.InvalidArgs => router.problemResponse(ctx, .{
-            .type = "urn:astro:problem:rauc-error",
+            .type = "urn:crag:problem:rauc-error",
             .title = "Bad Gateway",
             .status = 502,
             .detail = std.fmt.allocPrint(ctx.allocator, "RAUC reply did not match the expected shape ({t}); daemon/client version drift?", .{err}) catch null,
@@ -697,7 +697,7 @@ pub fn getUpdateStatus(ctx: *router.Context) anyerror!router.Response {
 }
 
 /// POST /api/v1/update — {"url": ...} JSON (http(s) URL or absolute local
-/// path) or the raw bundle bytes (staged to /data/.astro/staging). 202 +
+/// path) or the raw bundle bytes (staged to /data/.crag/staging). 202 +
 /// operation on acceptance.
 pub fn postUpdate(ctx: *router.Context) anyerror!router.Response {
     // AD-021 force can ride the query string (?force=true): the only
@@ -729,14 +729,14 @@ pub fn postUpdate(ctx: *router.Context) anyerror!router.Response {
             return badRequest(ctx, "\"url\" must be an http(s) URL or an absolute local path");
         const force = req.force or query_force;
 
-        // docs/07 §6 item 3: astrod gates its OWN TLS-dependent work.
+        // docs/07 §6 item 3: cragd gates its OWN TLS-dependent work.
         // A battery-less board still in 1970 would fail RAUC's https
         // certificate validation with an opaque error; refuse up front
         // with a retryable 503 until NTP syncs or the clock passes the
         // build-time floor. http:// and local paths are unaffected.
         if (std.mem.startsWith(u8, url, "https://") and !timekeep.httpsAllowed()) {
             return router.problemResponse(ctx, .{
-                .type = "urn:astro:problem:clock-not-set",
+                .type = "urn:crag:problem:clock-not-set",
                 .title = "Service Unavailable",
                 .status = 503,
                 .detail = "the system clock is not NTP-synced and is behind the build-time floor (docs/07 \u{a7}6): https certificate validation would fail spuriously; retry after time syncs, or use an http URL / staged upload",
@@ -759,13 +759,13 @@ pub fn postUpdate(ctx: *router.Context) anyerror!router.Response {
     const staged = mgr.stageBody(ctx.allocator, body) catch |err| return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.InsufficientStorage => router.problemResponse(ctx, .{
-            .type = "urn:astro:problem:insufficient-storage",
+            .type = "urn:crag:problem:insufficient-storage",
             .title = "Insufficient Storage",
             .status = 507,
             .detail = "not enough free space on /data to stage the bundle",
         }),
         error.StagingFailed => router.problemResponse(ctx, .{
-            .type = "urn:astro:problem:staging-failed",
+            .type = "urn:crag:problem:staging-failed",
             .title = "Internal Server Error",
             .status = 500,
             .detail = "could not write the bundle to the staging directory",
@@ -793,7 +793,7 @@ fn installPath(
             // client's fault, not a gateway error.
             if (staged) |p| fsutil.unlink(p) catch {};
             return router.problemResponse(ctx, .{
-                .type = "urn:astro:problem:invalid-bundle",
+                .type = "urn:crag:problem:invalid-bundle",
                 .title = "Bad Request",
                 .status = 400,
                 .detail = std.fmt.allocPrint(ctx.allocator, "bundle verification/inspection failed; D-Bus error: {s}", .{mgr.busErrorName()}) catch null,
@@ -805,7 +805,7 @@ fn installPath(
     switch (versionGate(info.version, mgr.running_release, force)) {
         .refuse => {
             mgr.recordHistory("", info.version, source_kind, false, .refused);
-            return conflict(ctx, "urn:astro:problem:update-downgrade-refused", try std.fmt.allocPrint(
+            return conflict(ctx, "urn:crag:problem:update-downgrade-refused", try std.fmt.allocPrint(
                 ctx.allocator,
                 "AD-021: bundle version \"{s}\" is not newer than running release \"{s}\"; bundle kept at {s} — re-POST {{\"url\": \"{s}\", \"force\": true}} to override",
                 .{ info.version, mgr.running_release, path, path },
@@ -832,7 +832,7 @@ fn startInstall(
     mgr.install_mu.lock();
     defer mgr.install_mu.unlock();
     if (mgr.hasCurrent())
-        return conflict(ctx, "urn:astro:problem:update-in-progress", "an install operation is already in flight; poll /api/v1/operations");
+        return conflict(ctx, "urn:crag:problem:update-in-progress", "an install operation is already in flight; poll /api/v1/operations");
 
     const id = try mgr.registry.create(.update_install);
     mgr.registry.update(id, .running, 0, "InstallBundle dispatched to RAUC");
@@ -873,9 +873,9 @@ pub fn postUpdateApply(ctx: *router.Context) anyerror!router.Response {
     const st = client.status(ctx.allocator) catch |err| return raucFailure(ctx, mgr, err);
 
     if (!std.mem.eql(u8, st.operation, "idle"))
-        return conflict(ctx, "urn:astro:problem:update-in-progress", "RAUC is busy; wait for the install operation to finish");
+        return conflict(ctx, "urn:crag:problem:update-in-progress", "RAUC is busy; wait for the install operation to finish");
     if (!hasPendingSlot(st))
-        return conflict(ctx, "urn:astro:problem:no-pending-update", "no newly installed slot is pending activation; POST /api/v1/update first");
+        return conflict(ctx, "urn:crag:problem:no-pending-update", "no newly installed slot is pending activation; POST /api/v1/update first");
 
     if (probeDinit(ctx)) |resp| return resp;
     ctx.deferred = .{ .shutdown = .reboot };
@@ -892,9 +892,9 @@ pub fn postUpdateRollback(ctx: *router.Context) anyerror!router.Response {
     const st = client.status(ctx.allocator) catch |err| return raucFailure(ctx, mgr, err);
 
     if (!std.mem.eql(u8, st.operation, "idle"))
-        return conflict(ctx, "urn:astro:problem:update-in-progress", "RAUC is busy; wait for the install operation to finish");
+        return conflict(ctx, "urn:crag:problem:update-in-progress", "RAUC is busy; wait for the install operation to finish");
     if (!isRollbackable(st))
-        return conflict(ctx, "urn:astro:problem:no-rollback-target", "the other slot has never held a release; nothing to roll back to");
+        return conflict(ctx, "urn:crag:problem:no-rollback-target", "the other slot has never held a release; nothing to roll back to");
 
     client.activateOther() catch |err| return raucFailure(ctx, mgr, err);
     client.markBad() catch |err| {
@@ -915,13 +915,13 @@ pub fn postUpdateRollback(ctx: *router.Context) anyerror!router.Response {
 fn probeDinit(ctx: *router.Context) ?router.Response {
     var probe = dinit.Client.connect(dinit.default_socket_path) catch |err| return router.problemResponse(ctx, switch (err) {
         error.ConnectFailed => .{
-            .type = "urn:astro:problem:dinit-unavailable",
+            .type = "urn:crag:problem:dinit-unavailable",
             .title = "Service Unavailable",
             .status = 503,
             .detail = "cannot reach the dinit control socket",
         },
         else => .{
-            .type = "urn:astro:problem:internal",
+            .type = "urn:crag:problem:internal",
             .title = "Internal Server Error",
             .status = 500,
             .detail = "dinit control handshake failed",
@@ -969,7 +969,7 @@ test "hasPendingSlot compares primary against the booted slot's name" {
         .primary = "system.1",
         .operation = "idle",
         .last_error = "",
-        .compatible = "astro-qemu-x86_64",
+        .compatible = "crag-qemu-x86_64",
         .slots = &slots,
     };
     try testing.expect(hasPendingSlot(st));
@@ -1011,7 +1011,7 @@ test "parseInstallRequest: valid forms, unknown fields rejected" {
     try testing.expectEqualStrings("https://x/y.raucb", full.url.?);
     try testing.expect(full.force);
 
-    const bare = parseInstallRequest(a, "{\"url\": \"/data/.astro/staging/upload-1.raucb\"}").?;
+    const bare = parseInstallRequest(a, "{\"url\": \"/data/.crag/staging/upload-1.raucb\"}").?;
     try testing.expect(!bare.force);
 
     const missing = parseInstallRequest(a, "{}").?;
@@ -1064,7 +1064,7 @@ test "parseProgressChange ignores other interfaces" {
 test "freeBytes reports space for a real filesystem" {
     const free = freeBytes("/tmp") orelse return error.TestUnexpectedResult;
     try testing.expect(free > 0);
-    try testing.expect(freeBytes("/nonexistent-astro-test") == null);
+    try testing.expect(freeBytes("/nonexistent-crag-test") == null);
 }
 
 const TestRig = struct {
@@ -1166,7 +1166,7 @@ test "handlers answer 503 rauc-unavailable while no manager is wired" {
     try testing.expect(manager == null); // tests must not leak a global
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    var st = try store_mod.Store.load(testing.allocator, "/nonexistent/astro.json");
+    var st = try store_mod.Store.load(testing.allocator, "/nonexistent/crag.json");
     defer st.deinit();
 
     const cases = [_]struct { h: router.Handler, m: router.Method, p: []const u8, b: []const u8 }{
@@ -1180,7 +1180,7 @@ test "handlers answer 503 rauc-unavailable while no manager is wired" {
         var ctx = testCtx(arena.allocator(), &st, case.m, case.p, case.b);
         const resp = try case.h(&ctx);
         try testing.expectEqual(@as(u16, 503), resp.status);
-        try testing.expect(std.mem.indexOf(u8, resp.body, "urn:astro:problem:rauc-unavailable") != null);
+        try testing.expect(std.mem.indexOf(u8, resp.body, "urn:crag:problem:rauc-unavailable") != null);
     }
 }
 
@@ -1188,7 +1188,7 @@ test "POST /update validates the JSON body before touching the subsystem" {
     try testing.expect(manager == null);
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    var st = try store_mod.Store.load(testing.allocator, "/nonexistent/astro.json");
+    var st = try store_mod.Store.load(testing.allocator, "/nonexistent/crag.json");
     defer st.deinit();
 
     const bad_bodies = [_][]const u8{

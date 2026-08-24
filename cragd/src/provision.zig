@@ -15,7 +15,7 @@
 //!    system.provisioned event).
 //!
 //! Transition rules implemented (docs/07 §4 diagram + baked decisions):
-//!  - astrod startup with no usable network config: factory → provisioning.
+//!  - cragd startup with no usable network config: factory → provisioning.
 //!  - valid config applied + connectivity verified → provisioned.
 //!    "Connectivity verified" v1 = the interface has an address AND a
 //!    default route exists. RECORDED DEVIATION from docs/07 §4's
@@ -104,7 +104,7 @@ pub const Observation = struct {
 /// the named events: link/lease changes, periodic reconciliation, wifi
 /// state transitions reported by iwd.
 pub const Event = enum {
-    /// astrod startup (after store load).
+    /// cragd startup (after store load).
     startup,
     /// Link/lease/wifi observation changed, or periodic re-evaluation.
     observe,
@@ -512,7 +512,7 @@ pub const Manager = struct {
     /// docs/07 §4 startup edge runs as the reconcile thread's FIRST
     /// step, not here: entering AP mode at boot (profile render + iwd
     /// netconfig window + StartProfile) can take tens of seconds, and
-    /// astrod's readiness (listener bind + dinit ready-fd) must never
+    /// cragd's readiness (listener bind + dinit ready-fd) must never
     /// wait on it — boot success does not depend on being provisioned.
     pub fn start(self: *Manager) void {
         if (link.Monitor.init(self.gpa, onLinkEvent, self)) |mon| {
@@ -1497,7 +1497,7 @@ test "Manager: forced override brings the AP up despite carrier; flipConnect rou
     try std.testing.expect(!m.apActive());
 
     // …until PUT /network/wifi/ap {"enabled": true} forces it (the e2e
-    // rig's `astroctl wifi ap enable` path).
+    // rig's `cragctl wifi ap enable` path).
     try st.setApEnabledOverride(true);
     _ = m.process(.observe);
     try std.testing.expect(m.apActive());

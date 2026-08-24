@@ -1,19 +1,19 @@
 //! App-service control surface (docs/06 §5.4, docs/08 §5) — M4 phase-1.
 //!
 //! The /services group is DELIBERATELY NARROW: it must not become a
-//! privilege-escalation bridge to init. astrod exposes only the app services
+//! privilege-escalation bridge to init. cragd exposes only the app services
 //! that OPTED IN via their external-tree manifest ([integration]
-//! api_controllable = true, docs/08 §5). astrod learns that set by reading the
-//! very same manifests the image-assembly hook reads — usr/lib/astro/services/
+//! api_controllable = true, docs/08 §5). cragd learns that set by reading the
+//! very same manifests the image-assembly hook reads — usr/lib/crag/services/
 //! — at startup (loadManifests). A service that is not api_controllable is
 //! invisible here: list() omits it and the action endpoints answer 404 (NOT
 //! 403 — revealing that a service exists is itself information, router.zig).
 //!
 //! MANIFEST SIDECARS. The on-disk manifests are TOML (schema.py:
-//! SERVICE_MANIFEST_SCHEMA), but std has no TOML parser and astrod avoids
+//! SERVICE_MANIFEST_SCHEMA), but std has no TOML parser and cragd avoids
 //! shelling out. So the image-assembly hook (40-service-manifests.sh) emits a
-//! JSON sidecar `usr/lib/astro/services/<name>.json` beside each `<name>.toml`
-//! (the exact ServiceManifest.to_dict() shape); astrod parses THAT with
+//! JSON sidecar `usr/lib/crag/services/<name>.json` beside each `<name>.toml`
+//! (the exact ServiceManifest.to_dict() shape); cragd parses THAT with
 //! std.json. Only `name` + `api_controllable` are consulted here — the rest of
 //! the manifest drives build-time effects, not runtime policy. (Followup to
 //! the assembly-hook agent requests the sidecar emission.)
@@ -21,7 +21,7 @@
 //! Mechanism: state/pid come from the dinit control socket (dinit.zig's
 //! SERVICESTATUS5 query); restart/stop/start go through the dinit client's
 //! existing verbs. dinit's protocol exposes NO automatic-restart counter in
-//! any status buffer, so `restart_count` here is astrod's own count of
+//! any status buffer, so `restart_count` here is cragd's own count of
 //! API-initiated restarts (incremented on a successful POST .../restart) — the
 //! honest, implementable reading of docs/06 §5.4's "restart count".
 //!
@@ -37,7 +37,7 @@ const fsutil = @import("fsutil.zig");
 
 /// Rootfs-relative directory the apk-installed manifests + sidecars live in
 /// (docs/08 §5). loadManifests joins this onto its rootfs prefix.
-pub const services_subdir = "/usr/lib/astro/services";
+pub const services_subdir = "/usr/lib/crag/services";
 
 /// One app-controllable service as GET /api/v1/services reports it (docs/06
 /// §5.4): name, dinit state, pid (null when not running), restart count.
@@ -93,10 +93,10 @@ pub const Registry = struct {
         self.restart_counts = &.{};
     }
 
-    /// Read the JSON sidecars under `<rootfs_prefix>/usr/lib/astro/services`
+    /// Read the JSON sidecars under `<rootfs_prefix>/usr/lib/crag/services`
     /// and populate controllable_names with the services whose manifest set
     /// api_controllable = true (docs/08 §5). `rootfs_prefix` is "" in
-    /// production (=> the absolute /usr/lib/astro/services). A MISSING
+    /// production (=> the absolute /usr/lib/crag/services). A MISSING
     /// directory is the no-app / no-external-tree path and is a clean no-op —
     /// controllable_names stays empty and the group answers empty/404. A
     /// malformed sidecar is SKIPPED (the build side already validated the
@@ -290,7 +290,7 @@ test "empty registry: nothing controllable, actions 404 unknown names" {
 test "loadManifests: missing dir is a clean no-op; list is empty" {
     var reg = Registry.init(std.testing.allocator);
     defer reg.deinit();
-    try reg.loadManifests("/nonexistent-astro-rootfs-xyz");
+    try reg.loadManifests("/nonexistent-crag-rootfs-xyz");
     try std.testing.expectEqual(@as(usize, 0), reg.controllable_names.len);
     // Empty registry: list() returns an empty slice WITHOUT touching dinit
     // (no socket exists under `zig build test`).

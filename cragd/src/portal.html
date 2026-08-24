@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Astro provisioning portal (docs/07 §4, docs/06 §2). Fully
+<!-- Crag provisioning portal (docs/07 §4, docs/06 §2). Fully
      self-contained: inline CSS/JS, no external assets (the AP subnet has
      no internet). Speaks ONLY the AD-014 unauthenticated subset:
        GET  /api/v1/system                 (redacted)
@@ -13,7 +13,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Astro device setup</title>
+<title>Crag device setup</title>
 <style>
   :root { --bg:#f4f5f7; --fg:#1a1d21; --card:#fff; --line:#e6e9ed; --mut:#5a6472;
           --acc:#2463eb; --accdim:#9db4e8; --err:#b3261e; --ok:#1a7f37; }
@@ -63,7 +63,7 @@
 </head>
 <body>
 <main>
-  <h1>Set up this Astro device</h1>
+  <h1>Set up this Crag device</h1>
 
   <div class="card">
     <div id="device" class="mut">Loading device info&hellip;</div>
@@ -113,7 +113,7 @@ async function refreshDevice() {
   try {
     const r = await fetch("/api/v1/system");
     const s = await r.json();
-    $("device").textContent = "Device " + (s.board || "astro") +
+    $("device").textContent = "Device " + (s.board || "crag") +
       " · release " + (s.release || "?") +
       " · state " + (s.provisioning || "?");
     const le = $("lasterr");

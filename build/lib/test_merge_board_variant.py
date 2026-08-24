@@ -15,14 +15,14 @@ The deep-merge itself lives in build/lib/merge.py; the validate/default/derive
 pipeline it reuses lives in build/lib/config.py (finalize_board_config /
 finalize_variant_config). These tests exercise both.
 
-Run (host or the astro-builder container), from the repo root:
+Run (host or the crag-builder container), from the repo root:
 
     python3 build/lib/test_merge_board_variant.py          # verbose unittest
     python3 -m unittest build.lib.test_merge_board_variant  # (if run as pkg)
 
 Container form (matches how the build validates python):
-    ./build/astro-build.sh  ... is not needed; just:
-    podman run --rm -v "$PWD:$PWD:Z" -w "$PWD" astro-builder \
+    ./build/crag-build.sh  ... is not needed; just:
+    podman run --rm -v "$PWD:$PWD:Z" -w "$PWD" crag-builder \
         python3 build/lib/test_merge_board_variant.py
 """
 
@@ -165,8 +165,8 @@ class TwoTreePrecedenceTests(unittest.TestCase):
     """Full deep_merge_board_variant across two trees + board + variant."""
 
     def setUp(self):
-        self._env = os.environ.get("ASTRO_EXTERNAL")
-        os.environ["ASTRO_EXTERNAL"] = ""  # only CLI externals in these tests
+        self._env = os.environ.get("CRAG_EXTERNAL")
+        os.environ["CRAG_EXTERNAL"] = ""  # only CLI externals in these tests
         self._tmp = tempfile.TemporaryDirectory()
         base = Path(self._tmp.name)
         self.low = _make_tree(base / "low", "acme-low", 10,
@@ -177,9 +177,9 @@ class TwoTreePrecedenceTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
         if self._env is None:
-            os.environ.pop("ASTRO_EXTERNAL", None)
+            os.environ.pop("CRAG_EXTERNAL", None)
         else:
-            os.environ["ASTRO_EXTERNAL"] = self._env
+            os.environ["CRAG_EXTERNAL"] = self._env
 
     def _layers(self):
         # Pass in reverse-priority CLI order to prove priority (not input order)
@@ -200,7 +200,7 @@ class TwoTreePrecedenceTests(unittest.TestCase):
         # required field carried from the base (low) fragment
         self.assertEqual(board["board"]["arch"], "aarch64")
         # derived default keyed on the resolved board dir name
-        self.assertEqual(board["rauc"]["compatible"], "astro-testgw")
+        self.assertEqual(board["rauc"]["compatible"], "crag-testgw")
 
     def test_variant_merge_precedence(self):
         layer_list = self._layers()
@@ -225,8 +225,8 @@ class SchemaValidationTests(unittest.TestCase):
     """A tree cannot introduce keys the schema rejects (task item 2)."""
 
     def setUp(self):
-        self._env = os.environ.get("ASTRO_EXTERNAL")
-        os.environ["ASTRO_EXTERNAL"] = ""
+        self._env = os.environ.get("CRAG_EXTERNAL")
+        os.environ["CRAG_EXTERNAL"] = ""
         self._tmp = tempfile.TemporaryDirectory()
         base = Path(self._tmp.name)
         # Inline an unknown key into the existing [board] table (TOML forbids
@@ -241,9 +241,9 @@ class SchemaValidationTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
         if self._env is None:
-            os.environ.pop("ASTRO_EXTERNAL", None)
+            os.environ.pop("CRAG_EXTERNAL", None)
         else:
-            os.environ["ASTRO_EXTERNAL"] = self._env
+            os.environ["CRAG_EXTERNAL"] = self._env
 
     def test_invalid_tree_key_is_rejected(self):
         layer_list = _layers.build_layers("testgw", "dev", [self.tree])
@@ -256,14 +256,14 @@ class ByteIdenticalRegressionTests(unittest.TestCase):
     """No-tree case must be byte-identical to config.load_config."""
 
     def setUp(self):
-        self._env = os.environ.get("ASTRO_EXTERNAL")
-        os.environ["ASTRO_EXTERNAL"] = ""
+        self._env = os.environ.get("CRAG_EXTERNAL")
+        os.environ["CRAG_EXTERNAL"] = ""
 
     def tearDown(self):
         if self._env is None:
-            os.environ.pop("ASTRO_EXTERNAL", None)
+            os.environ.pop("CRAG_EXTERNAL", None)
         else:
-            os.environ["ASTRO_EXTERNAL"] = self._env
+            os.environ["CRAG_EXTERNAL"] = self._env
 
     # Every in-tree board. Since merge.py now delegates to config.py's shared
     # finalize_* pipeline, the merge-module wrapper is byte-identical to
