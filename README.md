@@ -18,7 +18,7 @@ Status: **design phase**. The design supersedes the `clang-cross` prototype, who
 | Doc | Covers |
 |---|---|
 | [00 — Overview](docs/00-overview.md) | vision, four pillars, positioning, non-goals, glossary |
-| [01 — Architecture](docs/01-architecture.md) | runtime + build architecture, invariants, **decision index (AD-001…AD-028)** |
+| [01 — Architecture](docs/01-architecture.md) | runtime + build architecture, invariants, **decision index (AD-001…AD-029)** |
 | [02 — Base System](docs/02-base-system.md) | core packages, read-only rootfs, `/data`, dinit design, kernel policy |
 | [03 — Build System](docs/03-build-system.md) | cbuild/cports strategy, SDK, container, pipeline stages, config schema |
 | [04 — Boards, Images, Boot](docs/04-boards-images-boot.md) | partition layout, GRUB/U-Boot slot switching, image artifacts, QEMU workflow |

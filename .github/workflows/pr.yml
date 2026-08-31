@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # cports is Harbormaster-managed (AD-001/AD-003): materialize the
+      # cports is Harbormaster-managed (AD-027/AD-003): materialize the
       # pinned checkout. hm itself is a static binary; pin its release.
       - name: Materialize cports (hm sync --locked)
         run: |
@@ -29,7 +29,7 @@ jobs:
           else
             PIN=$(python3 -c "import tomllib;print(tomllib.load(open('.harbormaster.lock','rb'))['entry']['cports']['resolved_sha'])" 2>/dev/null || true)
             : "${PIN:?cannot resolve cports pin from .harbormaster.lock}"
-            git clone --no-checkout https://github.com/chimera-linux/cports.git cports
+            git clone --no-checkout https://github.com/CragLinux/cports.git cports
             git -C cports checkout "$PIN"
           fi
 

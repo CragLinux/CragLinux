@@ -7,7 +7,7 @@ generated_at = 2026-07-15T21:32:03.661992961-04:00
 
 [entry]
   [entry.cports]
-    url = "git@github.com:aka-mj/astro-cports.git"
+    url = "git@github.com:CragLinux/cports.git"
     type = "git"
     requested_ref = "crag"
     resolved_sha = "6f954848f00c859ef5580ba42ef2dece72838283"

@@ -1,13 +1,13 @@
 # 03 — Build System and Toolchain
 
-**Status:** Draft for review · **Owns decisions:** AD-027 (supersedes AD-001), AD-002, AD-023 · **Read after:** [01-architecture.md](01-architecture.md)
+**Status:** Draft for review · **Owns decisions:** AD-027 (supersedes AD-001), AD-029, AD-002, AD-023 · **Read after:** [01-architecture.md](01-architecture.md)
 **Supersedes** the prototype's `BUILD_SYSTEM.md`, `CBUILD.md`, `CONTAINER_BUILD.md`.
 
 ---
 
 ## 1. AD-027 (supersedes AD-001) — Relationship to Chimera: a maintained fork
 
-> **AD-027 — Crag maintains a fork of Chimera's cports (`aka-mj/astro-cports`, branch `astro`), Harbormaster-pinned by the committed `.harbormaster.lock`. Crag's packages and fixes are ordinary in-fork commits; a scheduled update-report tracks currency.** *(Accepted; supersedes AD-001)*
+> **AD-027 — Crag maintains a fork of Chimera's cports (`CragLinux/cports`, branch `astro`; moved from `aka-mj/astro-cports` per [AD-029](01-architecture.md#ad-029)), Harbormaster-pinned by the committed `.harbormaster.lock`. Crag's packages and fixes are ordinary in-fork commits; a scheduled update-report tracks currency.** *(Accepted; supersedes AD-001)*
 >
 > ~~**AD-001** — Crag consumes Chimera's cports as a pinned checkout and adds packages via a separate `astro-cports` collection; never forks.~~ Superseded — see the [AD-027 rationale in the index](01-architecture.md#ad-027). In short: our fixes and new packages were declined upstream, upstream forbids the AI-assisted contributions Crag uses, and pinned-template drift risked breaking reproducible builds. We forked **at the AD-001 pin `e3c9e1a0`**, so nothing about the produced artifacts changed at the cutover.
 
