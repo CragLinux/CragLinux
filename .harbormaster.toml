@@ -22,5 +22,5 @@ clone_depth = 1
 name = "cports"
 url = "git@github.com:CragLinux/cports.git"
 type = "git"
-branch = "astro"
+branch = "master"
 path = "cports"

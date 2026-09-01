@@ -9,6 +9,6 @@ generated_at = 2026-07-15T21:32:03.661992961-04:00
   [entry.cports]
     url = "git@github.com:CragLinux/cports.git"
     type = "git"
-    requested_ref = "crag"
-    resolved_sha = "6f954848f00c859ef5580ba42ef2dece72838283"
+    requested_ref = "master"
+    resolved_sha = "8c38070697ccfbcaa89857ec4490d4bb43dfd53b"
     last_synced_at = 2026-07-23T00:00:00.000000000-04:00
