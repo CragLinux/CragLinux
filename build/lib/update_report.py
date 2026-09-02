@@ -84,8 +84,12 @@ def shipped_packages() -> set[str]:
 
 def list_templates(scope: str, maintained: set[str]) -> list[str]:
     if scope == "crag":
-        return sorted(f"main/{p}" if (CPORTS / "main" / p).is_dir()
-                      else f"user/{p}" for p in maintained)
+        # skip delta entries whose template no longer exists at HEAD
+        # (fork deletions — nothing to update-check)
+        return sorted(f"main/{p}" for p in maintained
+                      if (CPORTS / "main" / p / "template.py").is_file()) + \
+               sorted(f"user/{p}" for p in maintained
+                      if (CPORTS / "user" / p / "template.py").is_file())
     tmpls = []
     for coll in ("main", "user"):
         d = CPORTS / coll
@@ -111,8 +115,13 @@ def check_one(tmpl: str) -> dict | None:
             return {"repo": m["repo"], "pkg": m["pkg"],
                     "current": m["cur"], "latest": m["new"],
                     "template": tmpl}
-    if r.returncode != 0 and r.stderr.strip():
-        return {"template": tmpl, "error": r.stderr.strip().splitlines()[-1]}
+    if r.returncode != 0:
+        # cbuild logs fatal errors via its logger, which writes to STDOUT
+        # (cbuild/core/logger.py) — stderr alone misses them and a failed
+        # check would be silently counted as "up to date".
+        lines = r.stderr.strip().splitlines() or r.stdout.strip().splitlines()
+        return {"template": tmpl,
+                "error": lines[-1] if lines else f"exit {r.returncode}"}
     return None  # up to date
 
 

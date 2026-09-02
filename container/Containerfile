@@ -18,7 +18,9 @@ LABEL description="Build environment for Crag Linux cross-compilation toolchain 
 # Core build tools:    cmake, ninja-build, git, curl, tar, xz, patch, make, python3
 # Bootstrap compilers: gcc, gcc-c++ (required to build LLVM from source)
 # Packaging tools:     squashfs-tools, zstd (rootfs squashfs + package-toolchain.sh)
-# cbuild deps:         bubblewrap, libarchive, meson, pkgconf, flex, byacc, m4, perl
+# cbuild deps:         bubblewrap, libarchive, meson, pkgconf, flex, byacc, m4, perl,
+#                      apk-tools (host apk 3.x — cbuild requires it on PATH,
+#                      e.g. for update-check; see runner.py's apk version gate)
 # apk-tools build:     zlib-devel, openssl-devel, libzstd-devel (apk-tools 3.x build from source)
 # cbuild linter:       ruff (Python linter required by cbuild template validation)
 # Config/JSON:         jq (JSON parsing in shell scripts)
@@ -66,6 +68,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
         byacc \
         m4 \
         perl \
+        apk-tools \
         zlib-devel \
         openssl \
         openssl-devel \

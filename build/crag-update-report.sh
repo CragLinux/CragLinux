@@ -28,4 +28,11 @@ if [ ! -f /run/.containerenv ] && [ ! -f /.dockerenv ]; then
         -c "cd /workspace && ./build/crag-update-report.sh $*"
 fi
 
+# cbuild refuses every command (even the read-only update-check) without a
+# signing key (cports/src/runner.py). Generate a throwaway dev key into
+# cports/etc/{config.ini,keys} — both are covered by cports/.gitignore.
+if ! grep -q '^key' "${PROJECT_ROOT}/cports/etc/config.ini" 2>/dev/null; then
+    (cd "${PROJECT_ROOT}/cports" && ./cbuild keygen "cbuild-ci@localhost" 4096)
+fi
+
 python3 "${SCRIPT_DIR}/lib/update_report.py" "$@"

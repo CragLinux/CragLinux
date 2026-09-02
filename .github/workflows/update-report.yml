@@ -25,12 +25,16 @@ jobs:
 
       - name: Materialize the cports fork (pinned)
         run: |
+          # TODO(release-eng): replace with a pinned hm release download;
+          # until then a direct pinned clone is equivalent to the lock.
+          # NOTE: the lock records an SSH url, but runners are keyless —
+          # clone over https like pr.yml (the repo is public).
           if command -v hm >/dev/null; then
             hm sync --locked
           else
-            PIN=$(python3 -c "import tomllib;print(tomllib.load(open('.harbormaster.lock','rb'))['entry']['cports']['resolved_sha'])")
-            URL=$(python3 -c "import tomllib;print(tomllib.load(open('.harbormaster.lock','rb'))['entry']['cports']['url'])")
-            git clone --no-checkout "$URL" cports
+            PIN=$(python3 -c "import tomllib;print(tomllib.load(open('.harbormaster.lock','rb'))['entry']['cports']['resolved_sha'])" 2>/dev/null || true)
+            : "${PIN:?cannot resolve cports pin from .harbormaster.lock}"
+            git clone --no-checkout https://github.com/CragLinux/cports.git cports
             git -C cports checkout "$PIN"
           fi
 
