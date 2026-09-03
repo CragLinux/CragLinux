@@ -74,7 +74,7 @@ extract_cragd_deps() {
     devel_apk="$(ls "${repo}"/basu-devel-[0-9]*.apk 2>/dev/null | sort -V | tail -1)"
     static_apk="$(ls "${repo}"/basu-devel-static-*.apk 2>/dev/null | sort -V | tail -1)"
     [ -n "$devel_apk" ] && [ -n "$static_apk" ] || \
-        die "basu-devel apks not found in ${repo} — build the basu port first (astro-cports/main/basu)"
+        die "basu-devel apks not found in ${repo} — build the basu port first (main/basu in the cports fork)"
 
     local stamp="${deps_dir}/.stamp"
     local want="$(basename "$devel_apk") $(basename "$static_apk")"

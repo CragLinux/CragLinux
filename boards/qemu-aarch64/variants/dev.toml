@@ -8,8 +8,8 @@ description = "QEMU virtual machine for testing without hardware"
 # with --packages-mode=source; release/nightly variants are full-source.
 mode = "binary"
 install = [
-    # openssh comes from the kerberos-free astro-cports shadow template
-    # (astro-cports/main/openssh) — upstream cports openssh needs heimdal,
+    # openssh comes from the kerberos-free shadow in the cports fork
+    # (main/openssh) — upstream cports openssh needs heimdal,
     # which does not cross-build (GAP §3.2).
     "openssh",
     "openssh-dinit",

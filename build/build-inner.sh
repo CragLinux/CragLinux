@@ -299,7 +299,8 @@ if should_run_step "packages"; then
     fi
 
     # Build packages via cbuild. The pinned cports checkout is prepared
-    # (build/patches/cports + astro-cports shadow templates) before any
+    # (local escape-hatch overlays, normally none — Crag's packages live
+    # in the fork) before any
     # cbuild invocation and reset to the pristine pin afterwards — on
     # success AND on failure (GAP §3.1).
     if [ -d "${PROJECT_ROOT}/cports" ] && [ -f "${PROJECT_ROOT}/cports/cbuild" ]; then
