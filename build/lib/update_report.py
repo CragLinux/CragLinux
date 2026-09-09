@@ -32,7 +32,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 CPORTS = REPO / "cports"
-FORK_POINT = "e3c9e1a0"  # keep in lockstep with .harbormaster.lock
+# Chimera merge-base of the current fork mainline: the delta past this
+# commit is what "Crag-maintained" means. Update on every chimera-master
+# merge (git merge-base HEAD <chimera-master>). Was e3c9e1a0 before the
+# AD-029 merge onto current upstream, which left the report over-flagging
+# merged upstream templates as Crag-owned.
+FORK_POINT = "50857aa08"
 
 # "main/foo: 1.2.3 -> 1.3.0"  (cbuild update-check output)
 _LINE = re.compile(r"^(?P<repo>[\w-]+)/(?P<pkg>[\w.+-]+):\s+"
