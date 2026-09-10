@@ -1,0 +1,88 @@
+[board]
+name = "RevPi Connect 5"
+arch = "aarch64"
+
+# RevPi Connect 5 = Raspberry Pi CM5 (BCM2712) on KUNBUS's industrial
+# carrier. Deliberately separate from a future stock-Pi-5 rpi5 board:
+# different DTB (storage is eMMC on the SoC's sdio1, not SD on RP1),
+# different console story (no UART header on the case — HDMI + ssh),
+# different RAUC fleet identity.
+[kernel]
+version = "6.12.y"
+# Downstream raspberrypi/linux, NOT mainline like rpi4: mainline
+# through at least v6.18 has no CM5 DTB at all and no RP1 southbridge
+# support. On the Connect 5 that would mean no USB (keyboard) and no
+# Ethernet (ssh) — and with no accessible UART, a box you can only
+# watch boot. Downstream rpi-6.12.y ships bcm2712-rpi-cm5-cm5io.dts
+# plus the RP1 drivers, and is the same base KUNBUS builds its own
+# RevPi image on.
+source = "git"
+git_repo = "https://github.com/raspberrypi/linux.git"
+git_ref = "rpi-6.12.y"
+defconfig = "bcm2712_defconfig"
+# bcm2712_defconfig already =y: eMMC path (MMC_SDHCI_IPROC), RP1
+# MFD/pinctrl, both UART drivers, RASPBERRYPI_FIRMWARE/MBOX. The board
+# fragment forces the rest of the boot-critical set; RP1 Ethernet/USB
+# stay =m (they load from the rootfs — networking is not boot-critical).
+config_fragments = ["revpi5.fragment"]
+# No UART is exposed on the Connect 5 case (the USB-C is rpiboot-flash
+# only), so the console story is HDMI tty1 (the LAST console= becomes
+# /dev/console) + ssh. ttyAMA0 stays listed: harmless while the PL011
+# is disabled/absent, useful if a carrier variant ever wires it out.
+# earlycon follows the firmware stdout-path (the uart10 debug UART on
+# CM5 — not exposed either; costs nothing).
+cmdline = "earlycon console=ttyAMA0,115200 console=tty1 rootwait"
+# Closest available DTB to the RevPi carrier (official CM5 IO board).
+# The firmware loads it from the esp, applies fixups, and hands it to
+# U-Boot at ${fdt_addr}, exactly like rpi4. KUNBUS's exact carrier DT
+# (piControl repo overlay: RS485 transceiver, RTC, TPM, LEDs) is a
+# later refinement — cm5io gets USB/Ethernet/HDMI first.
+dtb = "broadcom/bcm2712-rpi-cm5-cm5io.dtb"
+lto = "none"
+
+# Boot chain identical to rpi4 (docs/04 §1): EEPROM -> start4.elf ->
+# u-boot.bin -> boot.scr A/B slot logic. rpi_arm64_defconfig relies on
+# the prior-stage DTB, so one defconfig serves every RPi board.
+[bootloader]
+type = "rpi-boot"
+u_boot_version = "2026.07"
+# Same clang/lld self-relocation hang as the other boards
+# (MIGRATION-NOTES §12); Fedora cross-gcc until root-caused.
+u_boot_compiler = "gcc"
+u_boot_defconfig = "rpi_arm64_defconfig"
+
+# AD-007 GPT layout, same sizes as rpi4 (esp doubles as the RPi
+# firmware boot partition). hybrid_mbr: the CM5 EEPROM scans the MBR
+# for the first FAT partition just like the Pi 4 does.
+[partitions]
+table = "gpt"
+hybrid_mbr = true
+esp_size = "256M"
+bootenv_size = "1M"
+boot_size = "64M"          # per slot
+rootfs_size = "512M"       # per slot; build fails if squashfs exceeds it
+data_min_size = "64M"
+
+[rauc]
+compatible = "crag-revpi5"
+bootloader = "uboot"
+
+[image]
+formats = ["img"]
+
+[api]
+# The base Connect 5 has no radios (wifi/BT only on KUNBUS wireless
+# variants) — flip wifi/ap_provisioning on if such a variant shows up;
+# the firmware packages stay correct either way.
+wifi = false
+ap_provisioning = false
+mdns = true
+lan_exposure = false       # AD-025 default
+
+[firmware]
+packages = ["firmware-linux-brcm-rpi"]
+
+[console]
+# HDMI, not a serial line; baud is meaningless, kept for schema shape.
+device = "tty1"
+baud = 115200

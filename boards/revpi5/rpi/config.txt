@@ -1,0 +1,20 @@
+# RPi firmware configuration (docs/04 §1: EEPROM -> start4.elf ->
+# U-Boot -> boot.scr). Same chain as rpi4: the CM5's EEPROM loads
+# bcm2712-rpi-cm5-cm5io.dtb from this partition, applies its fixups,
+# and hands it to U-Boot — which passes it on to the kernel
+# (boards/revpi5/uboot/boot.script.in). cmdline.txt is not used: the
+# kernel command line comes from the A/B boot script.
+
+# 64-bit mode, U-Boot as the firmware's "kernel"
+arm_64bit=1
+kernel=u-boot.bin
+
+# Firmware+bootloader progress on the case-internal debug UART
+# (uart10); invisible on the Connect 5 but costs nothing. The real
+# console story is HDMI + ssh (see board.toml [kernel].cmdline note).
+enable_uart=1
+uart_2ndstage=1
+
+# Fast, headless-friendly defaults; HDMI stays functional.
+disable_splash=1
+avoid_warnings=1

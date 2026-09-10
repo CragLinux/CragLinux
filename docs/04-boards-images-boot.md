@@ -12,7 +12,9 @@
 | `qemu-aarch64` | aarch64 | QEMU virt | U-Boot (`-bios u-boot.bin`) | virtio-blk | ttyAMA0 |
 | `qemu-armv7` | armv7hf | QEMU virt (cortex-a15) | U-Boot (`-bios u-boot.bin`) | virtio-blk | ttyAMA0 |
 | `x86_64-efi` | x86_64 | generic EFI PC/gateway | firmware → GRUB | NVMe/SATA/eMMC | ttyS0 + fb |
-| `rpi4`, `rpi5` | aarch64 | Raspberry Pi 4/CM4/5 | RPi firmware → U-Boot | SD/eMMC/USB | serial + HDMI |
+| `rpi4` | aarch64 | Raspberry Pi 4/CM4 | RPi firmware → U-Boot | SD/eMMC/USB | serial + HDMI |
+| `revpi5` | aarch64 | RevPi Connect 5 (CM5) | RPi firmware → U-Boot | eMMC | HDMI (+ ssh) |
+| `rpi5` | aarch64 | Raspberry Pi 5 | RPi firmware → U-Boot | SD/USB | serial + HDMI |
 | `beaglebone-black` | armv7hf | BeagleBone Black (AM335x) | ROM → SPL → U-Boot | SD/eMMC | ttyS0 |
 
 Parked (schema keeps the arch enum entry; no boards, untested): `riscv64`.
