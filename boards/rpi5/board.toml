@@ -1,0 +1,77 @@
+[board]
+name = "Raspberry Pi 5"
+arch = "aarch64"
+
+# Stock Raspberry Pi 5 (BCM2712). Sibling of revpi5: same downstream
+# kernel, defconfig, U-Boot defconfig, and partition layout — the
+# deltas are the DTB, the console story, radios, and the RAUC fleet.
+[kernel]
+version = "6.12.y"
+# Downstream raspberrypi/linux, NOT mainline (same rationale as revpi5,
+# see boards/revpi5/board.toml): mainline has no RP1 southbridge
+# support, so USB and Ethernet would be dead. Downstream rpi-6.12.y
+# ships bcm2712-rpi-5-b.dts plus the RP1 drivers.
+source = "git"
+git_repo = "https://github.com/raspberrypi/linux.git"
+git_ref = "rpi-6.12.y"
+defconfig = "bcm2712_defconfig"
+# bcm2712_defconfig already =y: SD path (MMC_SDHCI_IPROC), RP1
+# MFD/pinctrl, both UART drivers, RASPBERRYPI_FIRMWARE/MBOX. The board
+# fragment forces the rest of the boot-critical set; RP1 Ethernet/USB
+# stay =m (they load from the rootfs — networking is not boot-critical).
+config_fragments = ["rpi5.fragment"]
+# Serial is back (unlike the RevPi): GPIO14/15 header mini-UART, which
+# the downstream DTB aliases as serial1 = &uart1 -> ttyS0 (NOT the
+# ttyS1 rpi4 found on the mainline DTB — downstream alias numbering
+# differs). LAST console= wins /dev/console, so serial is primary like
+# rpi4; HDMI/tty1 also shows logs. earlycon follows the firmware
+# stdout-path (uart10 on the 3-pin debug connector, enable_uart=1).
+cmdline = "earlycon console=tty1 console=ttyS0,115200 rootwait"
+# The firmware loads this from the esp, applies fixups, and hands it to
+# U-Boot at ${fdt_addr} (rpi_arm64_defconfig prior-stage convention).
+dtb = "broadcom/bcm2712-rpi-5-b.dtb"
+lto = "none"
+
+# Boot chain identical to rpi4/revpi5 (docs/04 §1): EEPROM ->
+# start4.elf -> u-boot.bin -> boot.scr A/B slot logic.
+[bootloader]
+type = "rpi-boot"
+u_boot_version = "2026.07"
+# Same clang/lld self-relocation hang as the other boards
+# (MIGRATION-NOTES §12); Fedora cross-gcc until root-caused.
+u_boot_compiler = "gcc"
+u_boot_defconfig = "rpi_arm64_defconfig"
+
+# AD-007 GPT layout, same sizes as rpi4 (esp doubles as the RPi
+# firmware boot partition). hybrid_mbr: same EEPROM MBR-scan boot
+# behavior as Pi 4 / CM5.
+[partitions]
+table = "gpt"
+hybrid_mbr = true
+esp_size = "256M"
+bootenv_size = "1M"
+boot_size = "64M"          # per slot
+rootfs_size = "512M"       # per slot; build fails if squashfs exceeds it
+data_min_size = "64M"
+
+[rauc]
+compatible = "crag-rpi5"
+bootloader = "uboot"
+
+[image]
+formats = ["img"]
+
+[api]
+# Every Pi 5 has wifi + BT (brcmfmac on SDIO) — same capability set as
+# rpi4, so AP provisioning is on.
+wifi = true
+ap_provisioning = true
+mdns = true
+lan_exposure = false       # AD-025 default
+
+[firmware]
+packages = ["firmware-linux-brcm-rpi"]
+
+[console]
+device = "ttyS0"          # GPIO14/15 header mini-UART (see cmdline note)
+baud = 115200

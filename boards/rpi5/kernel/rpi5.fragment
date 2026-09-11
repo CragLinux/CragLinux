@@ -1,0 +1,18 @@
+# BCM2712 (Pi 5) boot-critical drivers the bcm2712_defconfig leaves =m
+# or default-off, forced built-in per the monolithic principle (no
+# initramfs, AD-006; see boards/common/kernel/*.fragment). Identical
+# set to revpi5 (same SoC, same defconfig) — duplicated rather than
+# shared because common fragments would leak RPi symbols onto x86/qemu
+# boards.
+#
+# Already =y via bcm2712_defconfig (verified against rpi-6.12.y):
+# MMC_SDHCI_IPROC (SD on sdio1), MFD_RP1/PINCTRL_RP1, SERIAL_8250 +
+# PL011, RASPBERRYPI_FIRMWARE, BCM2835_MBOX, PINCTRL_BCM2712.
+# RP1 Ethernet/USB stay modules on purpose: they load from the rootfs
+# after mount, and networking is not needed to reach the rootfs.
+CONFIG_PCIE_BRCMSTB=y        # RP1 southbridge hangs off this root complex
+CONFIG_RESET_RASPBERRYPI=y
+CONFIG_CLK_RASPBERRYPI=y
+CONFIG_ARM_RASPBERRYPI_CPUFREQ=y
+CONFIG_RASPBERRYPI_POWER=y
+CONFIG_GPIO_RASPBERRYPI_EXP=y

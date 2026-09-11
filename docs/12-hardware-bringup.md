@@ -106,7 +106,7 @@ cannot see.
 |---|---|---|---|---|
 | `rpi4` | ✓ dev + prod | ✓ 2026-07-29 (dev: boot-success, mark-good, both slots good, root shell on ttyS1) | — | — |
 | `revpi5` | ✓ dev (local 2026-09-10; downstream rpi-6.12.y kernel — mainline has no CM5 DTB/RP1, see board.toml) | — | — | — |
-| `rpi5` | board not yet defined | — | — | — |
+| `rpi5` | ✓ dev (local 2026-09-11; downstream rpi-6.12.y kernel like revpi5) | — | — | — |
 | `beaglebone-black` | board not yet defined | — | — | — |
 | `x86_64-efi` | board not yet defined | — | — | — |
 
