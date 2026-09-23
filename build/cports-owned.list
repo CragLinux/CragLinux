@@ -4,18 +4,26 @@
 #   mod = exists upstream, we differ -> source-built only when installed
 # Regenerate with build/lib/gen-owned-list.sh after every re-pin
 # (needs full fork history, not a shallow CI checkout).
+apk-tools mod
 basu new
 boost mod
 chrony mod
+dhcpcd mod
 dinit-dbus mod
+dinit mod
 doctest mod
 elfutils mod
-fakeroot mod
 glib mod
+iproute2 mod
 iwd mod
 json-glib mod
+libnftnl mod
 libubootenv new
 llvm mod
+nftables mod
 openssh mod
+python-nftables mod
 rauc new
 readline mod
+rpi-boot mod
+util-linux mod
