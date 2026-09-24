@@ -3,7 +3,7 @@ name = "Raspberry Pi 4"
 arch = "aarch64"
 
 [kernel]
-version = "6.12.95"
+version = "6.18.53"
 source = "upstream"
 defconfig = "defconfig"
 # bcm2711 drivers the arm64 defconfig leaves =m, forced =y (monolithic

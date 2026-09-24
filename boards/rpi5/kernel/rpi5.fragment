@@ -5,7 +5,7 @@
 # shared because common fragments would leak RPi symbols onto x86/qemu
 # boards.
 #
-# Already =y via bcm2712_defconfig (verified against rpi-6.12.y):
+# Already =y via bcm2712_defconfig (verified against rpi-6.18.y):
 # MMC_SDHCI_IPROC (SD on sdio1), MFD_RP1/PINCTRL_RP1, SERIAL_8250 +
 # PL011, RASPBERRYPI_FIRMWARE, BCM2835_MBOX, PINCTRL_BCM2712.
 # RP1 Ethernet/USB stay modules on purpose: they load from the rootfs

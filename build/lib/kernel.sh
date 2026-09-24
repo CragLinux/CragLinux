@@ -343,6 +343,22 @@ build_kernel() {
     # are unchanged — the marker carries "version:config-hash"
     local cfg_hash
     cfg_hash=$(kernel_config_hash "$board_dir" "$defconfig" "$lto" "$config_fragments_json")
+
+    # A version change invalidates every generated file in the O= build
+    # dir: kbuild does not regenerate artifacts (e.g. objtool's
+    # inat-tables.c) whose prerequisites in the NEW source tree carry
+    # older tarball mtimes than the stale outputs, so an incremental
+    # rebuild across versions can mix two kernel releases and fail (or
+    # worse, succeed). Wipe the dir and rebuild from scratch.
+    if [ -f "$version_marker" ]; then
+        local prev_version
+        prev_version=$(cut -d: -f1 "$version_marker")
+        if [ "$prev_version" != "$version" ]; then
+            log_info "Kernel version changed (${prev_version} -> ${version}); cleaning ${build_dir}"
+            rm -rf "$build_dir"
+        fi
+    fi
+
     if [ -f "$version_marker" ] && [ "$(cat "$version_marker")" = "${version}:${cfg_hash}" ] && \
        [ -f "${build_dir}/${KERNEL_IMAGE}" ]; then
         log_info "Kernel ${version} already built for ${board} (inputs unchanged), skipping"

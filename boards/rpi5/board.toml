@@ -6,14 +6,15 @@ arch = "aarch64"
 # kernel, defconfig, U-Boot defconfig, and partition layout — the
 # deltas are the DTB, the console story, radios, and the RAUC fleet.
 [kernel]
-version = "6.12.y"
+version = "6.18.y"
 # Downstream raspberrypi/linux, NOT mainline (same rationale as revpi5,
 # see boards/revpi5/board.toml): mainline has no RP1 southbridge
-# support, so USB and Ethernet would be dead. Downstream rpi-6.12.y
-# ships bcm2712-rpi-5-b.dts plus the RP1 drivers.
+# support, so USB and Ethernet would be dead. Downstream rpi-6.18.y
+# ships bcm2712-rpi-5-b.dts plus the RP1 drivers; 6.18 is the LTS line
+# and raspberrypi/linux's default branch.
 source = "git"
 git_repo = "https://github.com/raspberrypi/linux.git"
-git_ref = "rpi-6.12.y"
+git_ref = "rpi-6.18.y"
 defconfig = "bcm2712_defconfig"
 # bcm2712_defconfig already =y: SD path (MMC_SDHCI_IPROC), RP1
 # MFD/pinctrl, both UART drivers, RASPBERRYPI_FIRMWARE/MBOX. The board

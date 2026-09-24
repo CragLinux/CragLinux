@@ -8,17 +8,17 @@ arch = "aarch64"
 # different console story (no UART header on the case — HDMI + ssh),
 # different RAUC fleet identity.
 [kernel]
-version = "6.12.y"
+version = "6.18.y"
 # Downstream raspberrypi/linux, NOT mainline like rpi4: mainline
 # through at least v6.18 has no CM5 DTB at all and no RP1 southbridge
 # support. On the Connect 5 that would mean no USB (keyboard) and no
 # Ethernet (ssh) — and with no accessible UART, a box you can only
-# watch boot. Downstream rpi-6.12.y ships bcm2712-rpi-cm5-cm5io.dts
-# plus the RP1 drivers, and is the same base KUNBUS builds its own
-# RevPi image on.
+# watch boot. Downstream rpi-6.18.y ships bcm2712-rpi-cm5-cm5io.dts
+# plus the RP1 drivers, is the same base KUNBUS builds its own RevPi
+# image on, and is raspberrypi/linux's default (LTS) branch.
 source = "git"
 git_repo = "https://github.com/raspberrypi/linux.git"
-git_ref = "rpi-6.12.y"
+git_ref = "rpi-6.18.y"
 defconfig = "bcm2712_defconfig"
 # bcm2712_defconfig already =y: eMMC path (MMC_SDHCI_IPROC), RP1
 # MFD/pinctrl, both UART drivers, RASPBERRYPI_FIRMWARE/MBOX. The board

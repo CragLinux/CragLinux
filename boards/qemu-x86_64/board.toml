@@ -10,7 +10,7 @@ name = "QEMU x86_64"
 arch = "x86_64"
 
 [kernel]
-version = "6.12.95"
+version = "6.18.53"
 source = "upstream"
 # "defconfig" on ARCH=x86_64 is the x86_64 defconfig.
 defconfig = "defconfig"

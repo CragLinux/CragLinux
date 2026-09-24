@@ -11,7 +11,7 @@ name = "QEMU ARMv7"
 arch = "armv7hf"
 
 [kernel]
-version = "6.12.95"
+version = "6.18.53"
 source = "upstream"
 defconfig = "multi_v7_defconfig"
 # Board-local fragments only; every boards/common/kernel/*.fragment
