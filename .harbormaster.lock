@@ -1,14 +1,14 @@
 # Harbormaster Lock File
 # DO NOT EDIT - This file is auto-generated
-# Use 'hm sync' to update
+# Use 'hm lock update', 'hm lock adopt', or 'hm sync' to update
 
 version = 1
-generated_at = 2026-07-15T21:32:03.661992961-04:00
+generated_at = 2026-10-15T20:38:47.152304921-04:00
 
 [entry]
   [entry.cports]
     url = "git@github.com:CragLinux/cports.git"
     type = "git"
     requested_ref = "master"
-    resolved_sha = "4cd1ba1bf0b4436f6c1c5babe4186986c9e5d097"
-    last_synced_at = 2026-09-23T12:00:03.988529289-04:00
+    resolved_sha = "16721370e3952fe2d9ce1088038bb7faedeec6b7"
+    last_synced_at = 2026-10-15T20:38:47.15227271-04:00
