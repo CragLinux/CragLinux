@@ -159,6 +159,7 @@ Status: **Accepted** = confirmed by project owner · **Recommended** = design's 
 | <a id="ad-027"></a>AD-027 | cports fork (supersedes AD-001) | Crag maintains a **fork** of cports (`CragLinux/cports`, branch ~~`astro`~~ `master` — delta merged onto upstream master, `astro` branch retired, per [AD-029](#ad-029); repo location ~~`aka-mj/astro-cports`~~ superseded by [AD-029](#ad-029)), Harbormaster-pinned; Crag changes are ordinary in-fork commits, not an overlay collection; a scheduled update-report tracks currency | Accepted | [03](03-build-system.md) |
 | <a id="ad-028"></a>AD-028 | Project rename | Project renamed Astro → **Crag** ("Crag Linux", mascot: ibex): distro, `crag` CLI, cragd/cragctl, `crag-base-*` metapackages, `crag-<board>` compatible strings, `CRAG_*` env vars, `/etc/crag` · `/usr/lib/crag` · `/data/.crag` paths, `_crag._tcp` mDNS; ~~the cports fork repo stays `aka-mj/astro-cports` until it moves (AD-027)~~ it has since moved to `CragLinux/cports` ([AD-029](#ad-029)) | Accepted | [00](00-overview.md) |
 | <a id="ad-029"></a>AD-029 | cports fork repo move + branch consolidation | The cports fork moved `aka-mj/astro-cports` → **`CragLinux/cports`** (all branches mirrored verbatim; Harbormaster manifest/lock URLs and CI clone URLs repointed); the `astro` delta branch was then merged onto upstream `master` (rebranded Astro → CragLinux; the stale 6-week delta now sits on current chimera), `master` became the single mainline and the pin, and `astro` was retired | Accepted | [03](03-build-system.md) |
+| <a id="ad-030"></a>AD-030 | cports upstream tracking (refines AD-027) | **Split from Chimera**: Crag manages the whole cports tree itself. **No merges of chimera master.** A daily agent watches chimera-linux/cports and upstream FreeBSD and selectively ports changes; version and security currency is ours for **every** template (the "chimera-owned" bump-by-merge category is retired) | Accepted | [03](03-build-system.md) |
 
 Amendment process: ADs change via PR to the owning doc plus this index; a "Recommended" AD becomes "Accepted" when the project owner signs off in review ([10-release-ci.md §6](10-release-ci.md)).
 
@@ -193,3 +194,23 @@ Amendment process: ADs change via PR to the owning doc plus this index; a "Recom
 > rename is branding and identifiers only: no build behavior changes,
 > and pre-1.0 device state under the old `/data/.astro` paths is not
 > migrated (dev devices; factory reset applies).
+
+> **AD-030 rationale (split from upstream tracking; refines AD-027).**
+> AD-027 kept the fork in line with Chimera by merging chimera master
+> into it. The project owner retired that model. The merge train pulled
+> unrelated changes into a pinned tree, and the backlog grew to 436
+> upstream commits against the fork (2026-10-15) — mostly templates Crag
+> does not ship. Instead: (1) the fork history below the fork point
+> (`build/cports-fork-point`) is upstream's and stays untouched — **no
+> wholesale merges of chimera master, ever**; (2) a daily agent reads new
+> commits in `chimera-linux/cports` and ports individual changes worth
+> taking (template updates, build fixes) as ordinary reviewed,
+> build-verified commits; (3) every template is now Crag-maintained: the
+> rule "chimera-owned templates are bumped by the merge" is retired, and
+> all bumps go through the bump loop (edit template -> build-verify ->
+> commit to cports -> re-pin -> signed commit in this repo); (4)
+> `build/cports-owned.list` keeps its `new`/`mod` classification as the
+> inventory of where we diverge from Chimera and the source-build set in
+> binary mode. Currency stays tractable through the update-report sweep
+> plus the daily agent. Falling behind upstream on templates we do not
+> ship is accepted: shipped packages are what security currency requires.

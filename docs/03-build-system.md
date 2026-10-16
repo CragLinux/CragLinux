@@ -32,6 +32,33 @@ Consuming pinned templates has a second dividend: for packages Crag does **not**
 > **AD-023 — cports tracking cadence: re-pin freely during development; each Crag release locks its pin.** *(Accepted)*
 > A pin bump is a PR that updates `.harbormaster.lock` (`hm sync` to the new upstream state, commit the lock diff), gated by the full CI build+test pipeline. At release branch time the pin freezes; stable-branch pin bumps are allowed only for security backports, mirroring how the release consumes them.
 
+> **AD-030 — Split from upstream tracking (refines AD-027).** *(Accepted, 2026-10-15)*
+> Crag **MUST NOT** merge chimera master into the cports fork. The fork is
+> Crag's own tree now; upstream `chimera-linux/cports` is only a source of
+> cherry-picked changes. A daily agent watch compares upstream against the
+> fork and ports individual commits worth taking, as ordinary in-fork
+> commits, each build-verified before it lands. Consequences:
+>
+> - Every template is Crag-maintained. Version bumps do not wait for an
+>   upstream merge. The old split of the tree into "Crag-owned" (we bump
+>   those) and "chimera-owned" (the merge bumps those) is gone.
+> - `build/cports-owned.list` remains the inventory of templates that
+>   differ from Chimera (`new`/`mod`) and the source-build set for binary
+>   packages-mode. Regenerate it with `build/lib/gen-owned-list.sh` after
+>   re-pins (needs full fork history).
+> - Example: chimera bumps `main/zlib-ng-compat` and we ship it. The
+>   agent ports that bump (or applies a newer upstream version itself)
+>   through the bump loop: edit template -> build-verify -> commit to
+>   cports (unsigned) -> re-pin the lock here (signed commit). Nothing
+>   lands by merging.
+> - The daily userland watch (cragutils vs chimerautils + freebsd-src)
+>   follows the same rule: selective, reviewed, build-tested imports.
+>   Never merges of whole upstream trees.
+> - Rationale: the merge train pulled unrelated changes into a pinned
+>   tree and the backlog grew to 436 upstream commits (2026-10-15), for
+>   templates we mostly do not ship. Cherry-picking keeps our tree
+>   stable and currency where it matters (shipped packages) intact.
+
 ## 2. cbuild primer (Crag-flavored)
 
 What Crag relies on, so readers don't need the full upstream docs:
