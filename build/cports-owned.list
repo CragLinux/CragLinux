@@ -7,6 +7,7 @@
 apk-tools mod
 basu new
 boost mod
+ca-certificates mod
 chrony mod
 crag-bootstrap-virtual new
 curl mod
@@ -24,6 +25,10 @@ libnftnl mod
 libubootenv new
 llvm mod
 lvm2 mod
+musl mod
+musl-cross mod
+musl-mallocng mod
+nano mod
 nftables mod
 openssh mod
 python-nftables mod
