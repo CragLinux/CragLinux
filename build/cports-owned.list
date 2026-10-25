@@ -12,8 +12,8 @@ chrony mod
 crag-bootstrap-virtual new
 curl mod
 dhcpcd mod
-dinit mod
 dinit-dbus mod
+dinit mod
 doctest mod
 elfutils mod
 glib mod
@@ -25,9 +25,9 @@ libnftnl mod
 libubootenv new
 llvm mod
 lvm2 mod
-musl mod
 musl-cross mod
 musl-mallocng mod
+musl mod
 nano mod
 nftables mod
 openssh mod
