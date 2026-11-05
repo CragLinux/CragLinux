@@ -32,13 +32,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
-import config as _config  # noqa: E402
-import layers as _layers  # noqa: E402
-import merge as _merge  # noqa: E402
+import config as _config
+import layers as _layers
+import merge as _merge
 
 _ROOT = _HERE.parents[1]  # repo root (build/lib/ -> parents[1])
 
@@ -269,8 +270,8 @@ class ByteIdenticalRegressionTests(unittest.TestCase):
     # finalize_* pipeline, the merge-module wrapper is byte-identical to
     # config.load_config for ALL boards — including rpi4 (no [qemu]), whose
     # qcow2 divergence the delegation fixed.
-    _QEMU_BOARDS = ["qemu-armv7", "qemu-aarch64", "qemu-x86_64"]
-    _ALL_BOARDS = _QEMU_BOARDS + ["rpi4"]
+    _QEMU_BOARDS: ClassVar[list[str]] = ["qemu-armv7", "qemu-aarch64", "qemu-x86_64"]
+    _ALL_BOARDS: ClassVar[list[str]] = _QEMU_BOARDS + ["rpi4"]
 
     def test_no_tree_board_matches_loader(self):
         # The specifically-required regression (task item 3): qemu-armv7/dev,

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Crag Linux — binary packages-mode version-skew guard (warn-only).
 
@@ -78,8 +77,8 @@ def template_version(cports, template):
         if not tmpl.is_file():
             continue
         text = tmpl.read_text()
-        ver = re.search(r'^pkgver\s*=\s*["\']([^"\']+)["\']', text, re.M)
-        rel = re.search(r"^pkgrel\s*=\s*(\d+)", text, re.M)
+        ver = re.search(r'^pkgver\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
+        rel = re.search(r"^pkgrel\s*=\s*(\d+)", text, re.MULTILINE)
         if ver and rel:
             return f"{ver.group(1)}-r{rel.group(1)}"
     return None
@@ -148,10 +147,10 @@ def main():
 
     lines = [
         "Crag binary packages-mode — version-skew report",
-        f"generated: {datetime.datetime.now().isoformat(timespec='seconds')}",
-        f"installed packages: {total} "
-        f"(local repo: {from_local}, chimera repo: {from_chimera}, "
-        f"unattributed: {total - from_local - from_chimera})",
+        f"generated: {datetime.datetime.now().astimezone().isoformat(timespec='seconds')}",
+        (f"installed packages: {total} "
+         f"(local repo: {from_local}, chimera repo: {from_chimera}, "
+         f"unattributed: {total - from_local - from_chimera})"),
         "",
     ]
     if shadowed:

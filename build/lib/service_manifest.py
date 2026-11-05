@@ -61,8 +61,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-import config as _config  # noqa: E402  (path insert must precede import)
-from schema import SERVICE_MANIFEST_SCHEMA  # noqa: E402
+import config as _config
+from schema import SERVICE_MANIFEST_SCHEMA
 
 ConfigError = _config.ConfigError
 
@@ -76,7 +76,7 @@ APP_UID_MAX = 899
 # Valid service name: the manifest stem, the dinit service name, the uid key,
 # and the /data/apps/<name> component all reuse it, so keep it filesystem- and
 # dinit-safe (no '/', whitespace, or surprises).
-import re  # noqa: E402
+import re
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -85,9 +85,13 @@ class ServiceManifest:
     """A validated service manifest (schema.py:SERVICE_MANIFEST_SCHEMA)."""
 
     __slots__ = (
-        "name", "user", "data_dir",
-        "boot_success", "api_controllable", "api_client",
+        "api_client",
+        "api_controllable",
+        "boot_success",
+        "data_dir",
+        "name",
         "source_path",
+        "user",
     )
 
     def __init__(self, cfg, source_path):

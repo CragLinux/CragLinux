@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Crag cports update-currency report.
 
 Sweeps the fork's port tree with `cbuild update-check` (upstream's own
@@ -80,7 +79,7 @@ def shipped_packages() -> set[str]:
     # variant TOML [packages].install
     for toml in (REPO / "boards").glob("*/variants/*.toml"):
         txt = toml.read_text()
-        m = re.search(r"\[packages\].*?install\s*=\s*\[(.*?)\]", txt, re.S)
+        m = re.search(r"\[packages\].*?install\s*=\s*\[(.*?)\]", txt, re.DOTALL)
         if m:
             for q in re.findall(r'"([\w.+-]+)"', m.group(1)):
                 names.add(q)
@@ -111,7 +110,7 @@ def check_one(tmpl: str) -> dict | None:
     try:
         r = subprocess.run(["./cbuild", "update-check", tmpl],
                            cwd=str(CPORTS), capture_output=True, text=True,
-                           timeout=120)
+                           timeout=120, check=False)
     except subprocess.TimeoutExpired:
         return {"template": tmpl, "error": "timeout"}
     for line in r.stdout.splitlines():
@@ -172,10 +171,10 @@ def main() -> int:
     (out / "report.json").write_text(json.dumps(report, indent=2))
 
     md = [f"# cports update report ({args.scope})", "",
-          f"Fork point `{FORK_POINT}` · checked {len(tmpls)} templates · "
-          f"**{len(updates)} update(s)**, {len(errors)} check error(s).", "",
-          "Priority: shipped+maintained first (security currency on what we"
-          " ship and own), then shipped, then maintained, then the rest.", "",
+          (f"Fork point `{FORK_POINT}` · checked {len(tmpls)} templates · "
+           f"**{len(updates)} update(s)**, {len(errors)} check error(s)."), "",
+          ("Priority: shipped+maintained first (security currency on what we"
+           " ship and own), then shipped, then maintained, then the rest."), "",
           "| Package | Current | Latest | Shipped | Crag-owned | Template |",
           "|---|---|---|---|---|---|"]
     for u in updates:

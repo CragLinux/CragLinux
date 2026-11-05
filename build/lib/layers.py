@@ -68,7 +68,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-import config as _config  # noqa: E402  (path insert must precede import)
+import config as _config
 
 ConfigError = _config.ConfigError
 

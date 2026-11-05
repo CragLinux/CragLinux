@@ -18,16 +18,16 @@ Run (host or the crag-builder container), from the repo root:
     python3 -m unittest build.lib.test_service_manifest   # (if run as pkg)
 """
 
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-import sys
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
-import service_manifest as sm  # noqa: E402
-from config import ConfigError  # noqa: E402
+import service_manifest as sm
+from config import ConfigError
 
 
 def _write(path, text):

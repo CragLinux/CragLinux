@@ -14,7 +14,7 @@ from pathlib import Path
 
 # Add lib to path
 sys.path.insert(0, str(Path(__file__).parent / "lib"))
-from config import load_config, ConfigError
+from config import ConfigError, load_config
 
 
 def validate_file(path, config_type):

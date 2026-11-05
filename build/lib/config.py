@@ -15,19 +15,20 @@ import json
 import os
 import re
 import sys
-import tomllib
 from pathlib import Path
+
+import tomllib
 
 # Add parent to path so we can import schema
 sys.path.insert(0, str(Path(__file__).parent))
 from schema import (
-    BOARD_SCHEMA,
     BOARD_CONDITIONAL_RULES,
+    BOARD_SCHEMA,
     DEPRECATED_DISK_SCHEMA,
     RAUC_BOOTLOADER_FOR_TYPE,
     TREE_SCHEMA,
-    VARIANT_SCHEMA,
     USER_ENTRY_SCHEMA,
+    VARIANT_SCHEMA,
 )
 
 # The dev/unversioned sentinel (docs/10 §2 — the same fallback image.sh,

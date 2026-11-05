@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Manual distfile fetcher for cbuild fetch failures (GAP §3.3).
 
 Some distfile hosts (gitlab.alpinelinux.org) sit behind the Anubis anti-bot
@@ -34,8 +33,7 @@ def sha256_of(path):
 
 def name_from_source(src):
     """Mirror cbuild's get_nameurl(): 'url>name' renames, else basename."""
-    if src.startswith("!"):
-        src = src[1:]
+    src = src.removeprefix("!")
     bkt = src.rfind(">")
     bsl = src.rfind("/")
     if bkt > bsl:
@@ -95,6 +93,7 @@ def main():
             ["curl", "-fL", "--retry", "2", "-o", str(dest), url],
             stdout=sys.stderr,
             stderr=sys.stderr,
+            check=False,
         )
         if r.returncode != 0:
             log(f"curl failed (rc={r.returncode}) for {url}")

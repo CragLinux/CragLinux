@@ -36,12 +36,13 @@ Usage:
 import argparse
 import json
 import sys
-import tomllib
 from pathlib import Path
 
+import tomllib
+
 sys.path.insert(0, str(Path(__file__).parent))
-import config as _config  # noqa: E402
-import layers as _layers  # noqa: E402
+import config as _config
+import layers as _layers
 
 ConfigError = _config.ConfigError
 

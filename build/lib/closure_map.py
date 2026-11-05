@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Map unsatisfied apk dependencies to cports templates (GAP §3.4).
 
 Input: the output of a failed 'apk --simulate add ...' (apk-tools 3.x),
@@ -40,10 +39,10 @@ def log(msg):
 def parse_apk_errors(text):
     """Extract unsatisfied dependency tokens from apk error output."""
     deps = []
-    for m in re.finditer(r"^\s+(\S+?)\s+\(no such package\)", text, re.M):
+    for m in re.finditer(r"^\s+(\S+?)\s+\(no such package\)", text, re.MULTILINE):
         deps.append(m.group(1))
     # conflict/branch forms also list bare unsatisfiable constraints
-    for m in re.finditer(r"^\s+(\S+?)\s+\(virtual\)", text, re.M):
+    for m in re.finditer(r"^\s+(\S+?)\s+\(virtual\)", text, re.MULTILINE):
         deps.append(m.group(1))
     # normalize: strip version constraints (name>=1.2, name=1.2-r0, name~1)
     out = []
