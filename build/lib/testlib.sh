@@ -125,6 +125,11 @@ tl_scale() { echo $(( ($1 * TL_MULT_PCT + 99) / 100 )); }
 tl_ssh_init() {
     SSH_KEY="${PROJECT_ROOT}/keys/dev/ssh-test"
     [ -f "$SSH_KEY" ] || { echo "ERROR: dev SSH key missing — run ./build/crag-keys.sh init-dev"; exit 1; }
+    # ssh refuses group/other-readable private keys ("bad permissions") and
+    # git cannot store mode 0600, so every fresh checkout arrives 0644 and
+    # key auth silently dies into a password fallback (found 2026-11-05).
+    # chmod here; rw-bit changes are invisible to git, so no tree noise.
+    chmod 600 "$SSH_KEY"
     SSH=(ssh -i "$SSH_KEY" -p "$SSH_PORT" -o StrictHostKeyChecking=no
          -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
          -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=3
