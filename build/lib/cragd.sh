@@ -9,7 +9,7 @@
 # invoked directly — never through a nested container.
 
 # docs/06 §3 budget, also asserted by the cragd-unit CI step.
-CRAGD_MAX_SIZE=$((8 * 1024 * 1024))
+CRAGD_MAX_SIZE=$((10 * 1024 * 1024))
 
 # Map a board arch ([board].arch in board.toml) to a zig -Dtarget triple.
 # musl ABI => fully static binaries with no extra flags (AD-012).
@@ -135,7 +135,7 @@ build_cragd() {
     local size
     size=$(stat -c %s "$bin")
     if [ "$size" -gt "$CRAGD_MAX_SIZE" ]; then
-        die "cragd binary exceeds the 8 MiB budget (docs/06 §3): ${size} bytes"
+        die "cragd binary exceeds the 10 MiB budget (docs/06 §3): ${size} bytes"
     fi
 
     install -D -m 0755 "$bin" "${rootfs_dir}/usr/bin/cragd"

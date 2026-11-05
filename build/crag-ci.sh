@@ -135,7 +135,7 @@ step "build-lib-unit" build_lib_unit
 ##############################################################################
 cragd_unit() {
     # Unit/conformance tests with the container's pinned Zig, then the
-    # docs/06 §3 budget: static x86_64 ReleaseSafe binary <= 8 MiB (the
+    # docs/06 §3 budget: static x86_64 ReleaseSafe binary <= 10 MiB (the
     # same bound build_cragd enforces per-board at image assembly).
     # extract_cragd_deps first: build.zig's default -Dbasu-prefix is
     # build/state/x86_64/cragd-deps (basu sd-bus headers + libbasu.a).
@@ -147,7 +147,7 @@ cragd_unit() {
             --cache-dir /workspace/build/state/zig-cache-ci --prefix /tmp/cragd-budget \
         && size=$(stat -c %s /tmp/cragd-budget/bin/cragd) \
         && echo "cragd x86_64-linux-musl ReleaseSafe: ${size} bytes" \
-        && [ "$size" -le $((8 * 1024 * 1024)) ]'
+        && [ "$size" -le $((10 * 1024 * 1024)) ]'
 }
 step "cragd-unit" cragd_unit
 

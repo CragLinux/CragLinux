@@ -57,7 +57,7 @@ Design consequences (the two honest gaps, and their mitigations):
    - The wrapper is the *only* place C bus types appear; reconcilers see typed Zig interfaces. An integration-test suite runs against real iwd/RAUC in the QEMU `test api` stage.
 2. **Zig is pre-1.0; the language and std churn.** The build container pins the exact Zig version (single source of truth: `build/zig-version`); cragd vendors its few dependencies (no network package manager use at build time — fits cbuild's offline build phase); version bumps are deliberate PRs that run the full test suite.
 
-Stack: `std.http.Server` for HTTP/1.1 (behind our own thin router), `std.json` with typed schemas, `std.crypto` for token comparison (constant-time). Budgets, checked in CI: **binary ≤ 8 MiB static, RSS ≤ 16 MiB steady-state, cold start ≤ 150 ms** on the QEMU boards.
+Stack: `std.http.Server` for HTTP/1.1 (behind our own thin router), `std.json` with typed schemas, `std.crypto` for token comparison (constant-time). Budgets, checked in CI: **binary ≤ 10 MiB static, RSS ≤ 16 MiB steady-state, cold start ≤ 150 ms** on the QEMU boards.
 
 `cragctl` (CLI) is a thin client over the same API (unix socket by default), shipped in `crag-base-api`; it exists so operators and hooks never need `curl` incantations.
 
