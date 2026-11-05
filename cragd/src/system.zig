@@ -301,19 +301,19 @@ test "RedactedSystemInfo is SystemInfo minus exactly machine_id" {
     // removed is machine_id — a new SystemInfo field that is forgotten
     // in RedactedSystemInfo (or vice versa) fails here, forcing a
     // deliberate redaction decision.
-    const full = std.meta.fields(SystemInfo);
-    const red = std.meta.fields(RedactedSystemInfo);
-    try std.testing.expectEqual(full.len, red.len + 1);
-    inline for (red) |rf| {
+    const full = @typeInfo(SystemInfo).@"struct";
+    const red = @typeInfo(RedactedSystemInfo).@"struct";
+    try std.testing.expectEqual(full.field_names.len, red.field_names.len + 1);
+    inline for (red.field_names, red.field_types) |rf_name, rf_type| {
         var found = false;
-        inline for (full) |ff| {
-            if (comptime std.mem.eql(u8, ff.name, rf.name)) {
-                try std.testing.expect(ff.type == rf.type);
+        inline for (full.field_names, full.field_types) |ff_name, ff_type| {
+            if (comptime std.mem.eql(u8, ff_name, rf_name)) {
+                try std.testing.expect(ff_type == rf_type);
                 found = true;
             }
         }
         try std.testing.expect(found);
-        try std.testing.expect(comptime !std.mem.eql(u8, rf.name, "machine_id"));
+        try std.testing.expect(comptime !std.mem.eql(u8, rf_name, "machine_id"));
     }
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

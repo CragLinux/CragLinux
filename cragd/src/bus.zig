@@ -27,9 +27,7 @@ const linux = std.os.linux;
 const sync = @import("sync.zig");
 const fsutil = @import("fsutil.zig");
 
-pub const c = @cImport({
-    @cInclude("basu/sd-bus.h");
-});
+pub const c = @import("basu_c");
 
 /// Well-known system bus socket (musl/chimera images; dbus-daemon dinit
 /// service creates it). sd_bus_open_system would find it itself; probing
@@ -238,7 +236,7 @@ pub const Message = struct {
             const interfaces = try self.readInterfaceArray(a);
             try self.exitContainer(); // e
             objects.append(a, .{
-                .path = a.dupeZ(u8, obj_path) catch return error.OutOfMemory,
+                .path = a.dupeSentinel(u8, obj_path, 0) catch return error.OutOfMemory,
                 .interfaces = interfaces,
             }) catch return error.OutOfMemory;
         }
@@ -259,7 +257,7 @@ pub const Message = struct {
 
         const objects = a.alloc(ObjectEntry, 1) catch return error.OutOfMemory;
         objects[0] = .{
-            .path = a.dupeZ(u8, obj_path) catch return error.OutOfMemory,
+            .path = a.dupeSentinel(u8, obj_path, 0) catch return error.OutOfMemory,
             .interfaces = interfaces,
         };
         return .{ .arena = arena, .objects = objects };
@@ -275,7 +273,7 @@ pub const Message = struct {
         const names = try self.readStringArray(a);
         return .{
             .arena = arena,
-            .path = a.dupeZ(u8, obj_path) catch return error.OutOfMemory,
+            .path = a.dupeSentinel(u8, obj_path, 0) catch return error.OutOfMemory,
             .interfaces = names,
         };
     }
@@ -291,7 +289,7 @@ pub const Message = struct {
         const invalidated = try self.readStringArray(a);
         return .{
             .arena = arena,
-            .interface = a.dupeZ(u8, iface) catch return error.OutOfMemory,
+            .interface = a.dupeSentinel(u8, iface, 0) catch return error.OutOfMemory,
             .changed = changed,
             .invalidated = invalidated,
         };
@@ -306,7 +304,7 @@ pub const Message = struct {
             const props = try self.readPropArray(a);
             try self.exitContainer(); // e
             list.append(a, .{
-                .name = a.dupeZ(u8, name) catch return error.OutOfMemory,
+                .name = a.dupeSentinel(u8, name, 0) catch return error.OutOfMemory,
                 .props = props,
             }) catch return error.OutOfMemory;
         }
@@ -323,7 +321,7 @@ pub const Message = struct {
             const value = try self.readVariantValue(a);
             try self.exitContainer(); // e
             list.append(a, .{
-                .name = a.dupeZ(u8, name) catch return error.OutOfMemory,
+                .name = a.dupeSentinel(u8, name, 0) catch return error.OutOfMemory,
                 .value = value,
             }) catch return error.OutOfMemory;
         }
@@ -338,12 +336,12 @@ pub const Message = struct {
         if (peeked.t != 'v') return error.InvalidReply;
         const contents = peeked.contents orelse return error.InvalidReply;
         // Copy before the cursor moves (sd-bus contents pointer lifetime).
-        const sig = a.dupeZ(u8, std.mem.span(contents)) catch return error.OutOfMemory;
+        const sig = a.dupeSentinel(u8, std.mem.span(contents), 0) catch return error.OutOfMemory;
 
         if (!try self.enterContainer('v', sig.ptr)) return error.InvalidReply;
         const value: PropValue = switch (sig[0]) {
-            's' => .{ .s = a.dupeZ(u8, try self.readString()) catch return error.OutOfMemory },
-            'o' => .{ .o = a.dupeZ(u8, try self.readObjectPath()) catch return error.OutOfMemory },
+            's' => .{ .s = a.dupeSentinel(u8, try self.readString(), 0) catch return error.OutOfMemory },
+            'o' => .{ .o = a.dupeSentinel(u8, try self.readObjectPath(), 0) catch return error.OutOfMemory },
             'b' => .{ .b = try self.readBool() },
             'y' => blk: {
                 var v: u8 = 0;
@@ -394,7 +392,7 @@ pub const Message = struct {
         }
         while (try self.peekType() != null) {
             const s = try self.readString();
-            list.append(a, a.dupeZ(u8, s) catch return error.OutOfMemory) catch return error.OutOfMemory;
+            list.append(a, a.dupeSentinel(u8, s, 0) catch return error.OutOfMemory) catch return error.OutOfMemory;
         }
         try self.exitContainer();
         return list.toOwnedSlice(a) catch return error.OutOfMemory;
@@ -705,7 +703,7 @@ pub const Bus = struct {
         if (r < 0) {
             self.storeDbusError(&err);
             return switch (errnoFromRet(r)) {
-                @intFromEnum(linux.E.NOTCONN), @intFromEnum(linux.E.CONNRESET) => error.Disconnected,
+                @backingInt(linux.E.NOTCONN), @backingInt(linux.E.CONNRESET) => error.Disconnected,
                 else => error.CallFailed,
             };
         }
@@ -782,7 +780,7 @@ pub const Bus = struct {
         const text = try msg.readString();
         const depth = try msg.readI32();
         try msg.exitContainer();
-        const copy = allocator.dupeZ(u8, text) catch return error.OutOfMemory;
+        const copy = allocator.dupeSentinel(u8, text, 0) catch return error.OutOfMemory;
         return .{ .percentage = percentage, .message = copy, .depth = depth };
     }
 
@@ -875,10 +873,11 @@ pub const Bus = struct {
         ctx: ?*anyopaque,
     ) Error!*Match {
         var rule_buf: [512]u8 = undefined;
-        const rule = std.fmt.bufPrintZ(
+        const rule = std.fmt.bufPrintSentinel(
             &rule_buf,
             "type='signal',sender='{s}',path_namespace='{s}',interface='{s}',member='{s}'",
             .{ sender, path_namespace, interface, member },
+            0,
         ) catch return error.InvalidArgs;
 
         const tramp = self.gpa.create(Trampoline) catch return error.OutOfMemory;

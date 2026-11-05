@@ -79,17 +79,17 @@ test "AD-013: SystemInfo schema mirrors system.SystemInfo field-for-field" {
     // struct, and each struct field present with the JSON type std.json
     // serialization produces for it. Extra/missing/renamed fields on either
     // side change a count or a lookup and fail.
-    const fields = std.meta.fields(system.SystemInfo);
-    try std.testing.expectEqual(fields.len, props.count());
-    try std.testing.expectEqual(fields.len, required.items.len);
+    const fields = @typeInfo(system.SystemInfo).@"struct";
+    try std.testing.expectEqual(fields.field_names.len, props.count());
+    try std.testing.expectEqual(fields.field_names.len, required.items.len);
 
-    inline for (fields) |field| {
-        const prop = props.get(field.name) orelse {
-            std.debug.print("SystemInfo field missing from spec: {s}\n", .{field.name});
+    inline for (fields.field_names, fields.field_types) |field_name, field_type| {
+        const prop = props.get(field_name) orelse {
+            std.debug.print("SystemInfo field missing from spec: {s}\n", .{field_name});
             return error.SchemaFieldMissing;
         };
         const type_val = prop.object.get("type").?;
-        switch (@typeInfo(field.type)) {
+        switch (@typeInfo(field_type)) {
             // Optional fields serialize as JSON null (the daemon keeps the
             // std.json default of emitting null optionals), so the spec must
             // declare the 3.1 nullable form ["<type>", "null"].
@@ -99,14 +99,14 @@ test "AD-013: SystemInfo schema mirrors system.SystemInfo field-for-field" {
                 try std.testing.expectEqualStrings(jsonTypeFor(opt.child), alternatives[0].string);
                 try std.testing.expectEqualStrings("null", alternatives[1].string);
             },
-            else => try std.testing.expectEqualStrings(jsonTypeFor(field.type), type_val.string),
+            else => try std.testing.expectEqualStrings(jsonTypeFor(field_type), type_val.string),
         }
 
         const listed = for (required.items) |r| {
-            if (std.mem.eql(u8, r.string, field.name)) break true;
+            if (std.mem.eql(u8, r.string, field_name)) break true;
         } else false;
         if (!listed) {
-            std.debug.print("SystemInfo field not marked required in spec: {s}\n", .{field.name});
+            std.debug.print("SystemInfo field not marked required in spec: {s}\n", .{field_name});
             return error.SchemaFieldNotRequired;
         }
     }

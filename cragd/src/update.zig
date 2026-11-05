@@ -546,7 +546,7 @@ pub const Manager = struct {
         const path = std.fmt.allocPrint(allocator, "{s}/upload-{d}.raucb", .{ self.staging_dir, n }) catch
             return error.OutOfMemory;
         defer allocator.free(path);
-        return allocator.dupeZ(u8, path) catch error.OutOfMemory;
+        return allocator.dupeSentinel(u8, path, 0) catch error.OutOfMemory;
     }
 
     // -- events --
@@ -744,7 +744,7 @@ pub fn postUpdate(ctx: *router.Context) anyerror!router.Response {
         }
 
         const mgr = managerOr503(ctx) orelse return unavailable(ctx, "update subsystem is not connected to D-Bus");
-        const url_z = try ctx.allocator.dupeZ(u8, url);
+        const url_z = try ctx.allocator.dupeSentinel(u8, url, 0);
         if (is_path) return installPath(ctx, mgr, url_z, force, null, "path");
         // AD-021 v1 limitation: no pre-install metadata for streamed URL
         // installs — the version gate cannot run (see module doc).

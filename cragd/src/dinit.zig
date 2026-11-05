@@ -201,7 +201,7 @@ pub fn encodeServiceStatus5(buf: *[5]u8, handle: u32) []const u8 {
 
 /// [SHUTDOWN][shutdown_type] — shutdown.cc.
 pub fn encodeShutdown(t: ShutdownType) [2]u8 {
-    return .{ cmd.shutdown, @intFromEnum(t) };
+    return .{ cmd.shutdown, @backingInt(t) };
 }
 
 pub const Client = struct {
@@ -585,7 +585,8 @@ test "handshake + load + start + shutdown against scripted replies" {
     // The daemon side must have received exactly these request frames.
     const expected = [_]u8{0} ++ // QUERYVERSION
         [_]u8{ 2, 4, 0, 's', 's', 'h', 'd' } ++ // LOADSERVICE "sshd"
-        [_]u8{ 3, 0, 0x78, 0x56, 0x34, 0x12 } ** 2 ++ // STARTSERVICE x2
+        [_]u8{ 3, 0, 0x78, 0x56, 0x34, 0x12 } ++ // STARTSERVICE
+        [_]u8{ 3, 0, 0x78, 0x56, 0x34, 0x12 } ++ // STARTSERVICE x2
         [_]u8{ 10, 4 }; // SHUTDOWN reboot
     var got: [expected.len]u8 = undefined;
     var off: usize = 0;

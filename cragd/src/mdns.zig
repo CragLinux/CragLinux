@@ -777,8 +777,8 @@ test "buildTxt renders RFC 6763 length-prefixed pairs" {
 }
 
 test "buildTxt truncates oversized values at the 255-byte string cap" {
-    const big = "x" ** 300;
-    const txt = try buildTxt(std.testing.allocator, big, "v", "factory");
+    const big: [300]u8 = @splat('x');
+    const txt = try buildTxt(std.testing.allocator, &big, "v", "factory");
     defer std.testing.allocator.free(txt);
     // First string: len byte 255, "serial=" + 248 x's.
     try std.testing.expectEqual(@as(u8, 255), txt[0]);

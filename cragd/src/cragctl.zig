@@ -1965,7 +1965,7 @@ test "formatSystemInfo renders aligned key-value lines in document order" {
     const a = std.testing.allocator;
     const out = try formatSystemInfo(a, "{\"board\":\"qemu-aarch64\",\"uptime_s\":42}");
     defer a.free(out);
-    try std.testing.expectEqualStrings("board" ++ (" " ** 9) ++ "qemu-aarch64\n" ++ "uptime_s" ++ (" " ** 6) ++ "42\n", out);
+    try std.testing.expectEqualStrings("board" ++ @as([9]u8, @splat(' ')) ++ "qemu-aarch64\n" ++ "uptime_s" ++ @as([6]u8, @splat(' ')) ++ "42\n", out);
 }
 
 test "formatProblem prefers title and detail, falls back to HTTP status" {

@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
         []const u8,
         "basu-prefix",
         "extracted basu apk prefix (usr/include + usr/lib/libbasu.a)",
-    ) orelse b.pathFromRoot("../build/state/x86_64/cragd-deps");
+    ) orelse "../build/state/x86_64/cragd-deps";
 
     const basu_include: std.Build.LazyPath = .{
         .cwd_relative = b.pathJoin(&.{ basu_prefix, "usr", "include" }),
@@ -43,6 +43,17 @@ pub fn build(b: *std.Build) void {
     });
     root_module.addIncludePath(basu_include);
     root_module.addObjectFile(basu_lib);
+    // bus.zig's C bindings: Zig 0.17 removed @cImport, so translate
+    // basu/sd-bus.h at build time instead (std.Build.Step.TranslateC —
+    // deprecated upstream in favor of the translate-c package, but
+    // self-contained and offline, which suits the pinned-toolchain build).
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ basu_prefix, "usr", "include", "basu", "sd-bus.h" }) },
+        .target = target,
+        .optimize = optimize,
+    });
+    translate_c.addIncludePath(basu_include);
+    root_module.addImport("basu_c", translate_c.createModule());
     // The OpenAPI spec lives outside src/, so it cannot be @embedFile'd by
     // relative path (module root escape). An anonymous import maps it into
     // the module; served verbatim at GET /api/v1/openapi.json and parsed by

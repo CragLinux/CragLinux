@@ -1091,7 +1091,7 @@ test "Machine executes effects and tracks ap_active across the portal round-trip
             log.append(alloc, 'a') catch unreachable; // ap down
         }
         fn persist(_: ?*anyopaque, s: State) void {
-            log.append(alloc, "fgd"[@intFromEnum(s)]) catch unreachable;
+            log.append(alloc, "fgd"[@backingInt(s)]) catch unreachable;
         }
         fn announce(_: ?*anyopaque, _: State) void {
             log.append(alloc, 'm') catch unreachable;
@@ -1259,7 +1259,7 @@ const MTrace = struct {
         log.append(alloc, 'a') catch unreachable;
     }
     fn persist(_: ?*anyopaque, s: State) void {
-        log.append(alloc, "fgd"[@intFromEnum(s)]) catch unreachable;
+        log.append(alloc, "fgd"[@backingInt(s)]) catch unreachable;
     }
     fn announce(_: ?*anyopaque, _: State) void {
         log.append(alloc, 'm') catch unreachable;

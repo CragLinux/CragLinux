@@ -1069,7 +1069,7 @@ pub const Wifi = struct {
             // policy) — never a helper radio's.
             if (dutDevice(&self.model)) |d| {
                 if (d.has_station)
-                    sta = std.fmt.bufPrintZ(&sbuf, "{s}", .{d.path}) catch null;
+                    sta = std.fmt.bufPrintSentinel(&sbuf, "{s}", .{d.path}, 0) catch null;
             }
         }
         if (st.connected_ssid != null) {
@@ -1089,7 +1089,7 @@ pub const Wifi = struct {
         // exactly that null.
         const d = dutDevice(&self.model) orelse return null;
         if (!d.has_station) return null;
-        return std.fmt.bufPrintZ(buf, "{s}", .{d.path}) catch null;
+        return std.fmt.bufPrintSentinel(buf, "{s}", .{d.path}, 0) catch null;
     }
 
     fn findNetworkPathZ(self: *Wifi, buf: []u8, ssid: []const u8, sec: Security) ?[:0]const u8 {
@@ -1099,7 +1099,7 @@ pub const Wifi = struct {
             if (!std.mem.eql(u8, n.name, ssid)) continue;
             const nsec = n.security orelse continue;
             if (nsec != sec) continue;
-            return std.fmt.bufPrintZ(buf, "{s}", .{n.path}) catch null;
+            return std.fmt.bufPrintSentinel(buf, "{s}", .{n.path}, 0) catch null;
         }
         return null;
     }
@@ -1109,7 +1109,7 @@ pub const Wifi = struct {
         defer self.mu.unlock();
         for (self.model.knowns.items) |*k| {
             if (std.mem.eql(u8, k.name, ssid))
-                return std.fmt.bufPrintZ(buf, "{s}", .{k.path}) catch null;
+                return std.fmt.bufPrintSentinel(buf, "{s}", .{k.path}, 0) catch null;
         }
         return null;
     }
@@ -1122,7 +1122,7 @@ pub const Wifi = struct {
         self.mu.lock();
         defer self.mu.unlock();
         const dev = dutDevice(&self.model) orelse return null;
-        return std.fmt.bufPrintZ(buf, "{s}", .{dev.path}) catch null;
+        return std.fmt.bufPrintSentinel(buf, "{s}", .{dev.path}, 0) catch null;
     }
 
     /// True while OUR AP radio reports AccessPoint.Started (mirrored
@@ -1222,7 +1222,7 @@ pub const Wifi = struct {
             const name: []const u8 = if (err.name) |n| std.mem.span(@as([*:0]const u8, @ptrCast(n))) else "(errno)";
             std.log.warn("wifi: Device.Mode={s} on {s} failed: {s} ({d})", .{ mode, path, name, r });
             return switch (-r) {
-                @intFromEnum(linux.E.NOTCONN), @intFromEnum(linux.E.CONNRESET) => error.BusUnavailable,
+                @backingInt(linux.E.NOTCONN), @backingInt(linux.E.CONNRESET) => error.BusUnavailable,
                 else => error.IwdError,
             };
         }
@@ -1675,7 +1675,7 @@ pub fn apStart(self: *Wifi, ssid: []const u8, psk: []const u8) Error!void {
     try self.setDeviceMode(radio, "ap");
 
     var zbuf: [33]u8 = undefined;
-    const ssid_z = std.fmt.bufPrintZ(&zbuf, "{s}", .{ssid}) catch return error.InvalidArgument;
+    const ssid_z = std.fmt.bufPrintSentinel(&zbuf, "{s}", .{ssid}, 0) catch return error.InvalidArgument;
 
     // The AccessPoint interface is registered when the iftype flips; the
     // Properties.Set reply and the InterfacesAdded signal can race, so
@@ -1885,7 +1885,7 @@ pub fn flipToStation(self: *Wifi, ssid: []const u8, psk: []const u8) Error!FlipS
                     w.mu.unlock();
                     if (n == 0) return false; // no prior apStart — nothing to restore
                     var zbuf: [33]u8 = undefined;
-                    const ssid_z = std.fmt.bufPrintZ(&zbuf, "{s}", .{sbuf[0..n]}) catch return false;
+                    const ssid_z = std.fmt.bufPrintSentinel(&zbuf, "{s}", .{sbuf[0..n]}, 0) catch return false;
                     var rbuf: [max_path_len]u8 = undefined;
                     const radio = w.apRadioPathZ(&rbuf) orelse return false;
                     if (w.bus.callMethod(iwd_service, radio, ap_interface, "StartProfile", &.{.{ .s = ssid_z }})) |reply| {
@@ -1964,7 +1964,7 @@ test "profile rendering: passphrase preferred, raw 64-hex psk, open, invalid sha
 
     // Too short, too long (64 non-hex), control bytes: rejected.
     try std.testing.expectError(error.InvalidArgument, renderProfile(a, "short7c"));
-    try std.testing.expectError(error.InvalidArgument, renderProfile(a, "z" ** 64));
+    try std.testing.expectError(error.InvalidArgument, renderProfile(a, &@as([64]u8, @splat('z'))));
     try std.testing.expectError(error.InvalidArgument, renderProfile(a, "line\nbreak-pass"));
 }
 
