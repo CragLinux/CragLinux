@@ -683,6 +683,25 @@ test "parsers reject truncated payloads instead of over-reading" {
     try std.testing.expectEqual(@as(usize, 1), out.items.len);
 }
 
+test "Addr.format renders v6 groups and the v4 dotted form" {
+    var buf: [64]u8 = undefined;
+    const v6 = Addr{ .family = posix.AF.INET6, .prefix = 64, .bytes = .{
+        0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+    } };
+    try std.testing.expectEqualStrings("fe80:0:0:0:0:0:0:1/64", try v6.format(&buf));
+    // Groups are unpadded hex ("{x}" semantics), zero groups render as "0".
+    const v6b = Addr{ .family = posix.AF.INET6, .prefix = 56, .bytes = .{
+        0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xab,
+    } };
+    try std.testing.expectEqualStrings("2001:db8:0:0:0:0:0:ab/56", try v6b.format(&buf));
+    // v4 ignores the trailing bytes and renders dotted-quad/prefix.
+    const v4 = Addr{ .family = posix.AF.INET, .prefix = 24, .bytes = .{
+        192,  0,    2,    1,    0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    } };
+    try std.testing.expectEqualStrings("192.0.2.1/24", try v4.format(&buf));
+}
+
 test "live dump finds loopback (Linux always has lo)" {
     const gpa = std.testing.allocator;
     const ifaces = dump(gpa) catch |err| switch (err) {

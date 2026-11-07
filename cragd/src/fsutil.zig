@@ -165,3 +165,95 @@ test "missing files surface FileNotFound" {
     try std.testing.expect(!pathExists("/nonexistent/x"));
     try std.testing.expect(pathExists("/tmp"));
 }
+
+/// Minimal slice-backed reader for writeStreamSync tests (anything with
+/// `read([]u8) !usize` is a valid source).
+const SliceReader = struct {
+    data: []const u8,
+    pos: usize = 0,
+    calls: usize = 0,
+
+    fn read(self: *SliceReader, buf: []u8) error{}!usize {
+        self.calls += 1;
+        if (self.pos >= self.data.len) return 0;
+        const n = @min(buf.len, self.data.len - self.pos);
+        @memcpy(buf[0..n], self.data[self.pos..][0..n]);
+        self.pos += n;
+        return n;
+    }
+};
+
+test "writeStreamSync: prefix + streamed body land byte-exact" {
+    var pb: [128]u8 = undefined;
+    const p = testTmpPath(&pb, "stream.bin");
+    defer unlink(p) catch {};
+
+    var reader = SliceReader{ .data = "world and more" };
+    const want = "hello world and more";
+    try writeStreamSync(p, "hello ", &reader, want.len);
+    const back = try readFileAlloc(std.testing.allocator, p, 1024);
+    defer std.testing.allocator.free(back);
+    try std.testing.expectEqualStrings(want, back);
+}
+
+test "writeStreamSync: a short body is InputOutput, never a silent truncate" {
+    var pb: [128]u8 = undefined;
+    const p = testTmpPath(&pb, "short.bin");
+    defer unlink(p) catch {};
+
+    var reader = SliceReader{ .data = "abc" };
+    try std.testing.expectError(
+        error.InputOutput,
+        writeStreamSync(p, "", &reader, 10),
+    );
+}
+
+test "writeStreamSync: a body already covered by the prefix never reads" {
+    var pb: [128]u8 = undefined;
+    const p = testTmpPath(&pb, "noprefix.bin");
+    defer unlink(p) catch {};
+
+    var reader = SliceReader{ .data = "" };
+    try writeStreamSync(p, "done", &reader, 4);
+    try std.testing.expectEqual(@as(usize, 0), reader.calls);
+    try std.testing.expect(exists(p));
+}
+
+test "readFileAlloc: the size limit is inclusive at exactly `limit`" {
+    var pb1: [128]u8 = undefined;
+    var pb2: [128]u8 = undefined;
+    const p1 = testTmpPath(&pb1, "exact.txt");
+    const p2 = testTmpPath(&pb2, "over.txt");
+    defer unlink(p1) catch {};
+    defer unlink(p2) catch {};
+
+    try writeFileSync(p1, "12345678");
+    const back = try readFileAlloc(std.testing.allocator, p1, 8);
+    defer std.testing.allocator.free(back);
+    try std.testing.expectEqualStrings("12345678", back);
+
+    try writeFileSync(p2, "12345678");
+    try std.testing.expectError(
+        error.FileTooBig,
+        readFileAlloc(std.testing.allocator, p2, 7),
+    );
+}
+
+test "readFileBounded: an exact fit succeeds (probe read finds EOF)" {
+    var pb: [128]u8 = undefined;
+    const p = testTmpPath(&pb, "fit.txt");
+    defer unlink(p) catch {};
+    try writeFileSync(p, "12345678");
+    var buf: [8]u8 = undefined;
+    try std.testing.expectEqualStrings("12345678", try readFileBounded(p, &buf));
+}
+
+test "exists: empty and non-empty files both report true" {
+    var pb: [128]u8 = undefined;
+    const p = testTmpPath(&pb, "exists.txt");
+    defer unlink(p) catch {};
+    try writeFileSync(p, "");
+    try std.testing.expect(exists(p));
+    try writeFileSync(p, "x");
+    try std.testing.expect(exists(p));
+}

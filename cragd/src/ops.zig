@@ -363,3 +363,30 @@ test "registry: bounded at max_operations, oldest finished evicted first" {
     defer freeOperation(allocator, survivor);
     try std.testing.expectEqual(State.running, survivor.state);
 }
+
+test "get() snapshots are copies: later mutations never reach them" {
+    const allocator = std.testing.allocator;
+    var reg = Registry.init(allocator);
+    defer reg.deinit();
+
+    const id = try reg.create(.update_install);
+    reg.update(id, .running, 40, "Copying image");
+    const snap = (try reg.get(allocator, id)).?;
+    defer freeOperation(allocator, snap);
+
+    // Keep mutating the live record after the snapshot was taken.
+    reg.update(id, .running, 90, "Almost done");
+    reg.succeed(id, "next: reboot");
+
+    try std.testing.expectEqualStrings("Copying image", snap.message);
+    try std.testing.expectEqual(@as(u8, 40), snap.progress);
+    try std.testing.expectEqual(State.running, snap.state);
+    try std.testing.expect(snap.result == null);
+    try std.testing.expect(snap.@"error" == null);
+
+    const after = (try reg.get(allocator, id)).?;
+    defer freeOperation(allocator, after);
+    try std.testing.expectEqualStrings("next: reboot", after.result.?);
+    try std.testing.expectEqual(@as(u8, 100), after.progress);
+    try std.testing.expectEqual(State.succeeded, after.state);
+}
