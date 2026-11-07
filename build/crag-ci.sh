@@ -120,11 +120,19 @@ step "lint-config" lint_config
 step "lint-zig"    lint_zig
 
 ##############################################################################
-# 1b. build/lib unit suites (merge engine M4p0; fence + service manifests M4p1)
+# 1b. build/lib unit suites (merge engine M4p0; fence + service manifests M4p1;
+#     config/schema/layers + image layout + closure/skew/update-report M4p2)
 ##############################################################################
 build_lib_unit() {
-    in_container 'python3 build/lib/test_merge_board_variant.py \
+    in_container 'python3 build/lib/test_config.py \
+        && python3 build/lib/test_schema.py \
+        && python3 build/lib/test_layers.py \
+        && python3 build/lib/test_merge_board_variant.py \
         && python3 build/lib/test_service_manifest.py \
+        && python3 build/lib/test_image_layout.py \
+        && python3 build/lib/test_closure_map.py \
+        && python3 build/lib/test_skew_check.py \
+        && python3 build/lib/test_update_report.py \
         && ./build/lib/test_fence.sh \
         && ./build/lib/test_service_manifests_hook.sh'
 }
