@@ -9,16 +9,15 @@
 > **AD-003 — Crag is a monorepo; companion repositories (cports, and any future split-outs) are managed with Harbormaster, pinned via its committed lock file. External trees are always separate repositories.** *(Recommended)*
 
 ```
-crag/                           # THE repo (this one)
+CragLinux/                       # THE repo (this one)
 ├── README.md   LICENSE (Apache-2.0)   docs/          # this doc set
 ├── build/                       # orchestrator: `crag` CLI, lib/ (config.py, schema.py), stages/
 ├── container/                   # Containerfile → crag-builder image
-├── .harbormaster.toml           # companion-repo manifest (cports, …)  ─┐ AD-001/023
-├── .harbormaster.lock           # exact SHA pins, committed             ─┘
-├── cports/                      # hm-managed checkout → chimera-linux/cports (gitignored)
-├── astro-cports/                # Crag's cbuild collection (cragd, crag-base-*, rauc glue, …)
-├── boards/                      # common/ + per-board dirs (TOML, fragments, overlays, hooks, uboot/grub assets)
-├── variants/                    # prod.toml, dev.toml
+├── .harbormaster.toml           # companion-repo manifest (cports fork)  ─┐ AD-027/023
+├── .harbormaster.lock           # exact SHA pins, committed               ─┘
+├── cports/                      # hm-managed checkout of the Crag fork CragLinux/cports (gitignored; AD-027/AD-030)
+├── astro-cports/                # OPTIONAL local shadow templates — uncommitted experiments only (docs/03 §2)
+├── boards/                      # common/ + per-board dirs (board.toml, variants/{dev,prod}.toml, packages.list, fragments, overlays, hooks, uboot/grub assets)
 ├── cragd/                       # Zig: src/, api/openapi.yaml, web/ (provisioning page), cragctl/
 ├── sdk/                         # build-toolchain.sh (repurposed), sysroot generator, cmake files
 ├── keys/dev/                    # dev-only PKI (loud naming; 09 §4)
@@ -27,7 +26,7 @@ crag/                           # THE repo (this one)
 └── .github/workflows/           # thin wrappers around `crag …` in the container (AD-024)
 ```
 
-Rationale: the orchestrator, schema, cragd API, board definitions and docs version **together** — a monorepo makes cross-cutting changes (schema + stage + doc) one reviewable PR. cports stays its own upstream repo (AD-001), materialized into the workspace by Harbormaster. cragd stays in-tree until its release cadence demonstrably diverges (splitting later is cheap; premature split costs every API-schema-orchestrator sync). External trees are separate by *definition* — they belong to product teams with their own keys and cadence ([08 §1](08-external-trees.md)).
+Rationale: the orchestrator, schema, cragd API, board definitions and docs version **together** — a monorepo makes cross-cutting changes (schema + stage + doc) one reviewable PR. cports stays its own repo (Crag's fork of Chimera's tree — AD-027/AD-030), materialized into the workspace by Harbormaster. cragd stays in-tree until its release cadence demonstrably diverges (splitting later is cheap; premature split costs every API-schema-orchestrator sync). External trees are separate by *definition* — they belong to product teams with their own keys and cadence ([08 §1](08-external-trees.md)).
 
 **Companion-repo management: Harbormaster, not git submodules.** [Harbormaster](https://github.com/TierOne-Software/HarborMaster) (`hm`, TierOne's multi-repo tool in the `repo`/`jiri` family) declares companion repos in `.harbormaster.toml` and records exact commit SHAs in a committed `.harbormaster.lock`; `hm sync --locked` reproduces the pinned workspace, `hm status` shows drift, and pin bumps are a lock-file diff in a normal PR. This gives submodule-grade reproducibility without submodule ergonomics (no detached-HEAD confusion, no `--recurse` footguns, no gitlink/`.gitmodules` dance on clone). The `cports/` checkout itself is gitignored; the lock file is the source of truth. Setup is two commands: `hm sync --locked` after clone, and everything else is `crag …`. As a bonus, developers hacking on Crag alongside external trees or Harbormaster-managed product repos can use `hm work` sessions for coordinated branches across repos — a workflow convenience, not something the build depends on.
 
@@ -63,7 +62,7 @@ Consequences of local-first: no pipeline logic lives in workflow YAML — workfl
 **Packages-mode per pipeline** ([03 §1](03-build-system.md) "Binary consumption for dev builds"): PR builds run `--packages-mode=binary` — only Crag-touched templates are built from source, everything else comes from Chimera's signed binary repo (keys pinned in `build/keys/chimera/`, trusted for dev artifacts only). Exception: armv7 has no Chimera binary repo, so `qemu-armv7` builds in source mode on every pipeline, warmed by Crag's own published CI-built armv7 repo ([03 §1](03-build-system.md)). Nightly and release pipelines run `--packages-mode=source` — full-source under Crag keys, immune to the binary-mode version-skew that the warn-only skew report tracks on PRs.
 
 **Per-PR** (target: warm ≤ 60 min):
-1. Lint: shellcheck, ruff (build/lib), `zig fmt --check`, TOML schema self-tests, template lint for astro-cports.
+1. Lint: shellcheck, ruff (build/lib), `zig fmt --check`, TOML schema self-tests, template lint for the cports templates.
 2. cragd unit tests (`zig build test`) + OpenAPI ↔ router conformance check.
 3. Full build of **one QEMU board per arch** (`qemu-x86_64` + `qemu-aarch64` + `qemu-armv7`, prod variant, warm caches) through image + bundle stages — `qemu-armv7` in source mode per the exception above, kept inside the time budget by the published armv7 repo cache.
 4. **The AD-020 gate**, per board: boot smoke (reaches `boot-success`, cragd healthy) → install current-build bundle over previous-release image → verify slot flip + mark-good → install a poisoned test bundle (boot-success unreachable) → verify automatic rollback to the good slot ([04 §7](04-boards-images-boot.md) sequence).

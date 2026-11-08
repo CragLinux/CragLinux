@@ -111,7 +111,8 @@ v1 has **no verified boot**: the boot chain is not attested. This is stated, not
 
 | Component | Upstream | Crag's role | Lives in |
 |---|---|---|---|
-| musl, chimerautils, dinit, apk-tools, LLVM | Chimera cports | consume pinned templates | `cports/` (Harbormaster-pinned checkout) |
+| musl, dinit, apk-tools, LLVM, chimerautils | Chimera cports, via Crag's own fork (`CragLinux/cports`) | maintain + bump **every** template ourselves (AD-030) — upstream is a cherry-pick source only, never merged | `cports/` (Harbormaster-pinned checkout) |
+| **cragutils** (userland) | hardened fork of chimerautils | Crag-maintained: selective file-level imports from chimerautils + freebsd-src, never merges | `cragutils/` companion repo |
 | kernel | kernel.org LTS | config fragments, Clang build, per-board | `boards/`, `build/` |
 | U-Boot / GRUB | upstream | defconfigs, env layout, boot scripts | `boards/`, fork |
 | RAUC | rauc.io | package template + dinit services + system.conf per board | fork `main/rauc*`, `boards/` |

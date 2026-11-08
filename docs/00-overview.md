@@ -11,7 +11,7 @@ Crag is a **highly opinionated embedded Linux distribution** for IoT devices and
 | Layer | Component | Why |
 |---|---|---|
 | libc | **musl** (Chimera's build, mimalloc allocator) | small, correct, static-friendly |
-| Userland | **chimerautils** (FreeBSD tools ported by Chimera) | clean, consistent, complete — no busybox-vs-coreutils debate |
+| Userland | **cragutils** (Crag's hardened fork of chimerautils — FreeBSD tools) | clean, consistent, complete — no busybox-vs-coreutils debate |
 | Init / supervision | **dinit** | dependency-based, supervising, tiny; no systemd |
 | Toolchain | **LLVM/Clang + lld + compiler-rt + libc++** | one modern toolchain, ThinLTO + hardening distro-wide |
 | Packaging | **apk-tools v3** | signed ADB packages, fast, small |

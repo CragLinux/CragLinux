@@ -49,7 +49,7 @@ Consuming pinned templates has a second dividend: for packages Crag does **not**
 > - Example: chimera bumps `main/zlib-ng-compat` and we ship it. The
 >   agent ports that bump (or applies a newer upstream version itself)
 >   through the bump loop: edit template -> build-verify -> commit to
->   cports (unsigned) -> re-pin the lock here (signed commit). Nothing
+>   cports (signed) -> re-pin the lock here (signed commit). Nothing
 >   lands by merging.
 > - The daily userland watch (cragutils vs chimerautils + freebsd-src)
 >   follows the same rule: selective, reviewed, build-tested imports.

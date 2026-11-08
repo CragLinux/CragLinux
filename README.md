@@ -2,7 +2,7 @@
 
 **An opinionated embedded Linux distro: fixed modern core, A/B updates baked in, and an on-device HTTP API so your application never has to learn Linux networking.**
 
-Crag is a complete, working appliance OS for IoT devices and gateways — not a build-system kit. The core is fixed and curated, derived from [Chimera Linux](https://chimera-linux.org): **musl** libc, **FreeBSD userland** (cragutils), **dinit** init, an all-**LLVM/Clang** toolchain, and **apk-tools v3** packaging. On top of that base, Crag adds what embedded products actually need out of the box:
+Crag is a complete, working appliance OS for IoT devices and gateways — not a build-system kit. The core is fixed and curated, derived from [Chimera Linux](https://chimera-linux.org): **musl** libc, **FreeBSD userland** (**cragutils** — Crag's hardened fork of chimerautils), **dinit** init, an all-**LLVM/Clang** toolchain, and **apk-tools v3** packaging. On top of that base, Crag adds what embedded products actually need out of the box:
 
 - **A/B atomic updates** via [RAUC](https://rauc.io) — signed verity bundles, streaming installs, automatic rollback on failed boots.
 - **cragd** — a local REST API (think Onics Squid.link) for WiFi/Ethernet config, update control, and system basics; AP-mode captive-portal provisioning included.
@@ -11,14 +11,14 @@ Crag is a complete, working appliance OS for IoT devices and gateways — not a 
 
 Initial targets: **x86_64** (EFI), **aarch64** (Raspberry Pi 4/5, RevPi 5), and **armv7**, each with a first-class **QEMU** board — the full update-and-rollback cycle runs in QEMU on a laptop.
 
-Status: **development** — every board builds from source and boots to a dinit login prompt; QEMU boot-smoke is green on x86_64, aarch64 and armv7, and the A/B update-and-rollback cycle runs in QEMU; Raspberry Pi 4/5 and RevPi 5 images await on-hardware testing. The design supersedes the `clang-cross` prototype, whose toolchain and build machinery Crag imports.
+Status: **development** — every board builds from source and boots to a dinit login prompt (kernel 6.18.x); QEMU boot-smoke is green on x86_64, aarch64 and armv7, and the A/B update-and-rollback cycle runs in QEMU. On hardware so far: the Raspberry Pi 4 has booted (2026-07-29); on-hardware testing of the current 6.18 images — and first boots of Raspberry Pi 5 and RevPi 5 — is queued. The design supersedes the `clang-cross` prototype, whose toolchain and build machinery Crag imports.
 
 ## Design documents
 
 | Doc | Covers |
 |---|---|
 | [00 — Overview](docs/00-overview.md) | vision, four pillars, positioning, non-goals, glossary |
-| [01 — Architecture](docs/01-architecture.md) | runtime + build architecture, invariants, **decision index (AD-001…AD-029)** |
+| [01 — Architecture](docs/01-architecture.md) | runtime + build architecture, invariants, **decision index (AD-001…AD-030)** |
 | [02 — Base System](docs/02-base-system.md) | core packages, read-only rootfs, `/data`, dinit design, kernel policy |
 | [03 — Build System](docs/03-build-system.md) | cbuild/cports strategy, SDK, container, pipeline stages, config schema |
 | [04 — Boards, Images, Boot](docs/04-boards-images-boot.md) | partition layout, GRUB/U-Boot slot switching, image artifacts, QEMU workflow |
@@ -29,6 +29,7 @@ Status: **development** — every board builds from source and boots to a dinit 
 | [09 — Security](docs/09-security.md) | threat model, trust chain, PKI, hardening, secure-boot roadmap |
 | [10 — Release & CI](docs/10-release-ci.md) | repo layout, versioning, channels, podman-based local-first CI |
 | [11 — Roadmap & Migration](docs/11-roadmap-migration.md) | milestones to v1.0, clang-cross migration map, risk register |
+| [12 — Hardware Bring-up](docs/12-hardware-bringup.md) | flashing, first-boot checklist, per-board bring-up status |
 
 Start with 00 and 01; the decision index in 01 is the review checklist.
 

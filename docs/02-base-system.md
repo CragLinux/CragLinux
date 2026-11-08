@@ -11,7 +11,7 @@ The fixed core, inherited from Chimera Linux via cports (versions track the cpor
 | Component | Baseline | Notes |
 |---|---|---|
 | musl | 1.2.5+ | Chimera's build, patched to use the **mimalloc** allocator — better multithreaded allocation for every binary on the system |
-| chimerautils | rolling | FreeBSD userland ported by Chimera: coreutils/findutils/grep/sed/awk/gzip equivalents plus `sh`, `vi`, `nc`, `fetch`. Real separate binaries, not a multicall busybox. Meson-built; requires libxo |
+| cragutils | rolling | The FreeBSD userland: coreutils/findutils/grep/sed/awk/gzip equivalents plus `sh`, `vi`, `nc`, `fetch`. Real separate binaries, not a multicall busybox. Meson-built; requires libxo. Crag develops its hardened fork `cragutils` ([CragLinux/cragutils](https://github.com/CragLinux/cragutils)); images currently install the `chimerautils` package built from Chimera's upstream source |
 | dinit + dinit-chimera | rolling | init (PID 1), service supervision, Chimera's early-boot service set |
 | apk-tools | 3.x | package format ADB, SHA512-signed repos; used at image build time (see AD-004) |
 | LLVM runtimes | 20+ | libc++, libc++abi, libunwind, compiler-rt — no GNU runtime libs anywhere |
@@ -22,22 +22,28 @@ Distro-wide build hardening comes free from cbuild: ThinLTO, PIE, stack canaries
 
 ### What Crag deliberately does *not* include in the base
 
-- No busybox (chimerautils is the userland).
-- No GNU coreutils/bash (chimerautils `sh` is the shell; bash available in `dev` variant only if pulled explicitly).
+- No busybox (cragutils is the userland).
+- No GNU coreutils/bash (cragutils `sh` is the shell; bash available in `dev` variant only if pulled explicitly).
 - No systemd, elogind, polkit, udisks. Device management is `udevd` from Chimera's base (currently systemd-udevd built standalone; whatever cports ships as `device-mapper`/udev stays as-is).
 - No Python/Perl on production images. Build-time only.
 
 ## 2. Base package sets
 
-Crag defines tiered metapackages in `astro-cports` (see [03-build-system.md](03-build-system.md)); boards and variants compose them via `packages.list` layering as in the prototype:
+There are no metapackages to resolve: the base is a fixed, hand-written
+list — `boards/common/packages.list` ("not customizable") — and every
+other source of packages adds to it additively through ordered
+`packages.list` layering (merge semantics: [08 §4](08-external-trees.md)):
 
-| Metapackage | Contents | Included in |
+| Layer | Adds | Included in |
 |---|---|---|
-| `crag-base-core` | musl, chimerautils, dinit, dinit-chimera, apk-tools (db only, see §3), turnstile, udev, kernel modules pkg | every image |
-| `crag-base-net` | iwd, dhcpcd, dbus, mdns responder, ca-certificates, crag D-Bus policy files | every image |
-| `crag-base-update` | rauc, rauc dinit services, bootloader env tools (`grub-editenv` or `libubootenv`'s `fw_setenv`), crag-rauc-conf (per-board system.conf) | every image |
-| `crag-base-api` | cragd, cragctl, provisioning web assets (embedded in cragd binary — this pkg is cragd + policy files) | every image |
-| `crag-base-dev` | openssh, doas, tmux, strace, htop, curl, apk-tools (full), debug symbols repos enabled | `dev` variant only |
+| `boards/common/packages.list` | the fixed base: musl, the userland (see §1), dinit + dinit-chimera, apk-tools (db only, see §3), turnstile, udev glue (nyagetty, dinit-chimera-udev), disk tools (util-linux-fdisk, e2fsprogs), dbus, rauc, iwd, nftables, chrony — the file is the authoritative list | every image |
+| `boards/<board>/packages.list` | board bits: bootloader env tools (`grub` / `libubootenv-progs`, AD-008/AD-009), board firmware (e.g. `rpi-boot`, brcmfmac firmware) | that board |
+| `boards/<board>/variants/{dev,prod}.toml` | variant packages and services — `dev`: openssh (kerberos-free fork shadow), curl, opendoas, nano, less, dhcpcd + dinit service files; `prod`: dhcpcd + dinit service file | that variant |
+| external-tree `packages.list` ([08 §4](08-external-trees.md)) | team apps and their dinit services | per product |
+
+cragd/cragctl are not packaged: the build compiles them from `cragd/`
+and installs them into every image directly (the provisioning web assets
+are embedded in the cragd binary).
 
 **OpenSSH vs dropbear:** OpenSSH, from cports, dev variant only. Production images ship no SSH daemon by default; product teams can add it via their external tree if their threat model allows.
 
@@ -150,7 +156,7 @@ Semantics: **wipe `/data`, reboot, firstboot runs again** ([07-networking-provis
 
 ## 6. Kernel policy
 
-- **LTS line, currently 6.12.x**, built with Clang/ThinLTO (as the prototype already does, including its clang-build patches).
+- **LTS line, currently 6.18.x** (boards pinned at 6.18.53; rpi5/revpi5 track downstream `rpi-6.18.y` — mainline has no CM5 DTB/RP1), built with Clang/ThinLTO. Clang-build patches are version-scoped under `build/patches/kernel/<major.minor>/` and applied by `build/lib/kernel.sh` (6.18 builds cleanly without them; the 6.12-era patches were not carried forward).
 - Per-board config = upstream `defconfig` + shared fragments + board fragments (existing mechanism: `config_fragments` in board.toml). Crag adds two required shared fragments:
   - **`rauc.fragment`** — `CONFIG_BLK_DEV_LOOP`, `CONFIG_SQUASHFS` (+zstd), `CONFIG_CRYPTO_SHA256`, `CONFIG_DM_VERITY` + `CONFIG_BLK_DEV_DM` + `CONFIG_MD`, `CONFIG_BLK_DEV_NBD` (HTTP streaming installs), `CONFIG_EFI_VARS`/efivarfs on x86_64.
   - **`crag-net.fragment`** — `CONFIG_CFG80211`, `CONFIG_MAC80211`, packet/netlink options iwd requires, `CONFIG_TUN` (future VPN), nftables basics.
