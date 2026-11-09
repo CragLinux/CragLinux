@@ -5,6 +5,11 @@ official binary repository (`https://repo.chimera-linux.org/current/main`),
 consumed by **binary packages-mode dev builds only**
 (see docs/03-build-system.md §1 "Binary consumption for dev builds").
 
+**Naming note:** the `chimera` directory name, the file names, and every
+"Chimera Linux" mention here are deliberate provenance — these are
+upstream Chimera's keys verifying upstream Chimera's repository, not
+Crag branding. Do not rename them in naming sweeps.
+
 - **Provenance:** copied verbatim from the Harbormaster-pinned cports
   checkout (`cports/etc/apk/keys/`, identical to
   `cports/main/chimera-repo-main/files/`), i.e. their trust chains back to
