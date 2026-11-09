@@ -53,7 +53,10 @@ Consuming pinned templates has a second dividend: for packages Crag does **not**
 >   lands by merging.
 > - The daily userland watch (cragutils vs chimerautils + freebsd-src)
 >   follows the same rule: selective, reviewed, build-tested imports.
->   Never merges of whole upstream trees.
+>   Never merges of whole upstream trees. After imports land in the
+>   cragutils fork, bump `main/chimerautils`'s pinned `_commit` (and
+>   `pkgrel`) through the bump loop — the shipped userland builds from
+>   the fork.
 > - Rationale: the merge train pulled unrelated changes into a pinned
 >   tree and the backlog grew to 436 upstream commits (2026-10-15), for
 >   templates we mostly do not ship. Cherry-picking keeps our tree

@@ -11,7 +11,7 @@ The fixed core, inherited from Chimera Linux via cports (versions track the cpor
 | Component | Baseline | Notes |
 |---|---|---|
 | musl | 1.2.5+ | Chimera's build, patched to use the **mimalloc** allocator — better multithreaded allocation for every binary on the system |
-| cragutils | rolling | The FreeBSD userland: coreutils/findutils/grep/sed/awk/gzip equivalents plus `sh`, `vi`, `nc`, `fetch`. Real separate binaries, not a multicall busybox. Meson-built; requires libxo. Crag develops its hardened fork `cragutils` ([CragLinux/cragutils](https://github.com/CragLinux/cragutils)); images currently install the `chimerautils` package built from Chimera's upstream source |
+| cragutils | rolling | The FreeBSD userland: coreutils/findutils/grep/sed/awk/gzip equivalents plus `sh`, `vi`, `nc`, `fetch`. Real separate binaries, not a multicall busybox. Meson-built; requires libxo. Shipped as the `chimerautils` package (the name keeps every `cmd:…!chimerautils` provider pin in cports resolving), built from Crag's hardened fork [CragLinux/cragutils](https://github.com/CragLinux/cragutils) since 2026-11-08 — `main/chimerautils` pins a fork commit (`_commit`) and its `pkgver` tracks the upstream chimerautils base the fork content matches |
 | dinit + dinit-chimera | rolling | init (PID 1), service supervision, Chimera's early-boot service set |
 | apk-tools | 3.x | package format ADB, SHA512-signed repos; used at image build time (see AD-004) |
 | LLVM runtimes | 20+ | libc++, libc++abi, libunwind, compiler-rt — no GNU runtime libs anywhere |
