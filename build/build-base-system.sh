@@ -39,7 +39,7 @@ Arguments:
     profile         System profile (minimal, base, full) [default: base]
 
 System Profiles:
-    minimal         Bare minimum (musl, chimerautils, dinit)
+    minimal         Bare minimum (musl, cragutils, dinit)
     base            Standard embedded (+ kernel, u-boot, networking)
     full            Feature-rich (+ utilities, development tools)
 
@@ -178,7 +178,7 @@ get_package_list() {
             packages=(
                 "linux-headers"
                 "musl"
-                "chimerautils"
+                "cragutils"
                 "dinit"
                 "dinit-chimera"
                 "base-bootstrap"
@@ -188,7 +188,7 @@ get_package_list() {
             packages=(
                 "linux-headers"
                 "musl"
-                "chimerautils"
+                "cragutils"
                 "dinit"
                 "dinit-chimera"
                 "turnstile"
@@ -204,7 +204,7 @@ get_package_list() {
             packages=(
                 "linux-headers"
                 "musl"
-                "chimerautils"
+                "cragutils"
                 "dinit"
                 "dinit-chimera"
                 "turnstile"

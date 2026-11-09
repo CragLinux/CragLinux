@@ -2,7 +2,7 @@
 # These define the opinionated base and are not customizable.
 # Board-specific and variant-specific packages are additive.
 musl
-chimerautils
+cragutils
 dinit
 dinit-chimera
 base-bootstrap

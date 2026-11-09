@@ -82,7 +82,7 @@ case "$last" in ''|*[!0-9]*) last=0 ;; esac
 [ "$last" -gt "$floor" ] && floor=$last
 now=$(date +%s)
 if [ "$now" -lt "$floor" ] 2>/dev/null; then
-    # chimerautils date is the FreeBSD one (-f input format); try the
+    # cragutils date is the FreeBSD one (-f input format); try the
     # GNU spelling too so dev-image experiments with coreutils keep
     # working. Failure is logged-and-continue: a wrong clock degrades
     # TLS, not boot.

@@ -22,11 +22,13 @@ OUT="${ROOT}/build/cports-owned.list"
     echo "# (needs full fork history, not a shallow CI checkout)."
     git -C "$CP" diff --name-status "${FORK_POINT}..HEAD" \
         | grep 'template\.py$' \
-        | while IFS=$'\t' read -r st path; do
+        | while IFS=$'\t' read -r st path newpath; do
+            # renames (R###) carry old+new paths; classify by the NEW one
+            case "$st" in R*) path="${newpath:-$path}" ;; esac
             pkg=$(printf '%s' "$path" | sed -n 's#^\(main\|user\)/\([^/]*\)/template\.py$#\2#p')
             [ -z "$pkg" ] && continue
             case "$st" in
-                A) echo "$pkg new" ;;
+                A | R*) echo "$pkg new" ;;
                 M) echo "$pkg mod" ;;
             esac
         done | sort -u
