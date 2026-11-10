@@ -42,6 +42,36 @@ FORK_POINT = "4964f1f5f"
 _LINE = re.compile(r"^(?P<repo>[\w-]+)/(?P<pkg>[\w.+-]+):\s+"
                    r"(?P<cur>\S+)\s+->\s+(?P<new>\S+)\s*$")
 
+# "  * https://host/path failed (reason)" etc. — cbuild's per-URL
+# diagnosis under "CAUTION: no versions found" (update_check.py).
+_DIAG = re.compile(r"^\s*\*\s+(?P<url>\S+)\s+(?P<verdict>.+)$")
+
+
+def _caution_failures(stdout: str) -> list[str]:
+    """Diagnose a 'CAUTION: no versions found' block from cbuild.
+
+    cbuild exits 0 even when every upstream fetch failed, so a dead site
+    would otherwise be counted as 'up to date' and silently drop out of
+    the report (the standing flake). Any diagnosis line that is not
+    'fetched successfully' is treated as a check failure — including the
+    empty block (no URLs could be checked at all).
+    """
+    lines = stdout.splitlines()
+    for i, ln in enumerate(lines):
+        if not ln.startswith("CAUTION: no versions found"):
+            continue
+        verdicts = []
+        for ln2 in lines[i + 1:]:
+            m = _DIAG.match(ln2)
+            if not m:
+                break
+            verdicts.append(f"{m['url']} {m['verdict']}")
+        if not verdicts:
+            return ["no URLs diagnosed"]
+        fails = [v for v in verdicts if "fetched successfully" not in v]
+        return fails or ["all URLs fetched OK but no versions matched"]
+    return []
+
 
 def crag_maintained() -> set[str]:
     """Templates that differ from the fork point — the Crag delta we own."""
@@ -126,6 +156,10 @@ def check_one(tmpl: str) -> dict | None:
         lines = r.stderr.strip().splitlines() or r.stdout.strip().splitlines()
         return {"template": tmpl,
                 "error": lines[-1] if lines else f"exit {r.returncode}"}
+    fails = _caution_failures(r.stdout)
+    if fails:
+        return {"template": tmpl,
+                "error": "no versions found: " + "; ".join(fails)}
     return None  # up to date
 
 
