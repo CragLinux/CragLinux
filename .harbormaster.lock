@@ -3,12 +3,12 @@
 # Use 'hm lock update', 'hm lock adopt', or 'hm sync' to update
 
 version = 1
-generated_at = 2026-11-17T22:40:10.9845545-05:00
+generated_at = 2026-11-20T06:26:02.650084936-05:00
 
 [entry]
   [entry.cports]
     url = "git@github.com:CragLinux/cports.git"
     type = "git"
     requested_ref = "master"
-    resolved_sha = "877806789cc86ec0899fd044dc17336a790b4aab"
-    last_synced_at = 2026-11-17T22:40:10.98452482-05:00
+    resolved_sha = "5bd2aa1f3b2aec0bce38f47414794c9b284615b5"
+    last_synced_at = 2026-11-20T06:26:02.650042075-05:00
